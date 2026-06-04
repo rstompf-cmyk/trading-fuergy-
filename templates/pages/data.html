@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Dáta — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <h1>Dáta — stav histórie</h1>
+
+  <p class="muted">
+    Tieto súbory drží appka kompletné. „Doplniť chýbajúce" stiahne len dni, ktoré ešte nemáš
+    (idempotentné — môžeš púšťať koľkokrát chceš). Beží to aj automaticky pri štarte appky a dá sa
+    spustiť aj samostatne cez <code>python backfill.py</code> (napr. v cron-e, keď appka nebeží).
+  </p>
+
+  {% if report is not none %}
+    <div class="banner success">
+      <b>Doplnenie hotové.</b>
+      <ul style="margin:6px 0">
+        {% for r in report %}
+          <li><b>{{ r.dataset }}</b>: chýbalo {{ r.missing }}, doplnených {{ r.added }}
+              (spolu {{ r.total }} dní v rozsahu)</li>
+        {% endfor %}
+      </ul>
+      {% if logs %}
+        <pre style="background:#0f172a;color:#cbd5e1;padding:10px;border-radius:8px;max-height:280px;overflow:auto;font-size:12px">{{ logs|join("\n") }}</pre>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <table class="tbl-compact">
+    <tr>
+      <th>súbor</th><th>dní</th><th>od</th><th>do</th><th>riadkov</th>
+    </tr>
+    {% for c in coverage %}
+      <tr>
+        <td>{{ c.name }}</td>
+        <td style="font-weight:600;color:{% if c.exists and c.days > 0 %}var(--success){% else %}var(--danger){% endif %}">
+          {{ c.days }}
+        </td>
+        <td>{{ c.first }}</td>
+        <td>{{ c.last }}</td>
+        <td>{{ c.rows }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+
+  <form method="post" action="/data" class="mt-16">
+    <button type="submit" class="btn">⬇︎ Doplniť chýbajúce dáta</button>
+    <span class="muted" style="font-size:13px;margin-left:10px">
+      Prvé spustenie (celá história) môže trvať niekoľko minút.
+    </span>
+  </form>
+{% endblock %}

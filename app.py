@@ -2592,39 +2592,13 @@ scales:{{x:{{stacked:true}},y:{{stacked:true,title:{{display:true,text:'kWh / 15
 </script></body></html>"""
 
 
-def _data_page(report=None, logs=None):
+def _data_page(report=None, logs=None, request=None):
+    """Render /data stránky cez Jinja2 (Fáza 3 refactor)."""
     import backfill as bf
-    rows = ""
-    for c in bf.coverage():
-        col = "#2E7D32" if c["exists"] and c["days"] > 0 else "#C0392B"
-        rows += (f"<tr><td>{c['name']}</td><td style='color:{col};font-weight:600'>{c['days']}</td>"
-                 f"<td>{c['first']}</td><td>{c['last']}</td><td>{c['rows']}</td></tr>")
-    rep_html = ""
-    if report is not None:
-        items = "".join(f"<li><b>{r['dataset']}</b>: chýbalo {r['missing']}, doplnených {r['added']} "
-                        f"(spolu {r['total']} dní v rozsahu)</li>" for r in report)
-        log_html = ""
-        if logs:
-            esc = "\n".join(logs)
-            log_html = f"<pre style='background:#0f172a;color:#cbd5e1;padding:10px;border-radius:8px;max-height:280px;overflow:auto;font-size:12px'>{esc}</pre>"
-        rep_html = f"<div class='msg' style='background:#eef7ee;border-left:4px solid #2E7D32'><b>Doplnenie hotové.</b><ul>{items}</ul>{log_html}</div>"
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Dáta</title>
-<style>body{{font-family:-apple-system,Segoe UI,Roboto,Arial;max-width:860px;margin:24px auto;padding:0 16px;color:#222}}
-h1{{color:#1F4E78}} table{{border-collapse:collapse;width:100%;margin:12px 0}}
-th,td{{border:1px solid #e3e8ef;padding:7px 10px;text-align:left;font-size:14px}} th{{background:#f5f7fa}}
-.msg{{padding:10px 14px;border-radius:8px;margin:12px 0}} ul{{margin:6px 0}}
-button{{background:#1F4E78;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer;font-size:15px}}</style>
-</head><body>
-<h1>Dáta — stav histórie</h1>
-{_nav("/data")}
-<p style="color:#666">Tieto súbory drží appka kompletné. „Doplniť chýbajúce" stiahne len dni, ktoré ešte nemáš
-(idempotentné — môžeš púšťať koľkokrát chceš). Beží to aj automaticky pri štarte appky a dá sa spustiť
-aj samostatne cez <code>python backfill.py</code> (napr. v cron-e, keď appka nebeží).</p>
-{rep_html}
-<table><tr><th>súbor</th><th>dní</th><th>od</th><th>do</th><th>riadkov</th></tr>{rows}</table>
-<form method="post" action="/data"><button type="submit">⬇︎ Doplniť chýbajúce dáta</button>
-<span style="color:#666;font-size:13px;margin-left:10px">Prvé spustenie (celá história) môže trvať niekoľko minút.</span></form>
-</body></html>"""
+    from ui.templates import render
+    coverage = bf.coverage()
+    return render(request, "pages/data.html",
+                   coverage=coverage, report=report, logs=logs)
 
 
 import threading as _threading
@@ -11678,12 +11652,12 @@ def realio_disable_control():
 
 
 @app.get("/data", response_class=HTMLResponse)
-def data_get():
-    return _data_page()
+def data_get(request: Request):
+    return _data_page(request=request)
 
 
 @app.post("/data", response_class=HTMLResponse)
-def data_post():
+def data_post(request: Request):
     import backfill as bf
     logs = []
     try:
@@ -11691,7 +11665,7 @@ def data_post():
     except Exception as e:
         logs.append(f"Chyba: {e}")
         report = []
-    return _data_page(report=report, logs=logs)
+    return _data_page(report=report, logs=logs, request=request)
 
 
 @app.post("/plan", response_class=HTMLResponse)
@@ -12485,52 +12459,30 @@ Detail aj v out/combined_backtest.csv</p>
 </body></html>"""
 
 
-def kalibracia_form(msg="", extra=""):
+def kalibracia_form(msg="", extra="", request=None):
+    """Render /kalibracia stránky cez Jinja2 (Fáza 3 refactor).
+
+    `extra` je voľný HTML blok (výsledky po POST kalibrácii) — renderuje sa cez |safe.
+    """
+    from ui.templates import render
     cur = _calibration_factor()
-    note = (f"<p style='color:#2E7D32'>Aktuálny kalibračný faktor: <b>×{cur:.3f}</b> "
-            f"(výroba sa v pláne automaticky násobí týmto číslom).</p>" if abs(cur-1) > 1e-9
-            else "<p style='color:#888'>Zatiaľ bez kalibrácie (faktor ×1.000).</p>")
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Kalibrácia výroby</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:820px;margin:24px auto;padding:0 16px;color:#222}}
-h1{{color:#1F4E78}} fieldset{{border:1px solid #e0e0e0;border-radius:10px;margin:12px 0;padding:12px 16px}}
-legend{{color:#2E75B6;font-weight:600}} table{{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0}}
-th,td{{border:1px solid #e3e3e3;padding:5px 8px;text-align:right}} th{{background:#1F4E78;color:#fff}}
-td:first-child{{text-align:left}} button{{background:#2E7D32;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-size:15px;cursor:pointer}}
-.msg{{color:#C00000}}</style></head><body>
-<h1>Kalibrácia výroby FTV</h1>
-{_nav("/kalibracia")}
-<p style="color:#666">Nahraj nameranú <b>15-min výrobu</b> (CSV alebo Excel: jeden časový stĺpec + jeden stĺpec výroby).
-Appka stiahne modelovanú výrobu z Open-Meteo za rovnaké obdobie, porovná ju s realitou a vypočíta
-kalibračný faktor. Ten sa potom automaticky používa v pláne D-1.</p>
-<p><a href="/" style="color:#2E75B6;font-weight:600">← Späť na plán D-1</a></p>
-{note}<p class="msg">{msg}</p>
-<form method="post" action="/kalibracia" enctype="multipart/form-data">
-<fieldset><legend>Import nameranej výroby</legend>
-<p><input type="file" name="file" accept=".csv,.xlsx,.xls" required></p>
-<label>Jednotka stĺpca výroby:
-<select name="unit" style="padding:4px;border:1px solid #ccc;border-radius:6px">
-<option value="kwh">kWh za 15-min interval</option>
-<option value="kw">priemerný výkon kW</option></select></label>
-<p style="color:#666;font-size:13px">Tip: ak je výroba v kW (okamžitý/priemerný výkon), vyber „priemerný výkon kW".
-Inak nech je to energia kWh za 15-min interval.</p>
-</fieldset>
-<button type="submit">Nahrať a kalibrovať</button>
-</form>{extra}</body></html>"""
+    return render(request, "pages/kalibracia.html",
+                   cal_factor=cur, msg=msg, extra_html=extra)
 
 
 @app.get("/kalibracia", response_class=HTMLResponse)
-def kalibracia_get():
-    return kalibracia_form()
+def kalibracia_get(request: Request):
+    return kalibracia_form(request=request)
 
 
 @app.post("/kalibracia", response_class=HTMLResponse)
-def kalibracia_post(unit: str = Form(default="kwh"), file: UploadFile = File(...)):
+def kalibracia_post(request: Request, unit: str = Form(default="kwh"),
+                     file: UploadFile = File(...)):
     try:
         raw = file.file.read()
         hourly, dtcol, valcol = _read_production(raw, file.filename or "data.csv", unit)
         if hourly.empty:
-            return kalibracia_form("Súbor neobsahuje použiteľné dáta.")
+            return kalibracia_form("Súbor neobsahuje použiteľné dáta.", request=request)
         hourly["time"] = pd.to_datetime(hourly["time"])
         d0, d1 = hourly.time.min().date(), hourly.time.max().date()
         wx = _fetch_pv_cached(DEF["lat"], DEF["lon"], DEF["kwp"], DEF["tilt"],
@@ -12538,10 +12490,10 @@ def kalibracia_post(unit: str = Form(default="kwh"), file: UploadFile = File(...
         wx["time"] = pd.to_datetime(wx["time"])
         m = hourly.merge(wx[["time", "kwh"]].rename(columns={"kwh": "model_kwh"}), on="time", how="inner")
         m = m[(m.real_kwh >= 0) & (m.model_kwh >= 0)]
-        sun = m[m.model_kwh > 0.5]                      # len denné hodiny (nedeľ 0/0)
+        sun = m[m.model_kwh > 0.5]
         if len(sun) < 24:
             return kalibracia_form("Po spárovaní s počasím je málo denných hodín (min. 24). "
-                                   "Skontroluj časový rozsah a formát.")
+                                   "Skontroluj časový rozsah a formát.", request=request)
         factor = float(sun.real_kwh.sum() / sun.model_kwh.sum())
         m["month"] = m.time.dt.strftime("%Y-%m")
         bm = (m[m.model_kwh > 0.5].groupby("month")
@@ -12552,22 +12504,22 @@ def kalibracia_post(unit: str = Form(default="kwh"), file: UploadFile = File(...
                        "real_total": round(float(sun.real_kwh.sum()), 1),
                        "model_total": round(float(sun.model_kwh.sum()), 1)}, fh)
     except Exception as ex:
-        return kalibracia_form(f"Chyba pri spracovaní: {ex}")
+        return kalibracia_form(f"Chyba pri spracovaní: {ex}", request=request)
 
     rt, mt = sun.real_kwh.sum(), sun.model_kwh.sum()
     mrows = "".join(f"<tr><td>{mth}</td><td>×{fac:.3f}</td></tr>" for mth, fac in bm.items())
     pct = (factor - 1) * 100
     smer = "vyššia" if factor > 1 else "nižšia"
-    extra = f"""<hr><h2 style="color:#1F4E78">Výsledok kalibrácie</h2>
+    extra = f"""<hr><h2 style="color:var(--primary)">Výsledok kalibrácie</h2>
 <p>Detegované stĺpce: čas = <b>{dtcol}</b>, výroba = <b>{valcol}</b> &nbsp;•&nbsp; obdobie {d0} … {d1} ({len(sun)} denných hodín)</p>
-<table><tr><th>Nameraná výroba</th><th>Modelovaná (Open-Meteo)</th><th>Faktor</th></tr>
+<table class="tbl-compact"><tr><th>Nameraná výroba</th><th>Modelovaná (Open-Meteo)</th><th>Faktor</th></tr>
 <tr><td>{rt:.0f} kWh</td><td>{mt:.0f} kWh</td><td style="font-weight:700">×{factor:.3f}</td></tr></table>
 <p>Skutočná výroba je <b>{abs(pct):.1f} % {smer}</b> než modelovaná. Faktor <b>×{factor:.3f}</b> je uložený
 a plán D-1 ho odteraz automaticky používa.</p>
-<h3>Faktor po mesiacoch</h3><table><tr><th>mesiac</th><th>faktor</th></tr>{mrows}</table>
-<p style="color:#666;font-size:13px">Ak sa faktor po mesiacoch výrazne líši (sezónnosť), môžeme neskôr prejsť
+<h3>Faktor po mesiacoch</h3><table class="tbl-compact"><tr><th>mesiac</th><th>faktor</th></tr>{mrows}</table>
+<p class="muted" style="font-size:13px">Ak sa faktor po mesiacoch výrazne líši (sezónnosť), môžeme neskôr prejsť
 na mesačnú/hodinovú kalibráciu namiesto jedného čísla.</p>"""
-    return kalibracia_form("Kalibrácia hotová.", extra)
+    return kalibracia_form("Kalibrácia hotová.", extra, request=request)
 
 
 @app.get("/rt", response_class=HTMLResponse)

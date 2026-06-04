@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block container_class %}container-form{% endblock %}
+{% block title %}Kalibrácia výroby FTV — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <h1>Kalibrácia výroby FTV</h1>
+
+  <p class="muted">
+    Nahraj nameranú <b>15-min výrobu</b> (CSV alebo Excel: jeden časový stĺpec + jeden stĺpec výroby).
+    Appka stiahne modelovanú výrobu z Open-Meteo za rovnaké obdobie, porovná ju s realitou
+    a vypočíta kalibračný faktor. Ten sa potom automaticky používa v pláne D-1.
+  </p>
+  <p><a href="/" class="btn sec sm">← Späť na plán D-1</a></p>
+
+  {% if cal_factor and (cal_factor < 0.9999 or cal_factor > 1.0001) %}
+    <div class="banner success">
+      Aktuálny kalibračný faktor: <b>×{{ "%.3f"|format(cal_factor) }}</b>
+      (výroba sa v pláne automaticky násobí týmto číslom).
+    </div>
+  {% else %}
+    <div class="banner info">Zatiaľ bez kalibrácie (faktor ×1.000).</div>
+  {% endif %}
+
+  {% if msg %}<div class="banner error">{{ msg }}</div>{% endif %}
+
+  <form method="post" action="/kalibracia" enctype="multipart/form-data">
+    <fieldset>
+      <legend>Import nameranej výroby</legend>
+      <p><input type="file" name="file" accept=".csv,.xlsx,.xls" required></p>
+      <label>Jednotka stĺpca výroby:
+        <select name="unit">
+          <option value="kwh">kWh za 15-min interval</option>
+          <option value="kw">priemerný výkon kW</option>
+        </select>
+      </label>
+      <p class="muted" style="font-size:13px">
+        Tip: ak je výroba v kW (okamžitý/priemerný výkon), vyber „priemerný výkon kW".
+        Inak nech je to energia kWh za 15-min interval.
+      </p>
+    </fieldset>
+    <button type="submit" class="btn green lg">Nahrať a kalibrovať</button>
+  </form>
+
+  {% if extra_html %}
+    {{ extra_html|safe }}
+  {% endif %}
+{% endblock %}
