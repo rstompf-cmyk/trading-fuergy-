@@ -584,6 +584,65 @@ def _append_log(setpoint_dict: Dict[str, Any]) -> None:
         # Doplň default kľúče
         row = {k: setpoint_dict.get(k, "") for k in LOG_HEADERS}
         w.writerow(row)
+    # DB dual write (Fáza 1.12)
+    if os.environ.get("USE_DB", "0").strip() in ("1", "true", "True", "yes"):
+        _append_log_db(setpoint_dict)
+
+
+def _append_log_db(setpoint_dict: Dict[str, Any]) -> None:
+    """DB-side log: AutoControlEvent insert (append-only)."""
+    try:
+        from db import get_session
+        from db.models import Profile as _DbProfile, AutoControlEvent as _DbACE
+        prof_name = str(setpoint_dict.get("profile") or "")
+        ts = str(setpoint_dict.get("ts") or
+                  setpoint_dict.get("timestamp") or
+                  setpoint_dict.get("datetime") or "")
+        if not ts:
+            from datetime import datetime as _dt
+            ts = _dt.now().isoformat(timespec="seconds")
+        market = str(setpoint_dict.get("market") or "cz")
+
+        def _f(k):
+            v = setpoint_dict.get(k)
+            try:
+                return float(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        def _b(k):
+            v = setpoint_dict.get(k)
+            if v in (None, ""):
+                return None
+            s = str(v).strip().lower()
+            return True if s in ("true", "1", "yes") else False if s in ("false", "0", "no") else None
+
+        with get_session() as s:
+            prof_id = None
+            if prof_name:
+                p_row = s.query(_DbProfile).filter_by(name=prof_name).one_or_none()
+                if p_row:
+                    prof_id = p_row.id
+            s.add(_DbACE(
+                ts=ts, profile_id=prof_id, market=market,
+                soc_pct=_f("soc_pct"),
+                batt_kw_setpoint=_f("setpoint_kw") or _f("batt_kw_setpoint"),
+                mode=str(setpoint_dict.get("mode") or "dry_run"),
+                dry_run=bool(setpoint_dict.get("dry_run", True)),
+                reason=str(setpoint_dict.get("reason") or "")[:255],
+                margin_check=_b("margin_check"),
+                soc_terminal_ok=_b("soc_terminal_ok"),
+                grid_capacity_ok=_b("grid_capacity_ok"),
+                plan_available=_b("plan_available"),
+                setpoint_clipped=_b("setpoint_clipped"),
+                grid_kw_min=_f("grid_kw_min"),
+                grid_kw_max=_f("grid_kw_max"),
+                price_eur_mwh=_f("price_eur_mwh"),
+                qty_kwh=_f("qty_kwh"),
+                notes=str(setpoint_dict.get("notes") or "")[:500],
+            ))
+    except Exception as e:
+        print(f"[auto_control._append_log_db] zlyhal: {e}")
 
 
 def apply_setpoint(setpoint: Dict[str, Any], dry_run: bool = True) -> Dict[str, Any]:

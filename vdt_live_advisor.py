@@ -797,6 +797,13 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
         os.replace(tmp, path)
     except Exception as e:
         print(f"[append_extra_paper_trade] zlyhalo: {e}")
+    # DB dual write
+    _vdt_db_upsert(
+        profile=profile, slot=slot, action=action, ts=ts_now,
+        kwh=float(kwh), price=float(price_eur_mwh),
+        soc_before=float(soc_pct), soc_after=float(soc_pct),
+        delta_profit=float(profit_eur), source=str(reason)[:60],
+    )
 
 
 def append_paper_trade(result: Dict[str, Any]) -> None:
@@ -892,6 +899,78 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
         os.replace(tmp, path)
     except Exception as e:
         print(f"[vdt_live_advisor.append_paper_trade] zlyhalo: {e}")
+    # DB dual write
+    _vdt_db_upsert(
+        profile=profile, slot=slot, action=action,
+        ts=result.get("ts", ""), kwh=float(cur.get("kwh_per_slot", 0) or 0),
+        price=float(cur.get("price_eur_mwh", 0) or 0),
+        soc_before=float(soc.get("soc_pct", 0) or 0),
+        soc_after=float(cur.get("soc_after_pct", 0) or 0),
+        delta_profit=float(result.get("profit_eur", 0) or 0),
+        source=str(soc.get("source", "?"))[:60],
+    )
+
+
+# ── DB dual storage helper (Fáza 1.12 migrácie) ─────────────────────────────
+def _vdt_use_db() -> bool:
+    if os.environ.get("USE_DB", "0").strip() not in ("1", "true", "True", "yes"):
+        return False
+    try:
+        from db import get_session   # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _vdt_db_upsert(profile: str, slot: str, action: str, ts: str,
+                    kwh: float, price: float, soc_before: float = 0.0,
+                    soc_after: float = 0.0, delta_profit: float = 0.0,
+                    source: str = "advisor") -> bool:
+    """UPSERT VdtPaperTrade do DB (profile_id, date, slot, action)."""
+    if not _vdt_use_db():
+        return False
+    try:
+        from db import get_session
+        from db.models import Profile as _DbProfile, VdtPaperTrade as _DbVPT
+        # CZ guard: VDT je iba SK trh
+        try:
+            import market as _mk
+            mkt = str(_mk.active_market() or "cz")
+        except Exception:
+            mkt = "sk"
+        if mkt != "sk":
+            return False
+        date = (ts or dt.date.today().isoformat())[:10]
+        with get_session() as s:
+            prof = s.query(_DbProfile).filter_by(name=str(profile or "")).one_or_none()
+            if prof is None:
+                return False
+            existing = s.query(_DbVPT).filter_by(
+                profile_id=prof.id, date=date,
+                slot=str(slot or "")[:5], action=str(action or "").lower()
+            ).one_or_none()
+            if existing:
+                existing.kwh = float(kwh)
+                existing.price_eur_mwh = float(price)
+                existing.soc_before_pct = float(soc_before)
+                existing.soc_after_pct = float(soc_after)
+                existing.delta_profit_eur = float(delta_profit)
+                existing.timestamp = ts or dt.datetime.now().isoformat(timespec="seconds")
+                existing.source = source
+            else:
+                s.add(_DbVPT(
+                    profile_id=prof.id, market=mkt, date=date,
+                    slot=str(slot or "")[:5], action=str(action or "").lower(),
+                    kwh=float(kwh), price_eur_mwh=float(price),
+                    soc_before_pct=float(soc_before), soc_after_pct=float(soc_after),
+                    delta_profit_eur=float(delta_profit),
+                    source=source,
+                    timestamp=ts or dt.datetime.now().isoformat(timespec="seconds"),
+                ))
+        return True
+    except Exception as e:
+        print(f"[vdt_live_advisor._vdt_db_upsert] zlyhal: {e}")
+        return False
 
 
 def load_cache(profile: Optional[str] = None) -> Optional[Dict[str, Any]]:
