@@ -204,6 +204,16 @@ async def lifespan(app):
 app = FastAPI(title="Plán D-1 FTV + batéria", lifespan=lifespan)
 os.makedirs("out", exist_ok=True)
 
+# ── Auth (Fáza 2) — opt-in cez AUTH_REQUIRED env flag ────────────────────────
+# AUTH_REQUIRED=0 (default) → middleware aj routes sú no-op, žiadna zmena správania.
+# AUTH_REQUIRED=1 → session cookie validácia + /login redirect pre neautorizovaných.
+try:
+    from auth.routes import register_auth_routes, AuthMiddleware
+    register_auth_routes(app)
+    app.add_middleware(AuthMiddleware)
+except Exception as _e_auth:
+    print(f"[auth] init zlyhal — beh bez auth: {_e_auth}")
+
 
 def _handle_mult_action(date_iso: str, step_min: int, mult_arr, mult_action: str,
                           rt_arr_indices=None):
