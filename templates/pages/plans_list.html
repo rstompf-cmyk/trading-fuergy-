@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block container_class %}container-wide{% endblock %}
+{% block title %}Plány — prehľad — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <h1>📋 Plány — prehľad ({{ active_profile_name }})</h1>
+
+  <form method="get" action="/plans" class="flex gap-12 items-center flex-wrap card card-blue mt-8">
+    <label class="flex" style="flex-direction:column;font-size:12px;color:#666">
+      Profil
+      <select name="profile">
+        {% for p in profiles %}
+          <option value="{{ p }}"{% if p == active_profile_name %} selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="flex" style="flex-direction:column;font-size:12px;color:#666">
+      Od <input name="date_from" type="date" value="{{ date_from }}">
+    </label>
+    <label class="flex" style="flex-direction:column;font-size:12px;color:#666">
+      Do <input name="date_to" type="date" value="{{ date_to }}">
+    </label>
+    <label class="flex" style="flex-direction:column;font-size:12px;color:#666">
+      Kind
+      <select name="kind">
+        <option value="all"{% if kind_filter == "all" %} selected{% endif %}>všetky</option>
+        <option value="plan"{% if kind_filter == "plan" %} selected{% endif %}>plan (60-min)</option>
+        <option value="dentrh"{% if kind_filter == "dentrh" %} selected{% endif %}>dentrh (15-min)</option>
+      </select>
+    </label>
+    <label class="flex" style="flex-direction:column;font-size:12px;color:#666">
+      Krok
+      <select name="step">
+        <option value="all"{% if step_filter == "all" %} selected{% endif %}>všetky</option>
+        <option value="60"{% if step_filter == "60" %} selected{% endif %}>60 min</option>
+        <option value="15"{% if step_filter == "15" %} selected{% endif %}>15 min</option>
+      </select>
+    </label>
+    <button type="submit" class="btn">Filtrovať</button>
+    <span class="muted" style="font-size:12px;margin-left:auto">{{ rows|length }} plánov</span>
+  </form>
+
+  <table class="tbl-compact mt-8">
+    <tr>
+      <th>Dátum</th><th>Krok</th><th>Kind</th><th>Zisk €</th><th>Cykly</th>
+      <th>× akt</th><th>RT off</th><th>Flagy</th><th>Zdroj</th>
+      <th>Vygenerované</th><th>Akcia</th>
+    </tr>
+    {% if rows %}
+      {% for r in rows %}
+        <tr>
+          <td><a href="/plan_view?date={{ r.date }}&step={{ r.step }}&kind={{ r.kind }}">{{ r.date }}</a></td>
+          <td>{{ r.step }}</td>
+          <td>{{ r.kind }}</td>
+          <td style="text-align:right;font-weight:600;color:{% if r.zisk_num is not none and r.zisk_num >= 0 %}var(--success){% else %}var(--danger){% endif %}">
+            {{ r.zisk_str }}
+          </td>
+          <td style="text-align:right">{{ r.cycles }}</td>
+          <td style="text-align:right">{{ r.mult_act }}</td>
+          <td style="text-align:right">{{ r.rt_off }}</td>
+          <td>
+            {% if r.npd %}<span class="chip simulation">iba nabíjanie</span>{% endif %}
+            {% if r.zbw > 0 %}<span class="chip">bias {{ r.zbw }}</span>{% endif %}
+            {% if not r.rt_freedom %}<span class="chip trading">RT viazaná</span>{% endif %}
+          </td>
+          <td class="muted" style="font-size:11px">{{ r.source }}</td>
+          <td class="muted" style="font-size:11px">{{ r.generated_at }}</td>
+          <td>
+            <a class="btn sm" href="/plan_view?date={{ r.date }}&step={{ r.step }}&kind={{ r.kind }}">zobraziť</a>
+            <form method="post" action="/plans/delete" style="display:inline"
+                   onsubmit="return confirm('Naozaj zmazať plán {{ r.date }} {{ r.step }}m {{ r.kind }} (profil {{ active_profile_name }})?')">
+              <input type="hidden" name="date" value="{{ r.date }}">
+              <input type="hidden" name="step" value="{{ r.step }}">
+              <input type="hidden" name="kind" value="{{ r.kind }}">
+              <input type="hidden" name="profile" value="{{ active_profile_name }}">
+              <button class="btn red sm">zmazať</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="11" class="muted text-center" style="padding:20px">Žiadne plány v zadanom rozsahu</td></tr>
+    {% endif %}
+  </table>
+
+  <p class="muted" style="font-size:12px;margin-top:8px">
+    <b>× akt</b> = počet slotov s násobiteľom ≠ 1.00 ·
+    <b>RT off</b> = počet 15-min slotov kde je RT zablokovaná ·
+    <b>Flagy</b>: iba nabíjanie / bias ZCO / RT viazaná na plán.
+  </p>
+{% endblock %}

@@ -1015,11 +1015,12 @@ def _ftv_scenario_default_hours(date_iso: str):
 
 
 @app.get("/ftv_scenario", response_class=HTMLResponse)
-def ftv_scenario_get(date: str = None, msg: str = ""):
+def ftv_scenario_get(request: Request, date: str = None, msg: str = ""):
     """Editor hodinového FTV scenára pre konkrétny dátum.
     Interaktívne SVG s 24 ťahafnými ručkami + Gauss smoothing susedov + Save/Delete."""
+    from ui.templates import render
     if fs is None:
-        return "<p>ftv_scenarios modul nedostupný.</p>"
+        return HTMLResponse("<p>ftv_scenarios modul nedostupný.</p>", status_code=503)
     d_iso = date or dt.date.today().isoformat()
     try:
         d_iso = dt.date.fromisoformat(d_iso).isoformat()
@@ -1031,190 +1032,13 @@ def ftv_scenario_get(date: str = None, msg: str = ""):
         sc = fs.load_scenario(d_iso)
         if sc:
             saved_at = sc.get("saved_at", "")
-    # zoznam existujúcich scenárov pre prepínanie
-    all_sc = fs.list_scenarios()
-    sc_rows = ""
-    for s in all_sc[:30]:
-        sc_rows += (f"<tr><td><a href='/ftv_scenario?date={s['date']}'>{s['date']}</a></td>"
-                    f"<td>{s.get('saved_at','')}</td><td>{s.get('peak_kw',0):.1f} kW</td>"
-                    f"<td style='color:#666'>{(s.get('note') or '')[:40]}</td></tr>")
-    if not sc_rows:
-        sc_rows = "<tr><td colspan='4' style='color:#999;text-align:center'>(žiadne uložené scenáre)</td></tr>"
-    js_hours = json.dumps(hours)
-    badge = ("<span style='background:#2E7D32;color:#fff;padding:3px 10px;border-radius:5px;font-size:13px'>"
-             f"💾 Uložený scenár (saved {saved_at})</span>" if is_saved
-             else "<span style='background:#666;color:#fff;padding:3px 10px;border-radius:5px;font-size:13px'>"
-             "📊 Auto (PVF predikcia / plán)</span>")
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8">
-<title>FTV scenár — {d_iso}</title><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1100px;margin:18px auto;padding:0 16px;color:#222}}
-h1{{color:#1F4E78;margin:0 0 8px}} h2{{color:#2E75B6;margin:18px 0 6px;font-size:17px}}
-.msg{{color:#C00000;background:#ffeaea;padding:8px;border-radius:6px;margin:8px 0}}
-.ok{{color:#2E7D32;background:#e6f4ea;padding:8px;border-radius:6px;margin:8px 0}}
-button{{cursor:pointer;border:0;color:#fff;padding:9px 16px;border-radius:7px;font-size:14px;font-weight:600;margin-right:6px}}
-.btn-save{{background:#2E7D32}} .btn-reset{{background:#1F4E78}} .btn-del{{background:#C0392B}}
-input[type="text"],input[type="date"],input[type="number"]{{padding:6px;border:1px solid #ccc;border-radius:6px;font-size:14px}}
-.row{{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0}}
-#svg-wrap{{border:1px solid #e0e0e0;border-radius:10px;padding:10px;background:#fafbfc}}
-.handle{{cursor:ns-resize;fill:#E0A800;stroke:#7a5c00;stroke-width:1}}
-.handle:hover{{fill:#F39C12}} .bar{{fill:rgba(224,168,0,.35)}}
-table{{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0}}
-th,td{{border:1px solid #e3e3e3;padding:5px 8px;text-align:left}} th{{background:#1F4E78;color:#fff}}
-.help{{color:#666;font-size:12px;margin:4px 0}}</style></head><body>
-<h1>🎨 FTV scenár — deň {d_iso} &nbsp; {badge}</h1>
-<p class="help">Potiahni ťahafné ručky vertikálne nahor/nadol. Susedia sa hladko prispôsobia (Gauss smoothing σ=1.0 hodín, ±3h dosah).
-Po editácii ulož ako per-dňový override; livesim ho pri tomto dátume preberie namiesto auto-predikcie.</p>
-{f'<div class="ok">{msg}</div>' if msg else ''}
-<div class="row">
-  <form method="get" action="/ftv_scenario" style="display:flex;gap:8px;align-items:center">
-    <label>Dátum: <input type="date" name="date" value="{d_iso}"></label>
-    <button type="submit" class="btn-reset">Otvoriť</button>
-  </form>
-  <a href="/livesim" style="color:#2E75B6">← Späť na živú simuláciu</a>
-</div>
+    scenarios = (fs.list_scenarios() or [])[:30]
+    return render(request, "pages/ftv_scenario.html",
+                   d_iso=d_iso, msg=msg, is_saved=is_saved, saved_at=saved_at,
+                   note=note, time_shift_min=time_shift_min,
+                   js_hours=json.dumps(hours), scenarios=scenarios)
 
-<div id="svg-wrap">
-  <svg id="ftv-svg" viewBox="0 0 720 320" style="width:100%;height:320px;display:block">
-    <!-- mriežka + osi sa pridávajú dynamicky cez JS -->
-  </svg>
-  <div class="row" style="justify-content:space-between">
-    <div class="help" id="totals">denná energia: <b id="t-day">—</b> kWh · peak: <b id="t-peak">—</b> kW</div>
-    <div style="display:flex;gap:8px">
-      <button type="button" class="btn-reset" onclick="resetHours()">↺ Obnoviť pôvodné</button>
-    </div>
-  </div>
-</div>
 
-<form method="post" action="/ftv_scenario" style="margin-top:14px">
-  <input type="hidden" name="date" value="{d_iso}">
-  <input type="hidden" name="hourly_json" id="hourly_json" value='{js_hours}'>
-  <div class="row">
-    <label title="Posun celej minútovej reality v čase (napr. mraky prišli skôr/neskôr). Plánovaná krivka (žltá) ostáva, len minútová realita sa cyklicky posunie. Záporné = skôr, kladné = neskôr.">
-      Časový posun reality:
-      <input type="number" name="time_shift_min" value="{time_shift_min}" step="5" min="-180" max="180" style="width:80px"> min
-    </label>
-    <label>Poznámka: <input type="text" name="note" value="{note}" style="width:300px" placeholder='napr. "búrlivé popoludnie"'></label>
-    <button type="submit" name="action" value="save" class="btn-save">💾 Uložiť scenár</button>
-    {'<button type="submit" name="action" value="delete" class="btn-del" onclick="return confirm(`Naozaj zmazať scenár pre ' + d_iso + '?`)">🗑 Zmazať scenár</button>' if is_saved else ''}
-  </div>
-</form>
-
-<h2>Uložené scenáre</h2>
-<table><tr><th>Dátum</th><th>Uložené</th><th>Peak [kW]</th><th>Poznámka</th></tr>{sc_rows}</table>
-
-<script>
-const W=720, H=320, PAD_L=42, PAD_R=14, PAD_T=14, PAD_B=44;
-const X0=PAD_L, X1=W-PAD_R, Y0=PAD_T, Y1=H-PAD_B;
-const N=24;
-const dx = (X1-X0)/N;
-const Y_MAX_HINT=Math.max(...({js_hours}.map(v=>Math.abs(v))), 100);   // počiatočný rozsah
-let Y_MAX = Math.ceil(Y_MAX_HINT * 1.2 / 10) * 10;     // okrúhli nahor na 10ky
-let hours = {js_hours}.slice();
-const initHours = hours.slice();   // pre reset
-
-function yScale(v) {{ return Y1 - (v/Y_MAX) * (Y1-Y0); }}
-function vFromY(y) {{ return Math.max(0, (Y1-y)/(Y1-Y0) * Y_MAX); }}
-
-function applyGauss(idx, newVal) {{
-  const sigma = 1.0, radius = 3;
-  const old = hours[idx], delta = newVal - old;
-  hours[idx] = newVal;
-  for (let off=-radius; off<=radius; off++) {{
-    if (off === 0) continue;
-    const j = idx + off;
-    if (j<0 || j>=N) continue;
-    const w = Math.exp(-(off*off)/(2*sigma*sigma));
-    hours[j] = Math.max(0, hours[j] + w * delta * 0.5);
-  }}
-}}
-
-function rescaleY() {{
-  const m = Math.max(...hours.map(v => Math.abs(v)), 1);
-  Y_MAX = Math.max(100, Math.ceil(m * 1.2 / 10) * 10);
-}}
-
-function render() {{
-  const svg = document.getElementById('ftv-svg');
-  svg.innerHTML = '';
-  // mriežka — horizontálne
-  for (let i=0; i<=5; i++) {{
-    const yv = Y_MAX * (1 - i/5);
-    const y = yScale(yv);
-    svg.innerHTML += `<line x1="${{X0}}" y1="${{y}}" x2="${{X1}}" y2="${{y}}" stroke="#e8e8e8"/>`;
-    svg.innerHTML += `<text x="${{X0-6}}" y="${{y+4}}" text-anchor="end" font-size="11" fill="#666">${{Math.round(yv)}}</text>`;
-  }}
-  // vertikálne (každé 3 hodiny)
-  for (let i=0; i<=N; i+=3) {{
-    const x = X0 + i*dx;
-    svg.innerHTML += `<line x1="${{x}}" y1="${{Y0}}" x2="${{x}}" y2="${{Y1}}" stroke="#eee"/>`;
-    svg.innerHTML += `<text x="${{x}}" y="${{Y1+16}}" text-anchor="middle" font-size="11" fill="#666">${{i}}:00</text>`;
-  }}
-  // bars
-  let polyPts = [];
-  for (let i=0; i<N; i++) {{
-    const x = X0 + i*dx;
-    const y = yScale(hours[i]);
-    const w = dx - 1;
-    svg.innerHTML += `<rect class="bar" x="${{x}}" y="${{y}}" width="${{w}}" height="${{Y1-y}}"/>`;
-    polyPts.push(`${{x + dx/2}},${{y}}`);
-  }}
-  svg.innerHTML += `<polyline points="${{polyPts.join(' ')}}" fill="none" stroke="#7a5c00" stroke-width="1.4"/>`;
-  // ručky
-  for (let i=0; i<N; i++) {{
-    const x = X0 + i*dx + dx/2;
-    const y = yScale(hours[i]);
-    svg.innerHTML += `<circle class="handle" data-idx="${{i}}" cx="${{x}}" cy="${{y}}" r="7"><title>h${{i}}: ${{hours[i].toFixed(1)}} kW</title></circle>`;
-  }}
-  // popisek osi Y
-  svg.innerHTML += `<text x="${{X0-22}}" y="${{(Y0+Y1)/2}}" text-anchor="middle" font-size="11" fill="#1F4E78" transform="rotate(-90 ${{X0-22}} ${{(Y0+Y1)/2}})">FTV [kW]</text>`;
-  // totals
-  const daySum = hours.reduce((a,b)=>a+b, 0);   // priemer kW × 24h = kWh
-  const peak = Math.max(...hours);
-  document.getElementById('t-day').textContent = daySum.toFixed(1);
-  document.getElementById('t-peak').textContent = peak.toFixed(1);
-  document.getElementById('hourly_json').value = JSON.stringify(hours);
-  attachHandlers();
-}}
-
-function attachHandlers() {{
-  document.querySelectorAll('.handle').forEach(el => {{
-    el.addEventListener('pointerdown', dragStart);
-  }});
-}}
-
-let dragging = null;
-function dragStart(e) {{
-  const idx = parseInt(e.target.dataset.idx);
-  dragging = idx;
-  e.target.setPointerCapture(e.pointerId);
-  e.preventDefault();
-  document.addEventListener('pointermove', dragMove);
-  document.addEventListener('pointerup', dragEnd, {{once: true}});
-}}
-function dragMove(e) {{
-  if (dragging === null) return;
-  const svg = document.getElementById('ftv-svg');
-  const r = svg.getBoundingClientRect();
-  const yLocal = (e.clientY - r.top) / r.height * H;
-  const newV = vFromY(yLocal);
-  applyGauss(dragging, newV);
-  rescaleY();
-  render();
-}}
-function dragEnd(e) {{
-  document.removeEventListener('pointermove', dragMove);
-  dragging = null;
-}}
-
-function resetHours() {{
-  hours = initHours.slice();
-  rescaleY();
-  render();
-}}
-
-render();
-</script>
-</body></html>"""
 
 
 @app.post("/ftv_scenario", response_class=HTMLResponse)
@@ -1245,21 +1069,21 @@ def ftv_scenario_post(date: str = Form(...), hourly_json: str = Form(...),
 
 
 @app.get("/plans", response_class=HTMLResponse)
-def plans_browse(date_from: str = None, date_to: str = None, kind: str = "all", step: str = "all",
-                  profile: str = None):
+def plans_browse(request: Request, date_from: str = None, date_to: str = None,
+                  kind: str = "all", step: str = "all", profile: str = None):
     """Browser uložených plánov v plan_store s filtrami a akciami (zobraziť/zmazať).
     profile=None → aktívny profil. Cez query param vie zobraziť plány aj z iného profilu."""
+    from ui.templates import render
     if ps is None:
-        return "<p>plan_store modul nedostupný.</p>"
+        return HTMLResponse("<p>plan_store modul nedostupný.</p>", status_code=503)
     today = dt.date.today()
     df = date_from or (today - dt.timedelta(days=30)).isoformat()
     dt_ = date_to or (today + dt.timedelta(days=7)).isoformat()
     active_profile = ps.resolve_profile(profile)
-    all_profiles = ps.list_profiles_with_plans()
+    all_profiles = ps.list_profiles_with_plans() or [active_profile]
     all_plans = ps.list_plans(profile=active_profile)
-    # filter
     fk = (kind or "all").lower()
-    fs = str(step or "all").lower()
+    fs_step = str(step or "all").lower()
     rows_data = []
     for it in all_plans:
         d_iso = it["date"]
@@ -1271,19 +1095,21 @@ def plans_browse(date_from: str = None, date_to: str = None, kind: str = "all", 
             continue
         if fk != "all" and it["kind"] != fk:
             continue
-        if fs != "all" and int(it["step_min"]) != int(fs):
+        if fs_step != "all" and int(it["step_min"]) != int(fs_step):
             continue
-        # načítam plán pre summary
         p = ps.load_plan_safe(d_iso, int(it["step_min"]), it["kind"])
         if not p:
             continue
         summary = p.get("summary", {})
         mults = p.get("mults") or []
         rt = p.get("rt_mask") or []
+        zisk_v = summary.get("ZISK_EUR")
+        zisk_num = float(zisk_v) if isinstance(zisk_v, (int, float)) else None
         rows_data.append(dict(
             date=d_iso, step=int(it["step_min"]), kind=it["kind"],
             generated_at=p.get("generated_at", ""),
-            zisk=summary.get("ZISK_EUR"),
+            zisk_num=zisk_num,
+            zisk_str=(f"{zisk_num:+.1f} €" if zisk_num is not None else "—"),
             cycles=round(float(summary.get("nabite_kWh", 0) + summary.get("vybite_kWh", 0)) / 2.0
                          / float(p.get("params", {}).get("batt_kwh", 200)), 2),
             mult_act=sum(1 for x in mults if x is not None and abs(float(x) - 1.0) > 1e-6),
@@ -1293,81 +1119,12 @@ def plans_browse(date_from: str = None, date_to: str = None, kind: str = "all", 
             rt_freedom=bool(p.get("rt_freedom", True)),
             source=p.get("meta", {}).get("source", "?"),
         ))
-    # sort by date desc
     rows_data.sort(key=lambda r: (r["date"], r["step"], r["kind"]), reverse=True)
-    # render table rows
-    rows_html = []
-    for r in rows_data:
-        zisk = f"{r['zisk']:+.1f} €" if isinstance(r['zisk'], (int, float)) else "—"
-        zisk_col = "#2E7D32" if isinstance(r['zisk'], (int, float)) and r['zisk'] >= 0 else "#C0392B"
-        npd_chip = ("<span style='background:#e8f5e9;color:#1B5E20;padding:1px 6px;border-radius:4px;font-size:11px'>iba nabíjanie</span>"
-                    if r['npd'] else "")
-        zbw_chip = (f"<span style='background:#e3f2fd;color:#1F4E78;padding:1px 6px;border-radius:4px;font-size:11px'>bias {r['zbw']}</span>"
-                    if r['zbw'] > 0 else "")
-        rtf_chip = ("" if r['rt_freedom'] else
-                     "<span style='background:#fff3cd;color:#7a5c00;padding:1px 6px;border-radius:4px;font-size:11px'>RT viazaná</span>")
-        rows_html.append(
-            f"<tr><td><a href='/plan_view?date={r['date']}&step={r['step']}&kind={r['kind']}'>{r['date']}</a></td>"
-            f"<td>{r['step']}</td><td>{r['kind']}</td>"
-            f"<td style='color:{zisk_col};font-weight:600;text-align:right'>{zisk}</td>"
-            f"<td style='text-align:right'>{r['cycles']}</td>"
-            f"<td style='text-align:right'>{r['mult_act']}</td>"
-            f"<td style='text-align:right'>{r['rt_off']}</td>"
-            f"<td>{npd_chip} {zbw_chip} {rtf_chip}</td>"
-            f"<td style='color:#666;font-size:11px'>{r['source']}</td>"
-            f"<td style='color:#666;font-size:11px'>{r['generated_at']}</td>"
-            f"<td><a href='/plan_view?date={r['date']}&step={r['step']}&kind={r['kind']}' "
-            f"style='background:#1F4E78;color:#fff;padding:4px 8px;border-radius:5px;text-decoration:none;font-size:12px'>zobraziť</a> "
-            f"<form method='post' action='/plans/delete' style='display:inline' onsubmit=\"return confirm('Naozaj zmazať plán {r['date']} {r['step']}m {r['kind']} (profil {active_profile})?')\">"
-            f"<input type='hidden' name='date' value='{r['date']}'>"
-            f"<input type='hidden' name='step' value='{r['step']}'>"
-            f"<input type='hidden' name='kind' value='{r['kind']}'>"
-            f"<input type='hidden' name='profile' value='{active_profile}'>"
-            f"<button style='background:#aa3a3a;color:#fff;padding:4px 8px;border-radius:5px;border:0;font-size:12px;cursor:pointer'>zmazať</button></form>"
-            f"</td></tr>"
-        )
-    rows_str = "".join(rows_html) if rows_html else \
-        "<tr><td colspan='11' style='color:#999;text-align:center;padding:20px'>Žiadne plány v zadanom rozsahu</td></tr>"
-    # filter form
-    def _sel(opts, current):
-        return "".join(f"<option value='{v}'{' selected' if v == current else ''}>{lbl}</option>" for v, lbl in opts)
-    kind_opts = _sel([("all", "všetky"), ("plan", "plan (60-min)"), ("dentrh", "dentrh (15-min)")], fk)
-    step_opts = _sel([("all", "všetky"), ("60", "60 min"), ("15", "15 min")], fs)
-    profile_opts = "".join(
-        f"<option value='{p}'{' selected' if p == active_profile else ''}>{p}</option>"
-        for p in (all_profiles or [active_profile]))
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Plány — prehľad</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1400px;margin:24px auto;padding:0 16px;color:#222}}
-h1,h2{{color:#1F4E78}} table{{border-collapse:collapse;width:100%;font-size:13px}}
-th,td{{border:1px solid #e3e3e3;padding:5px 8px;text-align:left}} th{{background:#1F4E78;color:#fff;cursor:pointer}}
-input,select{{padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px}}
-button{{cursor:pointer}}
-.flt{{display:flex;gap:10px;align-items:end;flex-wrap:wrap;background:#eef3f9;padding:10px 14px;border-radius:8px;margin:10px 0}}
-.flt label{{display:flex;flex-direction:column;font-size:12px;color:#666}}
-.chip{{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;margin:1px}}</style></head><body>
-<h1>📋 Plány — prehľad ({active_profile})</h1>
-{_nav("/plans")}
-<form method="get" action="/plans" class="flt">
-<label>Profil<select name="profile">{profile_opts}</select></label>
-<label>Od<input name="date_from" type="date" value="{df}"></label>
-<label>Do<input name="date_to" type="date" value="{dt_}"></label>
-<label>Kind<select name="kind">{kind_opts}</select></label>
-<label>Krok<select name="step">{step_opts}</select></label>
-<button type="submit" style="background:#1F4E78;color:#fff;border:0;padding:7px 14px;border-radius:7px">Filtrovať</button>
-<span style="color:#666;font-size:12px;margin-left:auto">{len(rows_data)} plánov</span>
-</form>
-<table>
-<tr><th>Dátum</th><th>Krok</th><th>Kind</th><th>Zisk €</th><th>Cykly</th><th>× akt</th><th>RT off</th>
-<th>Flagy</th><th>Zdroj</th><th>Vygenerované</th><th>Akcia</th></tr>
-{rows_str}
-</table>
-<p style="color:#666;font-size:12px;margin-top:8px">
-<b>× akt</b> = počet slotov s násobiteľom ≠ 1.00 &nbsp;•&nbsp;
-<b>RT off</b> = počet 15-min slotov kde je RT zablokovaná &nbsp;•&nbsp;
-<b>Flagy</b>: iba nabíjanie / bias ZCO / RT viazaná na plán.
-</p>
-</body></html>"""
+    return render(request, "pages/plans_list.html",
+                   rows=rows_data, profiles=all_profiles,
+                   active_profile_name=active_profile,
+                   date_from=df, date_to=dt_,
+                   kind_filter=fk, step_filter=fs_step)
 
 
 @app.post("/plans/delete", response_class=HTMLResponse)

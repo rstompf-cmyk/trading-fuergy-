@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}FTV scenár — {{ d_iso }} — {{ app_name }}{% endblock %}
+
+{% block head_extra %}
+  <style>
+    #svg-wrap { border: 1px solid #e0e0e0; border-radius: 10px; padding: 10px; background: #fafbfc; }
+    .handle { cursor: ns-resize; fill: #E0A800; stroke: #7a5c00; stroke-width: 1; }
+    .handle:hover { fill: #F39C12; }
+    .bar { fill: rgba(224, 168, 0, 0.35); }
+    .help { color: #666; font-size: 12px; margin: 4px 0; }
+  </style>
+{% endblock %}
+
+{% block content %}
+  <h1>🎨 FTV scenár — deň {{ d_iso }}
+    {% if is_saved %}
+      <span class="chip simulation" style="font-size:13px;padding:3px 10px">💾 Uložený scenár (saved {{ saved_at }})</span>
+    {% else %}
+      <span class="chip" style="background:#666;color:#fff;font-size:13px;padding:3px 10px">📊 Auto (PVF predikcia / plán)</span>
+    {% endif %}
+  </h1>
+
+  <p class="help">
+    Potiahni ťahafné ručky vertikálne nahor/nadol. Susedia sa hladko prispôsobia
+    (Gauss smoothing σ=1.0 hodín, ±3h dosah). Po editácii ulož ako per-dňový override;
+    livesim ho pri tomto dátume preberie namiesto auto-predikcie.
+  </p>
+
+  {% if msg %}<div class="banner success">{{ msg }}</div>{% endif %}
+
+  <div class="flex gap-12 items-center mt-8">
+    <form method="get" action="/ftv_scenario" class="flex gap-8 items-center">
+      <label>Dátum: <input type="date" name="date" value="{{ d_iso }}"></label>
+      <button type="submit" class="btn">Otvoriť</button>
+    </form>
+    <a href="/livesim" style="color:var(--primary)">← Späť na živú simuláciu</a>
+  </div>
+
+  <div id="svg-wrap" class="mt-16">
+    <svg id="ftv-svg" viewBox="0 0 720 320" style="width:100%;height:320px;display:block"></svg>
+    <div class="flex justify-between items-center">
+      <div class="help">
+        denná energia: <b id="t-day">—</b> kWh · peak: <b id="t-peak">—</b> kW
+      </div>
+      <button type="button" class="btn sm" onclick="resetFtvHours()">↺ Obnoviť pôvodné</button>
+    </div>
+  </div>
+
+  <form method="post" action="/ftv_scenario" class="mt-16">
+    <input type="hidden" name="date" value="{{ d_iso }}">
+    <input type="hidden" name="hourly_json" id="hourly_json" value="{{ js_hours }}">
+    <div class="flex gap-12 items-center flex-wrap">
+      <label title="Posun celej minútovej reality v čase (napr. mraky prišli skôr/neskôr)">
+        Časový posun reality:
+        <input type="number" name="time_shift_min" value="{{ time_shift_min }}"
+                step="5" min="-180" max="180" style="width:80px"> min
+      </label>
+      <label>Poznámka:
+        <input type="text" name="note" value="{{ note }}" style="width:300px"
+                placeholder='napr. "búrlivé popoludnie"'>
+      </label>
+      <button type="submit" name="action" value="save" class="btn green">💾 Uložiť scenár</button>
+      {% if is_saved %}
+        <button type="submit" name="action" value="delete" class="btn red"
+                 onclick="return confirm('Naozaj zmazať scenár pre {{ d_iso }}?')">
+          🗑 Zmazať scenár
+        </button>
+      {% endif %}
+    </div>
+  </form>
+
+  <h2 class="mt-24">Uložené scenáre</h2>
+  <table class="tbl-compact">
+    <tr><th>Dátum</th><th>Uložené</th><th>Peak [kW]</th><th>Poznámka</th></tr>
+    {% if scenarios %}
+      {% for s in scenarios %}
+        <tr>
+          <td><a href="/ftv_scenario?date={{ s.date }}">{{ s.date }}</a></td>
+          <td>{{ s.saved_at|default('') }}</td>
+          <td>{{ "%.1f"|format(s.peak_kw|default(0)|float) }} kW</td>
+          <td class="muted">{{ (s.note or '')[:40] }}</td>
+        </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="4" class="muted text-center">(žiadne uložené scenáre)</td></tr>
+    {% endif %}
+  </table>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/js/ftv_scenario_editor.js"></script>
+  <script>
+    initFtvScenarioEditor({ hours: {{ js_hours|safe }} });
+  </script>
+{% endblock %}
