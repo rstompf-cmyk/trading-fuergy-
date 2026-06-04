@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block container_class %}container-wide{% endblock %}
+{% block title %}Profily — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <h1>⚙ Profily</h1>
+
+  <div class="card card-blue">
+    <b>Aktívny profil:</b>
+    {% if active %}
+      <span class="chip {{ active_mode }}" style="font-size:14px">
+        {% if active_mode == "real" %}🔴{% else %}🎮{% endif %} {{ active }}
+      </span>
+    {% else %}
+      <i>žiadny</i>
+    {% endif %}
+    &nbsp;|&nbsp;
+    <a href="/profiles/edit?name=__new__" class="btn"
+        title="Vytvorí nový profile s hodnotami z AKTUÁLNYCH UI nastavení">➕ Nový (z UI)</a>
+    <a href="/profiles/edit?name=__new__&amp;defaults=1" class="btn green"
+        title="Vytvorí nový profile s prázdnym stavom — všetky parametre na továrenských hodnotách">➕ Nový (defaulty)</a>
+
+    <form method="post" action="/profiles/snapshot" style="display:inline-flex;gap:6px;align-items:center;margin-left:10px">
+      <input name="name" placeholder="názov nového profilu" required style="width:200px">
+      <select name="mode" title="Typ profilu — fixovaný pri vzniku">
+        <option value="simulation">🎮 Simulácia</option>
+        <option value="real">🔴 Reálny chod</option>
+      </select>
+      <button class="btn" style="background:#5E35B1">📸 Snímka z aktuálnych UI hodnôt</button>
+    </form>
+  </div>
+
+  <p style="color:#666;font-size:13px">
+    Profile obsahuje VŠETKY parametre z formulárov
+    <a href="/">Plán D-1</a>, <a href="/dentrh">Denný trh 15-min</a>,
+    <a href="/rt">RT poradca</a> + globálnu šablónu × a RT mask.
+    Kliknutím <b>aplikovať</b> sa profile nastaví ako aktívny a všetky formuláre + plan_overrides sa prepíšu jeho hodnotami.
+  </p>
+
+  {% if rows %}
+    <table class="tbl-compact">
+      <tr>
+        <th>Názov</th><th>Update</th><th>× akt</th><th>RT off</th>
+        <th>kdis/kchg</th><th>Flagy</th><th>Note</th><th>Akcia</th>
+      </tr>
+      {% for r in rows %}
+        <tr class="{% if r.active %}row-active-{{ r.mode }}{% elif r.mode == 'real' %}row-real{% endif %}">
+          <td>
+            <span class="chip {{ r.mode }}">{{ r.mode }}</span>
+            <b>{{ r.name }}{% if r.active %} ★{% endif %}</b>
+          </td>
+          <td class="muted" style="font-size:12px">{{ r.updated_at }}</td>
+          <td>{{ r.mults_changed }}</td>
+          <td>{{ r.rt_off_count }}</td>
+          <td>{{ r.kdis }}/{{ r.kchg }}</td>
+          <td>
+            {% if r.no_planned_discharge %}<span class="chip simulation">iba D-1 nab</span>{% endif %}
+            {% if r.zco_bias_w %}<span class="chip">bias {{ r.zco_bias_w }}</span>{% endif %}
+          </td>
+          <td class="muted" style="font-size:12px">{{ r.note[:60] }}</td>
+          <td>
+            <form method="post" action="/profiles/apply" style="display:inline">
+              <input type="hidden" name="name" value="{{ r.name }}">
+              <button class="btn green sm" title="Aplikovať profile na všetky formuláre">aplikovať</button>
+            </form>
+            <a class="btn sm" href="/profiles/edit?name={{ r.name }}">edit</a>
+            <form method="post" action="/profiles/delete" style="display:inline"
+                   onsubmit="return confirm('Naozaj zmazať profile {{ r.name }}?')">
+              <input type="hidden" name="name" value="{{ r.name }}">
+              <button class="btn red sm">zmazať</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="muted text-center" style="padding:24px">(žiadne profile)</div>
+  {% endif %}
+{% endblock %}

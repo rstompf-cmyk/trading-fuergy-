@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block container_class %}container-form{% endblock %}
+{% block title %}{{ title }} — {{ app_name }}{% endblock %}
+
+{% block head_extra %}
+  <script>window.DIST_PRESETS = {{ dist_presets_json|safe }};</script>
+  <script src="/static/js/distribution_form.js"></script>
+{% endblock %}
+
+{% block content %}
+  <h1>{{ title }}</h1>
+
+  <form method="post" action="/profiles/save">
+    <fieldset>
+      <legend>Identifikácia</legend>
+      <label>Názov:
+        {% if is_new %}
+          <input name="name" placeholder="názov" required>
+        {% else %}
+          <input name="name" value="{{ name }}" readonly>
+        {% endif %}
+      </label>
+      <label style="display:block;margin-top:6px">Poznámka:
+        <input name="note" value="{{ note_val }}" style="width:60%">
+      </label>
+
+      <div class="mt-16"><b>Typ profilu:</b></div>
+      {% if is_new %}
+        <div class="flex gap-12 items-center mt-8">
+          <label style="cursor:pointer;display:flex;gap:8px;align-items:center;background:#e8f5e9;
+                  padding:8px 14px;border-radius:8px;border:2px solid var(--success);font-weight:600">
+            <input type="radio" name="mode" value="simulation"
+                    {% if preset_mode != "real" %}checked{% endif %}>
+            🎮 Simulácia
+            <span style="font-weight:400;color:#666;font-size:12px">
+              (PVGIS + scenár, historická simulácia, profit z modelu)
+            </span>
+          </label>
+          <label style="cursor:pointer;display:flex;gap:8px;align-items:center;background:#ffeaea;
+                  padding:8px 14px;border-radius:8px;border:2px solid var(--danger);font-weight:600">
+            <input type="radio" name="mode" value="real"
+                    {% if preset_mode == "real" %}checked{% endif %}>
+            🔴 Reálny chod
+            <span style="font-weight:400;color:#666;font-size:12px">
+              (plán + reálne meranie z realio, povolené manuálne setpointy)
+            </span>
+          </label>
+        </div>
+        <p style="color:#7a3500;font-size:12px;margin:6px 0 0">
+          ⚠ <b>Mód sa po vytvorení nedá zmeniť.</b> Real profile sa nedá použiť na historickú
+          simuláciu; Simulačný profil sa nedá použiť v
+          <code>/realio?tab=riadenie</code> na reálne riadenie batérie.
+        </p>
+      {% else %}
+        <div class="mt-8">
+          <span class="chip {{ profile_mode }}" style="font-size:14px;padding:6px 12px">
+            {% if profile_mode == "real" %}🔴 Reálny chod{% else %}🎮 Simulácia{% endif %}
+          </span>
+          <span style="color:#666;font-size:12px;margin-left:10px">
+            🔒 fixované pri vzniku — pre iný mód vytvor nový profil
+          </span>
+          <input type="hidden" name="mode" value="{{ profile_mode }}">
+        </div>
+      {% endif %}
+    </fieldset>
+
+    <fieldset>
+      <legend>Parametre /plan (Plán D-1)</legend>
+      <p class="muted" style="font-size:12px">
+        JSON s form poliami z /plan formulára (lat, lon, kwp, batt_kw, eff_c, soc_min,
+        no_planned_discharge, zco_bias_w, rt_freedom, …).<br>
+        <b>Stropy DAM obchodovania</b> (pre D-1 plán cez <code>/vdt/d1</code>): pridaj kľúče
+        <code>"max_export_kwh_day"</code> a <code>"max_import_kwh_day"</code> (kWh/deň).
+        0 alebo chýba = bez stropu.
+      </p>
+      <textarea name="plan_json" style="min-height:180px;font-family:Menlo,Consolas,monospace;font-size:12px">{{ plan_json }}</textarea>
+    </fieldset>
+
+    <fieldset>
+      <legend>Parametre /dentrh (Denný trh 15-min)</legend>
+      <p class="muted" style="font-size:12px">JSON s form poliami z /dentrh formulára</p>
+      <textarea name="dentrh_json" style="min-height:180px;font-family:Menlo,Consolas,monospace;font-size:12px">{{ dentrh_json }}</textarea>
+    </fieldset>
+
+    <fieldset>
+      <legend>Parametre /rt (RT poradca)</legend>
+      <p class="muted" style="font-size:12px">JSON s nastaveniami RT regulátora: kdis, kchg, dtk, rboost</p>
+      <textarea name="rt_json" style="min-height:180px;font-family:Menlo,Consolas,monospace;font-size:12px">{{ rt_json }}</textarea>
+    </fieldset>
+
+    {# Distribučné tarify — JSON sync robí static/js/distribution_form.js #}
+    <fieldset style="background:#fff8e1;border:2px solid #f9a825">
+      <legend style="color:#e65100">⚡ Distribučné tarify (TOU + SK poplatky + rezerv. kapacita)</legend>
+      <p class="muted" style="font-size:12px">
+        Joint LP zarátá tieto sadzby do účelovej funkcie keď je
+        <b>"⚡ Optimalizovať distribučné náklady"</b> zapnuté v <code>/plan</code> formulári.
+        Predvyplnené orientačné hodnoty 2024-2025 podľa ÚRSO regulácie.
+      </p>
+
+      <div style="background:#fffde7;border-left:4px solid #f9a825;padding:10px 14px;border-radius:6px;margin:8px 0">
+        <b>📋 Načítať preset:</b>&nbsp;
+        <select id="dist_preset_select" style="padding:6px 10px;width:55%">
+          <option value="">— vyber tarifu —</option>
+          {% for p in dist_presets_list %}
+            <option value="{{ p.key }}">{{ p.label }} — {{ p.note[:60] }}</option>
+          {% endfor %}
+        </select>
+        <button type="button" onclick="loadDistPreset()"
+                 style="background:#e65100;color:#fff;border:0;padding:6px 14px;border-radius:5px;cursor:pointer;margin-left:6px">
+          Načítať do form
+        </button>
+        <div id="dist_preset_note" class="muted" style="font-size:11px;margin-top:6px;font-style:italic"></div>
+      </div>
+
+      <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-weight:600;color:#e65100">
+        <input type="checkbox" id="dist_enabled">
+        🔵 Zapnúť distribučný náklad v LP (master toggle)
+      </label>
+
+      <div class="row3" style="margin:8px 0">
+        <label>Distribútor
+          <select id="dist_company">
+            <option value="ZSD">ZSD (BA/TT/NR/TN)</option>
+            <option value="SSD">SSD (ZA/BB)</option>
+            <option value="VSD">VSD (KE/PO)</option>
+            <option value="CUSTOM">CUSTOM</option>
+          </select>
+        </label>
+        <label>Skupina
+          <select id="dist_tariff_group">
+            <option value="MO1">MO1 (do 22 kW, jednotaríf)</option>
+            <option value="MO2">MO2 (do 22 kW, dvojtarif)</option>
+            <option value="MO3">MO3 (22-100 kW)</option>
+            <option value="VO1">VO1 (100-200 kW, VN)</option>
+            <option value="VO2">VO2 (200-500 kW, VN)</option>
+            <option value="VO3">VO3 (500-1000 kW, VN)</option>
+            <option value="VO4">VO4 (>1 MW, VVN)</option>
+            <option value="VO5">VO5</option>
+            <option value="VTL">VTL (priamy prenos)</option>
+            <option value="CUSTOM">CUSTOM</option>
+          </select>
+        </label>
+        <label>Napäťová úroveň
+          <select id="dist_voltage_level">
+            <option value="NN">NN (nízke)</option>
+            <option value="VN">VN (vysoké)</option>
+            <option value="VVN">VVN (veľmi vysoké)</option>
+          </select>
+        </label>
+      </div>
+
+      <h3 style="color:var(--primary);font-size:14px;margin:14px 0 6px">A) TOU distribučná zložka (variabilná, časovo závislá)</h3>
+      <div class="row3">
+        <label>Režim
+          <select id="dist_tou_mode">
+            <option value="tou">TOU (špička/NT)</option>
+            <option value="flat">Flat (jednotaríf)</option>
+          </select>
+        </label>
+        <label>VT — vysoký tarif (€/MWh)
+          <input type="number" id="dist_tou_high" step="0.1" placeholder="25.0">
+        </label>
+        <label>NT — nízky tarif (€/MWh)
+          <input type="number" id="dist_tou_low" step="0.1" placeholder="12.0">
+        </label>
+      </div>
+
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px 16px;margin-top:10px">
+        <label>Hodiny VT (zoznam 0..23, oddelené čiarkou)
+          <input type="text" id="dist_tou_high_hours" placeholder="6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21">
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;padding-top:18px">
+          <input type="checkbox" id="dist_tou_weekend"> Víkend = NT (celodenne)
+        </label>
+      </div>
+
+      <div style="margin-top:12px;border:1px dashed #d0d0d0;border-radius:6px;padding:8px 12px">
+        <label style="display:flex;align-items:center;gap:8px;color:#666">
+          <input type="checkbox" id="dist_hourly_enable">
+          ⏱ Použiť per-hour custom (24 hodnôt €/MWh — override TOU, napr. 3-tarif)
+        </label>
+        <textarea id="dist_hourly_custom" style="width:100%;min-height:60px;margin-top:6px;font-family:monospace;font-size:12px;display:none"
+                   placeholder="24 čísel oddelených čiarkou, napr.: 10,10,10,10,10,10,30,30,30,30,30,30,20,20,20,20,20,35,35,35,35,10,10,10"></textarea>
+      </div>
+
+      <h3 style="color:var(--primary);font-size:14px;margin:14px 0 6px">B) Uniformné poplatky (€/MWh, platí na každú kWh importu)</h3>
+      <div class="row3">
+        <label>TPS — Tarifa za prev. systému
+          <input type="number" id="dist_tps" step="0.1" placeholder="28.0">
+        </label>
+        <label>SS — Systémové služby
+          <input type="number" id="dist_ss" step="0.1" placeholder="10.0">
+        </label>
+        <label>OZE — odvod (FTV > 10 kW)
+          <input type="number" id="dist_oze" step="0.1" placeholder="7.0">
+        </label>
+      </div>
+
+      <h3 style="color:var(--primary);font-size:14px;margin:14px 0 6px">C) Fixné mesačné poplatky</h3>
+      <div class="row">
+        <label>Rezerv. kapacita (€/kW/mesiac)
+          <input type="number" id="dist_peak_charge" step="0.1" placeholder="5.0">
+        </label>
+        <label>Mesačný fix (€/mes za odberné miesto)
+          <input type="number" id="dist_monthly_fix" step="0.1" placeholder="12.0">
+        </label>
+      </div>
+
+      <textarea name="distribution_json" id="dist_json_textarea" style="display:none">{{ distribution_json }}</textarea>
+
+      <details class="mt-16"><summary class="muted" style="font-size:11px;cursor:pointer">▾ Pokročilé: zobraziť raw JSON (debug)</summary>
+        <textarea id="dist_json_preview" style="width:100%;min-height:120px;font-family:monospace;font-size:11px;background:#f5f5f5;color:#666"
+                   readonly>{{ distribution_json }}</textarea>
+      </details>
+    </fieldset>
+
+    <fieldset>
+      <legend>Šablóna × a RT mask (voliteľne)</legend>
+      <p class="muted" style="font-size:12px">
+        Aktuálne sa pri save snímne globálna šablóna z <code>out/plan_overrides/_template.json</code>.
+        Ak chceš profile-specific šablónu, edituj × stĺpec v /plan a klikni 'Uložiť ako šablónu' pred snímkou.
+      </p>
+    </fieldset>
+
+    <div class="mt-16">
+      <button type="submit" class="btn green lg">
+        {% if is_new %}➕ Vytvoriť profile{% else %}💾 Uložiť zmeny{% endif %}
+      </button>
+      <a href="/profiles" class="btn sec">← Späť</a>
+    </div>
+  </form>
+{% endblock %}

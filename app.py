@@ -774,13 +774,15 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
 
 
 @app.get("/profiles", response_class=HTMLResponse)
-def profiles_browse():
+def profiles_browse(request: Request):
     """Profile manager: zoznam, aktívny profile, akcie (apply, edit, delete, snapshot)."""
+    from ui.templates import render
     if pr is None:
-        return "<p>profiles modul nedostupný.</p>"
+        return HTMLResponse("<p>profiles modul nedostupný.</p>", status_code=503)
     profiles_list = pr.list_profiles()
     active = pr.get_active()
     rows = []
+    active_mode = "simulation"
     for n in profiles_list:
         p = pr.load_profile(n)
         if not p:
@@ -789,446 +791,93 @@ def profiles_browse():
         rt96 = p.get("rt_on96") or []
         mn = sum(1 for x in m96 if x is not None and abs(float(x) - 1.0) > 1e-6)
         rt_off = sum(1 for x in rt96 if x is not None and float(x) < 0.5)
-        active_mark = " ★" if n == active else ""
-        npd = p.get("plan", {}).get("no_planned_discharge", False)
-        zbw = p.get("plan", {}).get("zco_bias_w", 0)
-        rt_kdis = p.get("rt", {}).get("kdis", "—")
-        rt_kchg = p.get("rt", {}).get("kchg", "—")
         prof_mode = (p.get("mode") or "simulation").lower()
-        # Farebný chip podľa mode + ostatné chipy
-        try:
-            from ui.html import _profile_mode_chip as _pmc
-            mode_chip = _pmc(prof_mode, small=True)
-        except Exception:
-            mode_chip = ""
-        chips = []
-        if npd: chips.append("<span style='background:#e8f5e9;color:#1B5E20;padding:1px 6px;border-radius:4px;font-size:11px'>iba D-1 nab</span>")
-        if zbw: chips.append(f"<span style='background:#e3f2fd;color:#1F4E78;padding:1px 6px;border-radius:4px;font-size:11px'>bias {zbw}</span>")
-        # Riadok obfarbí podľa typu: real → ružovkasté pozadie keď je aktívny, jemne keď nie
         if n == active:
-            _row_bg = "#ffdede" if prof_mode == "real" else "#fff7e6"
-        else:
-            _row_bg = "#fff5f5" if prof_mode == "real" else ""
-        _row_style = f' style="background:{_row_bg}"' if _row_bg else ""
-        rows.append(
-            f"<tr{_row_style}>"
-            f"<td>{mode_chip} <b>{n}{active_mark}</b></td>"
-            f"<td style='font-size:12px;color:#666'>{p.get('updated_at','')}</td>"
-            f"<td>{mn}</td><td>{rt_off}</td>"
-            f"<td>{rt_kdis}/{rt_kchg}</td>"
-            f"<td>{' '.join(chips)}</td>"
-            f"<td style='font-size:12px;color:#666'>{p.get('note','')[:60]}</td>"
-            f"<td>"
-            f"<form method='post' action='/profiles/apply' style='display:inline'>"
-            f"<input type='hidden' name='name' value='{n}'>"
-            f"<button style='background:#2E7D32;color:#fff;border:0;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:12px' title='Aplikovať profile na všetky formuláre'>aplikovať</button></form> "
-            f"<a href='/profiles/edit?name={n}' style='background:#1F4E78;color:#fff;padding:4px 10px;border-radius:5px;text-decoration:none;font-size:12px'>edit</a> "
-            f"<form method='post' action='/profiles/delete' style='display:inline' onsubmit=\"return confirm('Naozaj zmazať profile {n}?')\">"
-            f"<input type='hidden' name='name' value='{n}'>"
-            f"<button style='background:#aa3a3a;color:#fff;border:0;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:12px'>zmazať</button></form>"
-            f"</td></tr>")
-    table = ("<tr><th>Názov</th><th>Update</th><th>× akt</th><th>RT off</th>"
-              "<th>kdis/kchg</th><th>Flagy</th><th>Note</th><th>Akcia</th></tr>"
-              + "".join(rows)) if rows else "<tr><td colspan='8' style='color:#999;text-align:center;padding:20px'>(žiadne profile)</td></tr>"
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Profily</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1300px;margin:24px auto;padding:0 16px;color:#222}}
-h1,h2{{color:#1F4E78}} table{{border-collapse:collapse;width:100%;font-size:13px;margin:10px 0}}
-th,td{{border:1px solid #e3e3e3;padding:6px 10px;text-align:left}} th{{background:#1F4E78;color:#fff}}
-input,select{{padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px}}
-button{{cursor:pointer}}
-.box{{background:#f3f6fb;padding:12px 16px;border-radius:8px;margin:10px 0}}
-</style></head><body>
-<h1>⚙ Profily</h1>
-{_nav("/profiles")}
-<div class="box">
-<b>Aktívny profile:</b> {(lambda: (
-    f"<span style='background:" + (
-        "#C62828" if (pr.load_profile(active) or {}).get('mode') == 'real'
-        else "#2E7D32"
-    ) + ";color:#fff;padding:3px 10px;border-radius:6px'>"
-    + ("🔴 " if (pr.load_profile(active) or {}).get('mode') == 'real' else "🎮 ")
-    + active + "</span>"
-))() if active else "<i>žiadny</i>"} &nbsp;|&nbsp;
-<a href="/profiles/edit?name=__new__" style="background:#1F4E78;color:#fff;padding:6px 14px;border-radius:7px;text-decoration:none" title="Vytvorí nový profile s hodnotami z AKTUÁLNYCH UI nastavení">➕ Nový (z UI)</a>
-<a href="/profiles/edit?name=__new__&amp;defaults=1" style="background:#2E7D32;color:#fff;padding:6px 14px;border-radius:7px;text-decoration:none;margin-left:6px" title="Vytvorí nový profile s prázdnym (DEFAULTNÝM) stavom — všetky parametre na továrenských hodnotách">➕ Nový (defaulty)</a>
-<form method="post" action="/profiles/snapshot" style="display:inline-flex;gap:6px;align-items:center;margin-left:10px">
-  <input name="name" placeholder="názov nového profilu" required style="width:200px">
-  <select name="mode" style="padding:6px;border:1px solid #ccc;border-radius:6px" title="Typ profilu — fixovaný pri vzniku">
-    <option value="simulation">🎮 Simulácia</option>
-    <option value="real">🔴 Reálny chod</option>
-  </select>
-  <button style="background:#5E35B1;color:#fff;border:0;padding:6px 14px;border-radius:7px">📸 Snímka z aktuálnych UI hodnôt</button>
-</form>
-</div>
-<p style="color:#666;font-size:13px">Profile obsahuje VŠETKY parametre z formulárov <a href="/">Plán D-1</a>, <a href="/dentrh">Denný trh 15-min</a>, <a href="/rt">RT poradca</a> + globálnu šablónu × a RT mask. Kliknutím <b>aplikovať</b> sa profile nastaví ako aktívny a všetky formuláre + plan_overrides sa prepíšu jeho hodnotami.</p>
-<table>{table}</table>
-</body></html>"""
+            active_mode = prof_mode
+        rows.append({
+            "name": n,
+            "active": (n == active),
+            "mode": prof_mode,
+            "updated_at": p.get("updated_at", ""),
+            "mults_changed": mn,
+            "rt_off_count": rt_off,
+            "kdis": p.get("rt", {}).get("kdis", "—"),
+            "kchg": p.get("rt", {}).get("kchg", "—"),
+            "no_planned_discharge": p.get("plan", {}).get("no_planned_discharge", False),
+            "zco_bias_w": p.get("plan", {}).get("zco_bias_w", 0),
+            "note": p.get("note", "") or "",
+        })
+    return render(request, "pages/profiles_list.html",
+                   rows=rows, active=active, active_mode=active_mode)
 
 
 @app.get("/profiles/edit", response_class=HTMLResponse)
-def profiles_edit(name: str = "__new__", defaults: str = "", preset_mode: str = ""):
+def profiles_edit(request: Request, name: str = "__new__",
+                    defaults: str = "", preset_mode: str = ""):
     """Form na vytvorenie nového alebo editáciu existujúceho profilu.
     `defaults=1` pri name=__new__ → pre-fill z továrenských DEF hodnôt (NIE z aktuálnych UI).
     `preset_mode=real` → pri novom profile zaškrtne radio "🔴 Reálny chod" namiesto
                           default Simulácia. Použité v linke z /realio?tab=riadenie."""
+    from ui.templates import render
     if pr is None:
-        return "<p>profiles modul nedostupný.</p>"
+        return HTMLResponse("<p>profiles modul nedostupný.</p>", status_code=503)
     is_new = (name == "__new__")
     if is_new:
         if defaults:
-            # továrenské defaulty — všetky parametre na pôvodných hodnotách (žiadny dedič po aktuálnom profile)
+            # továrenské defaulty
             data = {"plan": dict(DEF), "dentrh": dict(DEF),
                     "rt": {"kdis": 1.0, "kchg": 1.0, "dtk": None, "rboost": 0.0},
                     "mult96": [], "rt_on96": [], "note": "Vytvorené ako defaultný profil"}
             title = "Vytvoriť nový profile (továrenské defaulty)"
         else:
-            # pre-fill z aktuálnych UI hodnôt (užívateľ chce kopírovať súčasný stav)
+            # pre-fill z aktuálnych UI hodnôt
             data = {"plan": _ui_load("plan", DEF), "dentrh": _ui_load("dentrh", DEF),
                     "rt": _ui_load("rt", {}), "mult96": [], "rt_on96": [], "note": ""}
             title = "Vytvoriť nový profile (z aktuálneho UI)"
-        save_name_input = '<input name="name" placeholder="názov" required>'
     else:
         data = pr.load_profile(name)
         if data is None:
-            return f"<p>Profile <b>{name}</b> neexistuje. <a href='/profiles'>← Späť</a></p>"
+            return HTMLResponse(
+                f"<p>Profile <b>{name}</b> neexistuje. <a href='/profiles'>← Späť</a></p>",
+                status_code=404)
         title = f"Edit profile: {name}"
-        save_name_input = f'<input name="name" value="{name}" readonly>'
 
-    # form fields ako JSON-serializované textarea (rýchla MVP — neskôr GUI form pre každé pole)
     plan_json = json.dumps(data.get("plan", {}), ensure_ascii=False, indent=2)
     dentrh_json = json.dumps(data.get("dentrh", {}), ensure_ascii=False, indent=2)
     rt_json = json.dumps(data.get("rt", {}), ensure_ascii=False, indent=2)
+
     # Distribučný config (TOU sadzby) — F3 Joint LP
-    _dist_preset_options = ""
-    _dist_presets_json = "{}"
+    dist_presets_list = []
+    dist_presets_json = "{}"
     try:
         import distribution_cost as _dc_edit
         _dist_data = data.get("distribution") or _dc_edit.default_config()
-        # Presets dropdown
-        for _p in _dc_edit.list_presets():
-            _dist_preset_options += (f'<option value="{_p["key"]}">'
-                                       f'{_p["label"]} — {_p["note"][:60]}</option>')
-        _dist_presets_json = json.dumps(_dc_edit.TARIFF_PRESETS, ensure_ascii=False)
+        dist_presets_list = _dc_edit.list_presets()
+        dist_presets_json = json.dumps(_dc_edit.TARIFF_PRESETS, ensure_ascii=False)
     except Exception:
         _dist_data = data.get("distribution", {})
     distribution_json = json.dumps(_dist_data, ensure_ascii=False, indent=2)
+
     note_val = data.get("note", "")
-    # Mode: pri novom profile radio button (default simulation), pri editácii read-only badge.
     profile_mode = (data.get("mode") or "simulation").lower()
     if profile_mode not in ("simulation", "real"):
         profile_mode = "simulation"
-    if is_new:
-        sim_checked = 'checked' if preset_mode != 'real' else ''
-        real_checked = 'checked' if preset_mode == 'real' else ''
-        mode_field = (
-            '<div style="display:flex;gap:18px;align-items:center;margin:8px 0">'
-            '<label style="cursor:pointer;display:flex;gap:8px;align-items:center;background:#e8f5e9;'
-            'padding:8px 14px;border-radius:8px;border:2px solid #2E7D32;font-weight:600">'
-            f'<input type="radio" name="mode" value="simulation" {sim_checked}>'
-            '🎮 Simulácia <span style="font-weight:400;color:#666;font-size:12px">'
-            '(PVGIS + scenár, historická simulácia, profit z modelu)</span></label>'
-            '<label style="cursor:pointer;display:flex;gap:8px;align-items:center;background:#ffeaea;'
-            'padding:8px 14px;border-radius:8px;border:2px solid #C62828;font-weight:600">'
-            f'<input type="radio" name="mode" value="real" {real_checked}>'
-            '🔴 Reálny chod <span style="font-weight:400;color:#666;font-size:12px">'
-            '(plán + reálne meranie z realio, povolené manuálne setpointy)</span></label>'
-            '</div>'
-            '<p style="color:#7a3500;font-size:12px;margin:6px 0 0">⚠ <b>Mód sa po vytvorení '
-            'nedá zmeniť.</b> Real profile sa nedá použiť na historickú simuláciu; '
-            'Simulačný profil sa nedá použiť v <code>/realio?tab=riadenie</code> na reálne '
-            'riadenie batérie.</p>')
-    else:
-        # Read-only badge — fixovaný pri vzniku, nedá sa meniť
-        if profile_mode == "real":
-            badge = ('<span style="background:#C62828;color:#fff;padding:6px 12px;border-radius:7px;'
-                      'font-weight:700">🔴 Reálny chod</span>')
-        else:
-            badge = ('<span style="background:#2E7D32;color:#fff;padding:6px 12px;border-radius:7px;'
-                      'font-weight:700">🎮 Simulácia</span>')
-        mode_field = (
-            f'<div style="margin:6px 0">{badge} '
-            f'<span style="color:#666;font-size:12px;margin-left:10px">🔒 fixované pri vzniku — '
-            f'pre iný mód vytvor nový profil</span>'
-            f'<input type="hidden" name="mode" value="{profile_mode}"></div>')
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>{title}</title>
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}}
-h1,h2{{color:#1F4E78}} fieldset{{border:1px solid #e0e0e0;border-radius:10px;margin:10px 0;padding:10px 16px}}
-legend{{color:#2E75B6;font-weight:600}}
-textarea{{width:100%;min-height:180px;font-family:Menlo,Consolas,monospace;font-size:12px;border:1px solid #ccc;border-radius:6px;padding:6px}}
-input{{padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:14px;width:300px}}
-button{{background:#2E7D32;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600}}
-.hint{{color:#666;font-size:12px}}</style></head><body>
-<h1>{title}</h1>
-{_nav("/profiles")}
-<form method="post" action="/profiles/save">
-<fieldset><legend>Identifikácia</legend>
-<label>Názov: {save_name_input}</label>
-<label style="display:block;margin-top:6px">Poznámka: <input name="note" value="{note_val}" style="width:60%"></label>
-<div style="margin-top:10px"><b>Typ profilu:</b></div>
-{mode_field}
-</fieldset>
 
-<fieldset><legend>Parametre /plan (Plán D-1)</legend>
-<p class="hint">JSON s form poliami z /plan formulára (lat, lon, kwp, batt_kw, eff_c, soc_min, no_planned_discharge, zco_bias_w, rt_freedom, …).<br>
-<b>Stropy DAM obchodovania</b> (pre D-1 plán cez <code>/vdt/d1</code>): pridaj kľúče <code>"max_export_kwh_day"</code> a <code>"max_import_kwh_day"</code> (kWh/deň). 0 alebo chýba = bez stropu. Override per-deň je v <code>/vdt/d1</code> forme.</p>
-<textarea name="plan_json">{plan_json}</textarea>
-</fieldset>
+    return render(request, "pages/profiles_edit.html",
+                   title=title,
+                   is_new=is_new,
+                   name=("" if is_new else name),
+                   preset_mode=preset_mode,
+                   profile_mode=profile_mode,
+                   note_val=note_val,
+                   plan_json=plan_json,
+                   dentrh_json=dentrh_json,
+                   rt_json=rt_json,
+                   distribution_json=distribution_json,
+                   dist_presets_list=dist_presets_list,
+                   dist_presets_json=dist_presets_json)
 
-<fieldset><legend>Parametre /dentrh (Denný trh 15-min)</legend>
-<p class="hint">JSON s form poliami z /dentrh formulára</p>
-<textarea name="dentrh_json">{dentrh_json}</textarea>
-</fieldset>
 
-<fieldset><legend>Parametre /rt (RT poradca)</legend>
-<p class="hint">JSON s nastaveniami RT regulátora: kdis, kchg, dtk, rboost</p>
-<textarea name="rt_json">{rt_json}</textarea>
-</fieldset>
-
-<fieldset style="background:#fff8e1;border:2px solid #f9a825"><legend style="color:#e65100">⚡ Distribučné tarify (TOU + SK poplatky + rezerv. kapacita)</legend>
-<p class="hint">Joint LP zarátá tieto sadzby do účelovej funkcie keď je <b>"⚡ Optimalizovať distribučné náklady"</b> zapnuté v <code>/plan</code> formulári. Predvyplnené orientačné hodnoty 2024-2025 podľa ÚRSO regulácie. Konkrétne čísla overí v cenníku tvojho distribútora.</p>
-
-<div style="background:#fffde7;border-left:4px solid #f9a825;padding:10px 14px;border-radius:6px;margin:8px 0">
-<b>📋 Načítať preset:</b>&nbsp;
-<select id="dist_preset_select" style="padding:6px 10px;width:55%;border:1px solid #ccc;border-radius:5px">
-<option value="">— vyber tarifu —</option>
-{_dist_preset_options}
-</select>
-<button type="button" onclick="loadDistPreset()" style="background:#e65100;color:#fff;border:0;padding:6px 14px;border-radius:5px;cursor:pointer;margin-left:6px">Načítať do form</button>
-<div id="dist_preset_note" style="color:#666;font-size:11px;margin-top:6px;font-style:italic"></div>
-</div>
-
-<label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-weight:600;color:#e65100">
-  <input type="checkbox" id="dist_enabled"> 🔵 Zapnúť distribučný náklad v LP (master toggle)
-</label>
-
-<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px 16px;margin:8px 0">
-
-<label>Distribútor
-<select id="dist_company" style="width:100%">
-<option value="ZSD">ZSD (BA/TT/NR/TN)</option>
-<option value="SSD">SSD (ZA/BB)</option>
-<option value="VSD">VSD (KE/PO)</option>
-<option value="CUSTOM">CUSTOM</option>
-</select></label>
-
-<label>Skupina
-<select id="dist_tariff_group" style="width:100%">
-<option value="MO1">MO1 (do 22 kW, jednotaríf)</option>
-<option value="MO2">MO2 (do 22 kW, dvojtarif)</option>
-<option value="MO3">MO3 (22-100 kW)</option>
-<option value="VO1">VO1 (100-200 kW, VN)</option>
-<option value="VO2">VO2 (200-500 kW, VN)</option>
-<option value="VO3">VO3 (500-1000 kW, VN)</option>
-<option value="VO4">VO4 (>1 MW, VVN)</option>
-<option value="VO5">VO5</option>
-<option value="VTL">VTL (priamy prenos)</option>
-<option value="CUSTOM">CUSTOM</option>
-</select></label>
-
-<label>Napäťová úroveň
-<select id="dist_voltage_level" style="width:100%">
-<option value="NN">NN (nízke)</option>
-<option value="VN">VN (vysoké)</option>
-<option value="VVN">VVN (veľmi vysoké)</option>
-</select></label>
-</div>
-
-<h3 style="color:#1F4E78;font-size:14px;margin:14px 0 6px">A) TOU distribučná zložka (variabilná, časovo závislá)</h3>
-<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px 16px">
-<label>Režim
-<select id="dist_tou_mode" style="width:100%">
-<option value="tou">TOU (špička/NT)</option>
-<option value="flat">Flat (jednotaríf)</option>
-</select></label>
-
-<label>VT — vysoký tarif (€/MWh)
-<input type="number" id="dist_tou_high" step="0.1" style="width:100%" placeholder="25.0"></label>
-
-<label>NT — nízky tarif (€/MWh)
-<input type="number" id="dist_tou_low" step="0.1" style="width:100%" placeholder="12.0"></label>
-</div>
-
-<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px 16px;margin-top:10px">
-<label>Hodiny VT (zoznam 0..23, oddelené čiarkou)
-<input type="text" id="dist_tou_high_hours" style="width:100%" placeholder="6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21"></label>
-
-<label style="display:flex;align-items:center;gap:8px;padding-top:18px">
-<input type="checkbox" id="dist_tou_weekend"> Víkend = NT (celodenne)
-</label>
-</div>
-
-<div style="margin-top:12px;border:1px dashed #d0d0d0;border-radius:6px;padding:8px 12px">
-<label style="display:flex;align-items:center;gap:8px;color:#666">
-<input type="checkbox" id="dist_hourly_enable"> ⏱ Použiť per-hour custom (24 hodnôt €/MWh — override TOU, napr. 3-tarif)
-</label>
-<textarea id="dist_hourly_custom" style="width:100%;min-height:60px;margin-top:6px;font-family:monospace;font-size:12px;display:none"
-placeholder="24 čísel oddelených čiarkou, napr.: 10,10,10,10,10,10,30,30,30,30,30,30,20,20,20,20,20,35,35,35,35,10,10,10"></textarea>
-</div>
-
-<h3 style="color:#1F4E78;font-size:14px;margin:14px 0 6px">B) Uniformné poplatky (€/MWh, platí na každú kWh importu)</h3>
-<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px 16px">
-<label>TPS — Tarifa za prev. systému
-<input type="number" id="dist_tps" step="0.1" style="width:100%" placeholder="28.0"></label>
-
-<label>SS — Systémové služby
-<input type="number" id="dist_ss" step="0.1" style="width:100%" placeholder="10.0"></label>
-
-<label>OZE — odvod (FTV > 10 kW)
-<input type="number" id="dist_oze" step="0.1" style="width:100%" placeholder="7.0"></label>
-</div>
-
-<h3 style="color:#1F4E78;font-size:14px;margin:14px 0 6px">C) Fixné mesačné poplatky</h3>
-<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px 16px">
-<label>Rezerv. kapacita (€/kW/mesiac)
-<input type="number" id="dist_peak_charge" step="0.1" style="width:100%" placeholder="5.0"></label>
-
-<label>Mesačný fix (€/mes za odberné miesto)
-<input type="number" id="dist_monthly_fix" step="0.1" style="width:100%" placeholder="12.0"></label>
-</div>
-
-<!-- Skrytá textarea — sync s form poliami cez JS. POST handler pôvodne číta tento JSON. -->
-<textarea name="distribution_json" id="dist_json_textarea" style="display:none">{distribution_json}</textarea>
-
-<details style="margin-top:10px"><summary style="color:#999;font-size:11px;cursor:pointer">▾ Pokročilé: zobraziť raw JSON (debug)</summary>
-<textarea id="dist_json_preview" style="width:100%;min-height:120px;font-family:monospace;font-size:11px;background:#f5f5f5;color:#666"
-readonly>{distribution_json}</textarea>
-</details>
-
-<script>
-const DIST_PRESETS = {_dist_presets_json};
-
-// Helper: bezpečne nastav input value
-function _setVal(id, val) {{
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (el.type === 'checkbox') {{ el.checked = !!val; }}
-  else {{ el.value = (val === null || val === undefined) ? '' : val; }}
-}}
-function _getVal(id) {{
-  const el = document.getElementById(id);
-  if (!el) return null;
-  return el.type === 'checkbox' ? el.checked : el.value;
-}}
-
-// Form → JSON sync
-function formToJson() {{
-  const cfg = {{
-    enabled: _getVal('dist_enabled'),
-    distribution_company: _getVal('dist_company'),
-    tariff_group: _getVal('dist_tariff_group'),
-    voltage_level: _getVal('dist_voltage_level'),
-    tou_mode: _getVal('dist_tou_mode'),
-    tou_high_eur_per_mwh: parseFloat(_getVal('dist_tou_high')) || 0,
-    tou_low_eur_per_mwh: parseFloat(_getVal('dist_tou_low')) || 0,
-    tou_high_hours: (_getVal('dist_tou_high_hours') || '').split(',')
-      .map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n>=0 && n<=23),
-    tou_weekend_low_only: _getVal('dist_tou_weekend'),
-    hourly_custom_eur_per_mwh: null,
-    tps_eur_per_mwh: parseFloat(_getVal('dist_tps')) || 0,
-    ss_eur_per_mwh: parseFloat(_getVal('dist_ss')) || 0,
-    oze_eur_per_mwh: parseFloat(_getVal('dist_oze')) || 0,
-    peak_charge_eur_per_kw_month: parseFloat(_getVal('dist_peak_charge')) || 0,
-    monthly_fix_eur: parseFloat(_getVal('dist_monthly_fix')) || 0,
-  }};
-  if (_getVal('dist_hourly_enable')) {{
-    const vals = (_getVal('dist_hourly_custom') || '').split(',')
-      .map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
-    if (vals.length === 24) cfg.hourly_custom_eur_per_mwh = vals;
-  }}
-  const json = JSON.stringify(cfg, null, 2);
-  document.getElementById('dist_json_textarea').value = json;
-  document.getElementById('dist_json_preview').value = json;
-}}
-
-// JSON → form (pri load)
-function jsonToForm(cfg) {{
-  _setVal('dist_enabled', cfg.enabled);
-  _setVal('dist_company', cfg.distribution_company || 'ZSD');
-  _setVal('dist_tariff_group', cfg.tariff_group || 'VO2');
-  _setVal('dist_voltage_level', cfg.voltage_level || 'VN');
-  _setVal('dist_tou_mode', cfg.tou_mode || 'tou');
-  _setVal('dist_tou_high', cfg.tou_high_eur_per_mwh);
-  _setVal('dist_tou_low', cfg.tou_low_eur_per_mwh);
-  _setVal('dist_tou_high_hours', (cfg.tou_high_hours || []).join(','));
-  _setVal('dist_tou_weekend', cfg.tou_weekend_low_only !== false);
-  const hc = cfg.hourly_custom_eur_per_mwh;
-  const hasHc = Array.isArray(hc) && hc.length === 24;
-  _setVal('dist_hourly_enable', hasHc);
-  _setVal('dist_hourly_custom', hasHc ? hc.join(',') : '');
-  document.getElementById('dist_hourly_custom').style.display = hasHc ? 'block' : 'none';
-  _setVal('dist_tps', cfg.tps_eur_per_mwh);
-  _setVal('dist_ss', cfg.ss_eur_per_mwh);
-  _setVal('dist_oze', cfg.oze_eur_per_mwh);
-  _setVal('dist_peak_charge', cfg.peak_charge_eur_per_kw_month);
-  _setVal('dist_monthly_fix', cfg.monthly_fix_eur);
-  formToJson();
-}}
-
-function loadDistPreset() {{
-  const sel = document.getElementById('dist_preset_select');
-  const note = document.getElementById('dist_preset_note');
-  const k = sel.value;
-  if (!k) {{ note.textContent = ''; return; }}
-  const p = DIST_PRESETS[k];
-  if (!p) {{ note.textContent = 'Preset nenájdený: ' + k; return; }}
-  const cfg = Object.assign({{}}, p);
-  const noteText = cfg._note || '';
-  delete cfg._note;
-  cfg.enabled = true;
-  jsonToForm(cfg);
-  note.textContent = noteText
-    ? '✓ Načítané: ' + noteText + ' — ULOŽ profil aby sa zachovalo.'
-    : '✓ Načítané. ULOŽ profil aby sa zachovalo.';
-}}
-
-// Init: parsuj existujúce JSON do formu
-(function initDistForm() {{
-  try {{
-    const raw = document.getElementById('dist_json_textarea').value;
-    if (raw && raw.trim()) {{
-      const cfg = JSON.parse(raw);
-      jsonToForm(cfg);
-    }}
-  }} catch (e) {{ console.warn('Dist JSON parse error:', e); }}
-
-  // Live sync — pri zmene KAŽDÉHO poľa update textarea
-  ['dist_enabled','dist_company','dist_tariff_group','dist_voltage_level',
-    'dist_tou_mode','dist_tou_high','dist_tou_low','dist_tou_high_hours',
-    'dist_tou_weekend','dist_hourly_enable','dist_hourly_custom',
-    'dist_tps','dist_ss','dist_oze','dist_peak_charge','dist_monthly_fix'
-  ].forEach(id => {{
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('change', formToJson);
-    if (el && el.type !== 'checkbox' && el.tagName !== 'SELECT') {{
-      el.addEventListener('input', formToJson);
-    }}
-  }});
-
-  // Toggle hourly_custom textarea zobrazenie
-  document.getElementById('dist_hourly_enable').addEventListener('change', function() {{
-    document.getElementById('dist_hourly_custom').style.display = this.checked ? 'block' : 'none';
-  }});
-
-  // Preset preview note
-  document.getElementById('dist_preset_select').addEventListener('change', function(){{
-    const k = this.value;
-    const note = document.getElementById('dist_preset_note');
-    if (k && DIST_PRESETS[k] && DIST_PRESETS[k]._note) {{
-      note.textContent = '💡 ' + DIST_PRESETS[k]._note + ' — stlač "Načítať do form".';
-    }} else {{ note.textContent = ''; }}
-  }});
-}})();
-</script>
-</fieldset>
-
-<fieldset><legend>Šablóna × a RT mask (voliteľne)</legend>
-<p class="hint">Aktuálne sa pri save snímne globálna šablóna z out/plan_overrides/_template.json. Ak chceš profile-specific šablónu, edituj × stĺpec v /plan a klikni 'Uložiť ako šablónu' pred snímkou.</p>
-</fieldset>
-<button type="submit">{"➕ Vytvoriť profile" if is_new else "💾 Uložiť zmeny"}</button>
-<a href="/profiles" style="margin-left:10px">← Späť</a>
-</form>
-</body></html>"""
 
 
 @app.post("/profiles/save", response_class=HTMLResponse)
