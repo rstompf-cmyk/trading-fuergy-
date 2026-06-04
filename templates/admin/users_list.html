@@ -1,0 +1,31 @@
+{% extends "admin/_layout.html" %}
+{% set admin_current = "users" %}
+{% block title %}Admin · Užívatelia — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <div class="bar">
+    <h1>👥 Užívatelia</h1>
+    <a class="btn green" href="/admin/users/edit?id=0">+ Nový užívateľ</a>
+  </div>
+
+  <table>
+    <tr>
+      <th>ID</th><th>Username</th><th>Rola</th><th>Aktívny</th>
+      <th>Vytvorený</th><th>Posledný login</th><th>Akcie</th>
+    </tr>
+    {% for u in users %}
+      <tr>
+        <td>{{ u.id }}</td>
+        <td><b>{{ u.username }}</b></td>
+        <td><span class="chip {{ u.role }}">{{ u.role }}</span></td>
+        <td>{% if u.is_active %}✓{% else %}✗{% endif %}</td>
+        <td class="muted">{{ u.created_at or "—" }}</td>
+        <td class="muted">{{ u.last_login or "—" }}</td>
+        <td>
+          <a class="btn sec" href="/admin/users/edit?id={{ u.id }}">Upraviť</a>
+          <a class="btn sec" href="/admin/users/access?id={{ u.id }}">Profily</a>
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+{% endblock %}

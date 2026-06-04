@@ -1,0 +1,29 @@
+{% extends "admin/_layout.html" %}
+{% set admin_current = "audit" %}
+{% block title %}Admin · Audit log — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <div class="bar">
+    <h1>📋 Audit log</h1>
+    <span class="muted">posledných {{ limit }} záznamov</span>
+  </div>
+
+  <table class="tbl-compact">
+    <tr>
+      <th>Čas</th><th>User</th><th>Akcia</th><th>Status</th><th>IP</th>
+    </tr>
+    {% for r in rows %}
+      <tr>
+        <td class="muted">{{ r.ts }}</td>
+        <td><b>{{ r.username }}</b></td>
+        <td><span style="font-family:monospace;font-size:12px">
+          {{ r.method }} {{ r.path }}
+        </span></td>
+        <td style="color: {% if r.status_ok %}var(--success){% else %}var(--danger){% endif %};font-weight:600">
+          {{ r.status }}
+        </td>
+        <td class="muted">{{ r.ip or "—" }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+{% endblock %}

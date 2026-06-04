@@ -1,0 +1,16 @@
+{# Admin sub-nav (Users / Audit log / Späť na appku) #}
+<div class="admin-nav">
+  <div>
+    <b style="color:var(--primary)">⚙ Admin</b> ·
+    <a href="/admin/users" {% if admin_current == "users" %}class="active"{% endif %}>Užívatelia</a> ·
+    <a href="/admin/audit_log" {% if admin_current == "audit" %}class="active"{% endif %}>Audit log</a> ·
+    <a href="/" style="color:#666">← Späť na appku</a>
+  </div>
+  <div style="font-size:13px;color:#666">
+    {% if user %}
+      {{ user.username|default('?') }}
+      <span class="chip {{ user.role|default('') }}">{{ user.role|default('') }}</span> ·
+      <a href="/logout" style="color:var(--danger)">Odhlásiť</a>
+    {% endif %}
+  </div>
+</div>

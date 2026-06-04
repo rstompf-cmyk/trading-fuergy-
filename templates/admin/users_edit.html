@@ -1,0 +1,77 @@
+{% extends "admin/_layout.html" %}
+{% set admin_current = "users" %}
+{% block title %}
+  Admin · {% if is_new %}Nový{% else %}Upraviť{% endif %} užívateľ — {{ app_name }}
+{% endblock %}
+
+{% block content %}
+  <h1>
+    {% if is_new %}
+      + Nový užívateľ
+    {% else %}
+      Upraviť: {{ target.username }}
+    {% endif %}
+  </h1>
+
+  <form method="post" action="/admin/users/save">
+    <input type="hidden" name="id" value="{{ target.id|default(0) }}">
+
+    <fieldset>
+      <legend>Základné údaje</legend>
+      <div class="row">
+        <div>
+          <label>Užívateľské meno</label>
+          <input name="username" value="{{ target.username|default('') }}"
+                  {% if not is_new %}readonly{% endif %} required>
+        </div>
+        <div>
+          <label>Rola</label>
+          <select name="role">
+            {% for r in valid_roles %}
+              <option value="{{ r }}"{% if r == target.role|default('trading') %} selected{% endif %}>{{ r }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>E-mail (voliteľné)</label>
+          <input name="email" type="email" value="{{ target.email|default('') }}">
+        </div>
+        <div>
+          <label>Aktívny</label>
+          <select name="is_active">
+            <option value="1"{% if target.is_active|default(true) %} selected{% endif %}>✓ Áno</option>
+            <option value="0"{% if not target.is_active|default(true) %} selected{% endif %}>✗ Nie</option>
+          </select>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Heslo</legend>
+      <div class="banner warn">
+        {% if is_new %}
+          Pri novom užívateľovi musí byť heslo zadané.
+        {% else %}
+          Nechaj prázdne ak nechceš meniť heslo. Pri zmene hesla sa zrevokujú všetky aktívne prihlásenia.
+        {% endif %}
+      </div>
+      <label>Nové heslo</label>
+      <input name="password" type="password" {% if is_new %}required{% endif %}>
+    </fieldset>
+
+    <div class="mt-16">
+      <button class="btn" type="submit">Uložiť</button>
+      <a class="btn sec" href="/admin/users">Zrušiť</a>
+    </div>
+  </form>
+
+  {% if not is_new %}
+    <form method="post" action="/admin/users/delete" class="mt-24"
+           onsubmit="return confirm('Naozaj zmazať tohto užívateľa?')">
+      <input type="hidden" name="id" value="{{ target.id }}">
+      <button class="btn red" type="submit">🗑 Zmazať užívateľa</button>
+    </form>
+  {% endif %}
+{% endblock %}

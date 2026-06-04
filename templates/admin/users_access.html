@@ -1,0 +1,44 @@
+{% extends "admin/_layout.html" %}
+{% set admin_current = "users" %}
+{% block title %}Admin · Prístup k profilom — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <h1>
+    Prístup k profilom: {{ target.username }}
+    <span class="chip {{ target.role }}">{{ target.role }}</span>
+  </h1>
+
+  {% if target.role == "admin" %}
+    <div class="banner warn">⚠ Admin má prístup ku všetkým profilom automaticky — toto nastavenie sa ignoruje.</div>
+  {% elif target.role == "obchodnik" %}
+    <div class="banner warn">⚠ Obchodník vidí všetky profily read-only — toto nastavenie sa ignoruje pre read.</div>
+  {% endif %}
+
+  <form method="post" action="/admin/users/access">
+    <input type="hidden" name="user_id" value="{{ target.id }}">
+    <table class="tbl-compact">
+      <tr>
+        <th>Profil</th><th>Read</th><th>Write</th><th>HW Write (Bender)</th>
+      </tr>
+      {% for p in profiles %}
+        {% set a = accesses.get(p.id) %}
+        <tr>
+          <td><b>{{ p.name }}</b> <span class="chip {{ p.mode }}">{{ p.mode }}</span></td>
+          <td class="text-center">
+            <input type="checkbox" name="read_{{ p.id }}"{% if a and a.can_read %} checked{% endif %}>
+          </td>
+          <td class="text-center">
+            <input type="checkbox" name="write_{{ p.id }}"{% if a and a.can_write %} checked{% endif %}>
+          </td>
+          <td class="text-center">
+            <input type="checkbox" name="hw_{{ p.id }}"{% if a and a.can_write_hw %} checked{% endif %}>
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+    <div class="mt-16">
+      <button class="btn" type="submit">Uložiť prístupy</button>
+      <a class="btn sec" href="/admin/users">← Späť</a>
+    </div>
+  </form>
+{% endblock %}
