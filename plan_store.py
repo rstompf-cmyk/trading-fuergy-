@@ -39,6 +39,50 @@ def _dir_root() -> str:
 DIR = _dir_root()
 
 
+# ── Dual storage prepínač (Fáza 1.10 migrácie) ─────────────────────────────
+# USE_DB=1 → čítame z DB ako zdroj pravdy, write je dual (DB + JSON).
+# USE_DB=0 (default) → pôvodný JSON-only režim.
+_USE_DB = os.environ.get("USE_DB", "0").strip() in ("1", "true", "True", "yes")
+
+
+def _db_available() -> bool:
+    if not _USE_DB:
+        return False
+    try:
+        from db import get_session   # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _current_market() -> str:
+    try:
+        import market as _mk
+        return str(_mk.active_market() or "cz")
+    except Exception:
+        return "cz"
+
+
+# Mapovanie schedule kľúč → PlanSlot column (tie ktoré chceme v DB stĺpcoch)
+_SLOT_COLUMNS = {
+    "pv_kwh": "pv_kwh",
+    "load_kwh": "load_kwh",
+    "price_eur": "price_eur",
+    "batt_kw": "batt_kw",
+    "grid_kwh": "grid_kwh",
+    "order_mwh": "order_mwh",
+    "curtail_kwh": "curtail_kwh",
+    "soc_pct": "soc_pct",
+    "soc_kwh": "soc_kwh",
+    "_charge_kw": "charge_kw",
+    "_discharge_kw": "discharge_kw",
+    "_export_kwh": "export_kwh",
+    "_import_kwh": "import_kwh",
+}
+# Reverzne pre rekonštrukciu schedule pri load (DB col → schedule key)
+_REVERSE_SLOT_COLUMNS = {v: k for k, v in _SLOT_COLUMNS.items()}
+
+
 def _safe_profile_name(name: str) -> str:
     """Bezpečný názov priečinka. Iba alfanum + '_-'."""
     import re
@@ -94,6 +138,8 @@ def _path(date_iso: str, step_min: int, kind: str, profile: Optional[str] = None
 
 
 def has_plan(date_iso: str, step_min: int, kind: str = "plan", profile: Optional[str] = None) -> bool:
+    if _db_available() and _db_has_plan(date_iso, step_min, kind, profile):
+        return True
     return os.path.exists(_path(date_iso, step_min, kind, profile))
 
 
@@ -151,14 +197,24 @@ def save_plan(date_iso: str, step_min: int, kind: str, *,
         "meta": _to_jsonable(meta or {}),
     }
     p = _path(date_iso, step_min, kind, profile)
+    # JSON write (vždy — back-compat)
     with open(p, "w") as f:
         json.dump(body, f, ensure_ascii=False, indent=1)
+    # DB write (dual storage)
+    if _db_available():
+        _db_save_plan(date_iso, step_min, kind, profile, body)
     return p
 
 
 def load_plan(date_iso: str, step_min: int, kind: str = "plan",
               profile: Optional[str] = None) -> Dict[str, Any]:
     """Načíta plán. Hodí PlanMissingError ak neexistuje."""
+    # DB read prvé (zdroj pravdy v USE_DB režime)
+    if _db_available():
+        db_plan = _db_load_plan(date_iso, step_min, kind, profile)
+        if db_plan is not None:
+            return db_plan
+    # JSON fallback
     p = _path(date_iso, step_min, kind, profile)
     if not os.path.exists(p):
         raise PlanMissingError(date_iso, step_min, kind, profile)
@@ -177,6 +233,10 @@ def load_plan_safe(date_iso: str, step_min: int, kind: str = "plan",
 
 def list_plans(kind: Optional[str] = None, profile: Optional[str] = None) -> List[Dict[str, Any]]:
     """Vráti zoznam dostupných plánov v danom profile (alebo aktívnom)."""
+    if _db_available():
+        db_list = _db_list_plans(kind, profile)
+        if db_list:
+            return db_list
     d = _dir_for(profile)
     if not os.path.isdir(d):
         return []
@@ -231,11 +291,205 @@ def missing_plans(date_start_iso: str, date_end_iso: str, step_min: int,
 def delete_plan(date_iso: str, step_min: int, kind: str = "plan",
                 profile: Optional[str] = None) -> bool:
     """Zmaže plán; True ak existoval a zmazal sa, False inak."""
+    found = False
+    # DB delete (dual storage)
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import Profile as _DbProfile, Plan as _DbPlan
+            prof_name = resolve_profile(profile)
+            mkt = _current_market()
+            with get_session() as s:
+                p_prof = s.query(_DbProfile).filter_by(name=prof_name).one_or_none()
+                if p_prof:
+                    p_plan = s.query(_DbPlan).filter_by(
+                        profile_id=p_prof.id, market=mkt,
+                        date=str(date_iso), kind=str(kind), step_min=int(step_min)
+                    ).one_or_none()
+                    if p_plan:
+                        s.delete(p_plan)
+                        found = True
+        except Exception as e:
+            print(f"[plan_store.delete_plan {date_iso}] DB delete zlyhal: {e}")
+    # JSON delete (vždy)
     p = _path(date_iso, step_min, kind, profile)
-    if not os.path.exists(p):
-        return False
+    if os.path.exists(p):
+        try:
+            os.remove(p)
+            found = True
+        except OSError:
+            pass
+    return found
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# DB helpers (Fáza 1.10)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _db_get_profile_id(prof_name: str) -> Optional[int]:
+    """Resolve profile.id z mena. Vráti None ak profil neexistuje v DB."""
     try:
-        os.remove(p)
+        from db import get_session
+        from db.models import Profile as _DbProfile
+        with get_session() as s:
+            p = s.query(_DbProfile).filter_by(name=prof_name).one_or_none()
+            return p.id if p else None
+    except Exception:
+        return None
+
+
+def _db_load_plan(date_iso: str, step_min: int, kind: str,
+                   profile: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Načíta plán z DB a zostaví dict v rovnakom tvare ako JSON."""
+    try:
+        from db import get_session
+        from db.models import Plan as _DbPlan, PlanSlot as _DbPlanSlot
+        prof_name = resolve_profile(profile)
+        mkt = _current_market()
+        pid = _db_get_profile_id(prof_name)
+        if pid is None:
+            return None
+        with get_session() as s:
+            p = s.query(_DbPlan).filter_by(
+                profile_id=pid, market=mkt,
+                date=str(date_iso), kind=str(kind), step_min=int(step_min)
+            ).one_or_none()
+            if p is None:
+                return None
+            slots = (s.query(_DbPlanSlot).filter_by(plan_id=p.id)
+                       .order_by(_DbPlanSlot.slot_idx).all())
+            # Rekonštrukcia schedule dict
+            n = len(slots)
+            schedule = {sch_key: [0.0] * n for sch_key in _SLOT_COLUMNS.keys()}
+            for slot in slots:
+                i = slot.slot_idx
+                for db_col, sch_key in _REVERSE_SLOT_COLUMNS.items():
+                    val = getattr(slot, db_col, 0.0)
+                    schedule[sch_key][i] = float(val) if val is not None else 0.0
+            return {
+                "date": p.date, "step_min": p.step_min, "kind": p.kind,
+                "profile": prof_name,
+                "generated_at": p.generated_at,
+                "params": dict(p.params or {}),
+                "block_planned_discharge": bool(p.block_planned_discharge),
+                "zco_bias_w": float(p.zco_bias_w or 0.0),
+                "rt_freedom": bool(p.rt_freedom),
+                "mults": list(p.mults or []) or None,
+                "rt_mask": list(p.rt_mask or []) or None,
+                "schedule": schedule,
+                "summary": dict(p.summary or {}),
+                "meta": dict(p.meta or {}),
+            }
+    except Exception as e:
+        print(f"[plan_store._db_load_plan {date_iso}] zlyhal: {e}")
+        return None
+
+
+def _db_save_plan(date_iso: str, step_min: int, kind: str,
+                   profile: Optional[str], body: Dict[str, Any]) -> bool:
+    """Upsert plánu do DB (Plan + PlanSlot riadky). Vracia True pri úspechu."""
+    try:
+        from db import get_session
+        from db.models import Plan as _DbPlan, PlanSlot as _DbPlanSlot
+        prof_name = body.get("profile") or resolve_profile(profile)
+        mkt = _current_market()
+        pid = _db_get_profile_id(prof_name)
+        if pid is None:
+            print(f"[plan_store._db_save_plan] profil '{prof_name}' nie je v DB → skip")
+            return False
+        with get_session() as s:
+            existing = s.query(_DbPlan).filter_by(
+                profile_id=pid, market=mkt,
+                date=str(date_iso), kind=str(kind), step_min=int(step_min)
+            ).one_or_none()
+            if existing:
+                existing.generated_at = body["generated_at"]
+                existing.params = body.get("params", {})
+                existing.summary = body.get("summary", {})
+                existing.meta = body.get("meta", {})
+                existing.mults = body.get("mults") or []
+                existing.rt_mask = body.get("rt_mask") or []
+                existing.block_planned_discharge = bool(body.get("block_planned_discharge", False))
+                existing.zco_bias_w = float(body.get("zco_bias_w") or 0.0)
+                existing.rt_freedom = bool(body.get("rt_freedom", True))
+                # Vymaž staré sloty
+                s.query(_DbPlanSlot).filter_by(plan_id=existing.id).delete()
+                plan_id = existing.id
+            else:
+                p = _DbPlan(
+                    profile_id=pid, market=mkt,
+                    date=str(date_iso), kind=str(kind), step_min=int(step_min),
+                    generated_at=body["generated_at"],
+                    params=body.get("params", {}), summary=body.get("summary", {}),
+                    meta=body.get("meta", {}),
+                    mults=body.get("mults") or [], rt_mask=body.get("rt_mask") or [],
+                    block_planned_discharge=bool(body.get("block_planned_discharge", False)),
+                    zco_bias_w=float(body.get("zco_bias_w") or 0.0),
+                    rt_freedom=bool(body.get("rt_freedom", True)),
+                )
+                s.add(p)
+                s.flush()
+                plan_id = p.id
+            # Vlož sloty
+            schedule = body.get("schedule") or {}
+            n = max((len(schedule.get(k, [])) for k in _SLOT_COLUMNS), default=0)
+            for i in range(n):
+                slot_kwargs = {"plan_id": plan_id, "slot_idx": i}
+                for sch_key, db_col in _SLOT_COLUMNS.items():
+                    arr = schedule.get(sch_key, [])
+                    try:
+                        slot_kwargs[db_col] = float(arr[i]) if arr[i] is not None else 0.0
+                    except (IndexError, TypeError, ValueError):
+                        slot_kwargs[db_col] = 0.0
+                s.add(_DbPlanSlot(**slot_kwargs))
         return True
-    except OSError:
+    except Exception as e:
+        print(f"[plan_store._db_save_plan {date_iso}] zlyhal: {e}")
         return False
+
+
+def _db_has_plan(date_iso: str, step_min: int, kind: str,
+                  profile: Optional[str] = None) -> bool:
+    try:
+        from db import get_session
+        from db.models import Plan as _DbPlan
+        prof_name = resolve_profile(profile)
+        mkt = _current_market()
+        pid = _db_get_profile_id(prof_name)
+        if pid is None:
+            return False
+        with get_session() as s:
+            return s.query(_DbPlan).filter_by(
+                profile_id=pid, market=mkt,
+                date=str(date_iso), kind=str(kind), step_min=int(step_min)
+            ).first() is not None
+    except Exception:
+        return False
+
+
+def _db_list_plans(kind: Optional[str] = None,
+                    profile: Optional[str] = None) -> List[Dict[str, Any]]:
+    try:
+        from db import get_session
+        from db.models import Plan as _DbPlan
+        prof_name = resolve_profile(profile)
+        mkt = _current_market()
+        pid = _db_get_profile_id(prof_name)
+        if pid is None:
+            return []
+        out = []
+        with get_session() as s:
+            q = s.query(_DbPlan).filter_by(profile_id=pid, market=mkt)
+            if kind is not None:
+                q = q.filter_by(kind=str(kind))
+            for p in q.order_by(_DbPlan.date, _DbPlan.step_min, _DbPlan.kind).all():
+                out.append({
+                    "date": p.date, "step_min": p.step_min, "kind": p.kind,
+                    "path": f"db://plan/{p.id}",
+                    "generated_at": p.generated_at,
+                    "profile": prof_name,
+                })
+        return out
+    except Exception as e:
+        print(f"[plan_store._db_list_plans] zlyhal: {e}")
+        return []
