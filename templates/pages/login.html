@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Prihlásenie — {{ app_name }}{% endblock %}
+
+{# Login má vlastný layout bez navigácie #}
+{% block layout %}
+  <div class="login-box">
+    <h1>⚡ {{ app_name }}</h1>
+    <div class="muted mb-16">Prihlásenie do administračného rozhrania</div>
+
+    {% if error %}
+      <div class="banner error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <input type="hidden" name="next" value="{{ next_url|default('/') }}">
+      <label>Užívateľské meno</label>
+      <input name="username" autofocus required autocomplete="username">
+      <label>Heslo</label>
+      <input name="password" type="password" required autocomplete="current-password">
+      <button type="submit" class="btn lg">Prihlásiť</button>
+    </form>
+
+    <div class="foot">FUERGY · {{ app_name }}</div>
+  </div>
+{% endblock %}

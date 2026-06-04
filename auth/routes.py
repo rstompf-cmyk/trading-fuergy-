@@ -86,56 +86,12 @@ def _auth_required_now() -> bool:
 # Endpoint handlers
 # ─────────────────────────────────────────────────────────────────────────────
 
-_LOGIN_HTML = """<!doctype html><html lang="sk"><head><meta charset="utf-8">
-<title>Prihlásenie — {app_name}</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-body{{font-family:-apple-system,Segoe UI,Arial;background:#f3f6fb;margin:0;
-  display:flex;align-items:center;justify-content:center;min-height:100vh}}
-.box{{background:#fff;border-radius:14px;padding:36px 44px;box-shadow:0 4px 20px rgba(0,0,0,.08);
-  max-width:380px;width:100%}}
-h1{{color:#1F4E78;margin:0 0 8px;font-size:22px}}
-.sub{{color:#666;font-size:13px;margin-bottom:24px}}
-label{{display:block;font-size:13px;color:#444;margin:14px 0 4px;font-weight:500}}
-input{{width:100%;padding:10px 12px;border:1px solid #ccc;border-radius:7px;font-size:15px;
-  box-sizing:border-box}}
-input:focus{{outline:none;border-color:#1F4E78;box-shadow:0 0 0 3px rgba(31,78,120,.12)}}
-button{{width:100%;background:#1F4E78;color:#fff;border:0;padding:11px;border-radius:7px;
-  font-size:15px;font-weight:600;margin-top:18px;cursor:pointer}}
-button:hover{{background:#16395a}}
-.err{{background:#fbeaea;color:#7a1810;border-left:3px solid #C62828;
-  padding:8px 12px;border-radius:6px;margin-bottom:12px;font-size:13px}}
-.foot{{text-align:center;color:#888;font-size:11px;margin-top:18px}}
-</style></head><body>
-<div class="box">
-<h1>⚡ {app_name}</h1>
-<div class="sub">Prihlásenie do administračného rozhrania</div>
-{err_html}
-<form method="post" action="/login">
-<input type="hidden" name="next" value="{next_url}">
-<label>Užívateľské meno</label>
-<input name="username" autofocus required autocomplete="username">
-<label>Heslo</label>
-<input name="password" type="password" required autocomplete="current-password">
-<button type="submit">Prihlásiť</button>
-</form>
-<div class="foot">FUERGY · {app_name}</div>
-</div></body></html>"""
-
-
-def _login_page(error: str = "", next_url: str = "/") -> HTMLResponse:
-    import html as _html
-    try:
-        from core.state import APP_NAME
-    except Exception:
-        APP_NAME = "Trading Fuergy"
-    err_html = (f'<div class="err">{_html.escape(error)}</div>' if error else "")
-    body = _LOGIN_HTML.format(
-        app_name=_html.escape(APP_NAME),
-        err_html=err_html,
-        next_url=_html.escape(next_url or "/"),
-    )
-    return HTMLResponse(body)
+def _login_page(error: str = "", next_url: str = "/",
+                 request: Optional["Request"] = None) -> HTMLResponse:
+    """Render login stránky cez Jinja2 template (Fáza 3 refactor)."""
+    from ui.templates import render
+    return render(request, "pages/login.html",
+                   error=error, next_url=next_url or "/")
 
 
 def register_auth_routes(app: FastAPI) -> None:
@@ -149,7 +105,7 @@ def register_auth_routes(app: FastAPI) -> None:
         token = request.cookies.get(COOKIE_NAME)
         if token and validate_session(token):
             return RedirectResponse(next or "/", status_code=302)
-        return _login_page(next_url=next)
+        return _login_page(next_url=next, request=request)
 
     @app.post("/login", response_class=HTMLResponse)
     def login_post(request: Request,
@@ -160,7 +116,8 @@ def register_auth_routes(app: FastAPI) -> None:
         with get_session() as s:
             user = s.query(User).filter_by(username=username, is_active=True).one_or_none()
             if user is None or not verify_password(password, user.password_hash):
-                return _login_page(error="Nesprávne meno alebo heslo.", next_url=next)
+                return _login_page(error="Nesprávne meno alebo heslo.",
+                                      next_url=next, request=request)
             user_id = user.id
             # Update last_login
             user.last_login = datetime.now().isoformat(timespec="seconds")
