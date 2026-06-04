@@ -48,6 +48,28 @@ def _root() -> str:
 DIR = _root()                                                        # back-compat const
 
 
+# ── Dual storage prepínač (Fáza 1.11 migrácie) ─────────────────────────────
+_USE_DB = os.environ.get("USE_DB", "0").strip() in ("1", "true", "True", "yes")
+
+
+def _db_available() -> bool:
+    if not _USE_DB:
+        return False
+    try:
+        from db import get_session   # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _current_market() -> str:
+    try:
+        import market as _mk
+        return str(_mk.active_market() or "cz")
+    except Exception:
+        return "cz"
+
+
 def _resolve_profile(profile: Optional[str] = None) -> str:
     """Aktívny profil (rovnaká logika ako plan_store/plan_overrides)."""
     if profile:
@@ -324,12 +346,102 @@ def import_csv(path: str, profile: Optional[str] = None,
     }
     with open(path_out, "w") as fh:
         json.dump(body, fh, ensure_ascii=False, indent=1)
+    # DB dual write
+    if _db_available():
+        _db_save_raw(body, profile)
     return {"path": path_out, **{k: v for k, v in body.items() if k not in ("daily_kw",)}}
 
 
 # ─── retrieve ────────────────────────────────────────────────────────────────
 
+def _db_load_raw(profile: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Načíta load_profile z DB tabuľky. Vracia rovnaký tvar ako JSON _load_raw."""
+    try:
+        from db import get_session
+        from db.models import Profile as _DbProfile, LoadProfile as _DbLP
+        prof_name = _resolve_profile(profile)
+        mkt = _current_market()
+        with get_session() as s:
+            prof = s.query(_DbProfile).filter_by(name=prof_name).one_or_none()
+            if prof is None:
+                return None
+            lp = s.query(_DbLP).filter_by(profile_id=prof.id, market=mkt).one_or_none()
+            if lp is None:
+                return None
+            # Zostav dict — meta obsahuje extra polia (daily_kw, n_days_*, value_*)
+            meta = dict(lp.meta or {})
+            return {
+                "profile": prof_name,
+                "weekday_profile_kw": list(lp.weekday_kw or []) or None,
+                "weekend_profile_kw": list(lp.weekend_kw or []) or None,
+                "daily_kw": dict(meta.get("daily_kw") or {}),
+                "imported_at": meta.get("imported_at"),
+                "source_file": meta.get("source_file"),
+                "source_unit": meta.get("source_unit") or lp.unit,
+                "detected_ts_col": meta.get("detected_ts_col"),
+                "detected_kw_col": meta.get("detected_kw_col"),
+                "n_days_wd": meta.get("n_days_wd"),
+                "n_days_we": meta.get("n_days_we"),
+                "n_days_total": meta.get("n_days_total"),
+                "date_min": meta.get("date_min"),
+                "date_max": meta.get("date_max"),
+                "kwh_per_day_avg": meta.get("kwh_per_day_avg"),
+                "value_min_kw": meta.get("value_min_kw"),
+                "value_max_kw": meta.get("value_max_kw"),
+                "value_mean_kw": meta.get("value_mean_kw"),
+                "warning": meta.get("warning"),
+                "rescaled_at": meta.get("rescaled_at"),
+                "rescale_factor": meta.get("rescale_factor", 1.0),
+            }
+    except Exception as e:
+        print(f"[load_profile._db_load_raw] zlyhal: {e}")
+        return None
+
+
+def _db_save_raw(body: Dict[str, Any], profile: Optional[str] = None) -> bool:
+    """Upsert load_profile do DB. Body je celý dict ako z JSON."""
+    try:
+        from db import get_session
+        from db.models import Profile as _DbProfile, LoadProfile as _DbLP
+        prof_name = _resolve_profile(profile)
+        mkt = _current_market()
+        with get_session() as s:
+            prof = s.query(_DbProfile).filter_by(name=prof_name).one_or_none()
+            if prof is None:
+                return False
+            # Extra polia (mimo flat stĺpcov) idú do meta
+            meta = {k: v for k, v in body.items()
+                     if k not in ("profile", "weekday_profile_kw", "weekend_profile_kw")}
+            existing = s.query(_DbLP).filter_by(profile_id=prof.id, market=mkt).one_or_none()
+            wd = list(body.get("weekday_profile_kw") or [])
+            we = list(body.get("weekend_profile_kw") or [])
+            now_iso = datetime.now().isoformat(timespec="seconds")
+            if existing:
+                existing.weekday_kw = wd
+                existing.weekend_kw = we
+                existing.unit = str(body.get("source_unit") or "kW")
+                existing.imported_dates = list(meta.get("daily_kw", {}).keys())
+                existing.meta = meta
+                existing.updated_at = now_iso
+            else:
+                s.add(_DbLP(
+                    profile_id=prof.id, market=mkt,
+                    weekday_kw=wd, weekend_kw=we,
+                    imported_dates=list(meta.get("daily_kw", {}).keys()),
+                    unit=str(body.get("source_unit") or "kW"),
+                    meta=meta, updated_at=now_iso,
+                ))
+        return True
+    except Exception as e:
+        print(f"[load_profile._db_save_raw] zlyhal: {e}")
+        return False
+
+
 def _load_raw(profile: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if _db_available():
+        db_data = _db_load_raw(profile)
+        if db_data is not None:
+            return db_data
     p = _profile_path(profile)
     if not os.path.exists(p):
         return None
@@ -410,16 +522,37 @@ def rescale(factor: float, profile: Optional[str] = None) -> bool:
     d["rescale_factor"] = float(d.get("rescale_factor", 1.0)) * f
     with open(p, "w") as fh:
         json.dump(d, fh, ensure_ascii=False, indent=1)
+    # DB dual write
+    if _db_available():
+        _db_save_raw(d, profile)
     return True
 
 
 def clear(profile: Optional[str] = None) -> bool:
-    """Zmaže profile.json. True ak existoval."""
+    """Zmaže profile.json + DB záznam. True ak existoval aspoň v jednom."""
+    found = False
+    # DB delete
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import Profile as _DbProfile, LoadProfile as _DbLP
+            prof_name = _resolve_profile(profile)
+            mkt = _current_market()
+            with get_session() as s:
+                prof = s.query(_DbProfile).filter_by(name=prof_name).one_or_none()
+                if prof is not None:
+                    lp = s.query(_DbLP).filter_by(profile_id=prof.id, market=mkt).one_or_none()
+                    if lp is not None:
+                        s.delete(lp)
+                        found = True
+        except Exception as e:
+            print(f"[load_profile.clear] DB delete zlyhal: {e}")
+    # JSON delete
     p = _profile_path(profile)
-    if not os.path.exists(p):
-        return False
-    try:
-        os.remove(p)
-        return True
-    except OSError:
-        return False
+    if os.path.exists(p):
+        try:
+            os.remove(p)
+            found = True
+        except OSError:
+            pass
+    return found

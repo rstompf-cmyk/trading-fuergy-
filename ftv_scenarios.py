@@ -39,6 +39,28 @@ def _root() -> str:
 DIR = _root()                                                        # back-compat const
 
 
+# ── Dual storage prepínač (Fáza 1.11 migrácie) ─────────────────────────────
+_USE_DB = os.environ.get("USE_DB", "0").strip() in ("1", "true", "True", "yes")
+
+
+def _db_available() -> bool:
+    if not _USE_DB:
+        return False
+    try:
+        from db import get_session   # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _current_market() -> str:
+    try:
+        import market as _mk
+        return str(_mk.active_market() or "cz")
+    except Exception:
+        return "cz"
+
+
 def _ensure_dir() -> None:
     os.makedirs(_root(), exist_ok=True)
 
@@ -57,6 +79,17 @@ def _path(date_iso: str) -> str:
 
 def has_scenario(date_iso: str) -> bool:
     try:
+        if _db_available():
+            try:
+                from db import get_session
+                from db.models import FtvScenario as _DbFS
+                with get_session() as s:
+                    if s.query(_DbFS).filter_by(
+                        market=_current_market(), date=_safe_date(date_iso)
+                    ).first():
+                        return True
+            except Exception:
+                pass
         return os.path.exists(_path(date_iso))
     except ValueError:
         return False
@@ -94,21 +127,67 @@ def save_scenario(date_iso: str, hourly_kw: List[float],
     }
     with open(p, "w") as f:
         json.dump(body, f, ensure_ascii=False, indent=1)
+    # DB dual write
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import FtvScenario as _DbFS
+            mkt = _current_market()
+            with get_session() as s:
+                existing = s.query(_DbFS).filter_by(
+                    market=mkt, date=body["date"]
+                ).one_or_none()
+                if existing:
+                    existing.hourly_kw = arr
+                    existing.smooth_sigma = float(smooth_sigma)
+                    existing.offset_h = float(shift) / 60.0
+                    existing.note = str(note)
+                    existing.saved_at = body["saved_at"]
+                else:
+                    s.add(_DbFS(
+                        market=mkt, date=body["date"], hourly_kw=arr,
+                        smooth_sigma=float(smooth_sigma),
+                        offset_h=float(shift) / 60.0,
+                        note=str(note), saved_at=body["saved_at"],
+                    ))
+        except Exception as e:
+            print(f"[ftv_scenarios.save] DB write zlyhal: {e}")
     return p
 
 
 def load_scenario(date_iso: str) -> Optional[Dict[str, Any]]:
     """Načíta scenár alebo None ak neexistuje / je poškodený."""
     try:
-        p = _path(date_iso)
+        safe = _safe_date(date_iso)
     except ValueError:
         return None
+    # DB read prvé
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import FtvScenario as _DbFS
+            with get_session() as s:
+                fs = s.query(_DbFS).filter_by(
+                    market=_current_market(), date=safe
+                ).one_or_none()
+                if fs is not None:
+                    return {
+                        "date": fs.date,
+                        "hourly_kw": list(fs.hourly_kw or []),
+                        "smooth_sigma": float(fs.smooth_sigma or 0.0),
+                        "time_shift_min": int(round(float(fs.offset_h or 0.0) * 60)),
+                        "saved_at": fs.saved_at,
+                        "note": fs.note or "",
+                    }
+        except Exception as e:
+            print(f"[ftv_scenarios.load DB] zlyhal: {e}")
+    # JSON fallback
+    p = _path(date_iso)
     if not os.path.exists(p):
         return None
     try:
         with open(p) as f:
             d = json.load(f)
-        # ľahká validácia
         if not isinstance(d.get("hourly_kw"), list) or len(d["hourly_kw"]) != 24:
             return None
         return d
@@ -117,22 +196,55 @@ def load_scenario(date_iso: str) -> Optional[Dict[str, Any]]:
 
 
 def delete_scenario(date_iso: str) -> bool:
-    """Zmaže scenár. True ak existoval."""
+    """Zmaže scenár (DB + JSON). True ak existoval aspoň v jednom."""
+    found = False
+    # DB delete
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import FtvScenario as _DbFS
+            with get_session() as s:
+                safe = _safe_date(date_iso)
+                fs = s.query(_DbFS).filter_by(
+                    market=_current_market(), date=safe
+                ).one_or_none()
+                if fs is not None:
+                    s.delete(fs)
+                    found = True
+        except (ValueError, Exception) as e:
+            print(f"[ftv_scenarios.delete DB] zlyhal: {e}")
+    # JSON delete
     try:
         p = _path(date_iso)
     except ValueError:
-        return False
-    if not os.path.exists(p):
-        return False
-    try:
-        os.remove(p)
-        return True
-    except OSError:
-        return False
+        return found
+    if os.path.exists(p):
+        try:
+            os.remove(p)
+            found = True
+        except OSError:
+            pass
+    return found
 
 
 def list_scenarios() -> List[Dict[str, Any]]:
     """Vráti zoznam dostupných scenárov ako [{date, path, saved_at, note}]."""
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import FtvScenario as _DbFS
+            with get_session() as s:
+                rows = (s.query(_DbFS)
+                          .filter_by(market=_current_market())
+                          .order_by(_DbFS.date.desc()).all())
+                if rows:
+                    return [{
+                        "date": fs.date, "path": f"db://ftv_scenario/{fs.id}",
+                        "saved_at": fs.saved_at, "note": fs.note or "",
+                        "peak_kw": max(fs.hourly_kw or [0]),
+                    } for fs in rows]
+        except Exception as e:
+            print(f"[ftv_scenarios.list DB] zlyhal: {e}")
     _ensure_dir()
     out = []
     _d = _root()
