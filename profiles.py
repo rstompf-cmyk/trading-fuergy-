@@ -1,0 +1,287 @@
+# -*- coding: utf-8 -*-
+"""
+profiles.py — pomenované **profile** so všetkými parametrami pre plánovanie + RT.
+
+Profile = jeden JSON súbor v `out/profiles/<name>.json`, obsahuje:
+- form polia z `/plan` (Plán D-1)
+- form polia z `/dentrh` (Denný trh 15-min)
+- nastavenia z `/rt` (RT poradca: kdis, kchg, dtk, rboost)
+- šablónu mult96 + rt_on96 (24×4 = 96 slotov)
+
+Použitie:
+  1. Užívateľ vytvorí profile (napr. "konzervativny") so všetkými svojimi obľúbenými nastaveniami.
+  2. Pri Generovať plán / Spustiť simuláciu / Otvoriť /rt poradcu → vyberie profile z dropdownu.
+  3. Hodnoty z profilu sa ihneď použijú (form fields sa pred-vyplnia, plan_overrides template sa prepíše).
+
+Aktívny profile sa zapisuje do `out/profiles/_active.json` (kľúč "name").
+Pre nedostatok aktívneho profilu sa použijú default UI hodnoty (DEF).
+"""
+from __future__ import annotations
+import os, json, re
+from datetime import datetime
+from typing import Optional, Dict, Any, List
+
+def _root() -> str:
+    """Koreň profiles — **ZDIEĽANÝ medzi trhmi** v `out/profiles/`.
+
+    Profil je sablona ktorá môže byť použitá pre CZ aj SK trh — pri prepnutí
+    market-u sa rovnaký profil aplikuje, ale výpočty (plány, livesim logy,
+    plan_overrides) idú per-market do `out/cz/...` resp. `out/sk/...`.
+    """
+    env = os.environ.get("PROFILES_DIR")
+    if env:
+        return env
+    # Zdieľaný root — root je parent z market.data_dir() ("out/cz" → "out")
+    try:
+        import market as _mk
+        root = os.path.dirname(_mk.data_dir().rstrip("/").rstrip(os.sep)) or "out"
+    except Exception:
+        root = "out"
+    return os.path.join(root, "profiles")
+
+
+DIR = _root()        # back-compat const
+
+# Mode konstanty — typ profilu fixovaný pri vzniku, NEDÁ SA prepnúť.
+#   MODE_SIM = 'simulation' — historická simulácia (livesim.advance cez minulé dni,
+#                              PVGIS + scenár, profit chC z modelu). Žiadny realio
+#                              overlay; manual setpoint write zamietnutý.
+#   MODE_REAL = 'real'      — reálny chod: livesim ukazuje len plán + reálne meranie
+#                              z realio CSV. Editor FTV scenára skrytý.
+#                              Manuálny setpoint + FVE write povolené.
+MODE_SIM = "simulation"
+MODE_REAL = "real"
+VALID_MODES = (MODE_SIM, MODE_REAL)
+
+# Aktívny profil je per-inštancia (per-port). Default port 8000 = legacy _active.json.
+# Fallback chain: PORT → APP_PORT → "8000" (start_dev.sh nastavuje APP_PORT, nie PORT).
+_PORT = os.environ.get("PORT") or os.environ.get("APP_PORT") or "8000"
+def _active_path() -> str:
+    """Aktuálna cesta k _active json — market-aware + per-port."""
+    r = _root()
+    return os.path.join(r, "_active.json") if _PORT == "8000" else os.path.join(r, f"_active_{_PORT}.json")
+# ACTIVE_PATH const odstránený — používa sa _active_path() dynamicky (market+port aware)
+N96 = 96
+
+
+def _ensure_dir() -> None:
+    os.makedirs(_root(), exist_ok=True)
+
+
+def _safe_name(name: str) -> str:
+    """Bezpečný názov súboru — len alfanum, podtržník, pomlčka."""
+    s = re.sub(r"[^A-Za-z0-9_\-]", "_", str(name).strip())
+    s = s.strip("_-")
+    return s or "default"
+
+
+def _path(name: str) -> str:
+    return os.path.join(_root(), f"{_safe_name(name)}.json")
+
+
+def list_profiles() -> List[str]:
+    """Vráti zoznam názvov dostupných profilov (bez '_active')."""
+    _ensure_dir()
+    out = []
+    _d = _root()
+    if not os.path.isdir(_d):
+        return []
+    for fn in os.listdir(_d):
+        if fn.startswith("_") or not fn.endswith(".json"):
+            continue
+        out.append(fn[:-5])                                  # odstránime .json
+    return sorted(out)
+
+
+def save_profile(name: str, data: Dict[str, Any]) -> str:
+    """Uloží profile. Aktualizuje updated_at, zachová created_at + **mode** ak existuje.
+
+    Mode je FIXOVANÝ pri vzniku — ak profile existuje a má `mode`, neresetuje sa
+    bez ohľadu na to čo je v `data['mode']`. Staré profily bez mode dostanú
+    default 'simulation'. Vracia cestu.
+    """
+    _ensure_dir()
+    p = _path(name)
+    existing = {}
+    if os.path.exists(p):
+        try:
+            with open(p) as f:
+                existing = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    # Mode logika:
+    #  • Ak existing má 'mode' → použij ho (immutable)
+    #  • Inak ak je v data['mode'] valid hodnota → použij ju (nový profil)
+    #  • Inak default = simulation (back-compat pre staré profily)
+    if existing.get("mode") in VALID_MODES:
+        mode = existing["mode"]
+    else:
+        m = str(data.get("mode") or "").strip().lower()
+        mode = m if m in VALID_MODES else MODE_SIM
+    body = {
+        "name": _safe_name(name),
+        "mode": mode,
+        "created_at": existing.get("created_at", datetime.now().isoformat(timespec="seconds")),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "plan": dict(data.get("plan") or {}),
+        "dentrh": dict(data.get("dentrh") or {}),
+        "rt": dict(data.get("rt") or {}),
+        "mult96": list(data.get("mult96") or []),
+        "rt_on96": list(data.get("rt_on96") or []),
+        "note": str(data.get("note", "")),
+        # Distribučné tarify (TOU + peak) — voliteľné, používa joint_lp F3
+        "distribution": dict(data.get("distribution")
+                              or existing.get("distribution") or {}),
+    }
+    # validácia mult96 / rt_on96 (ak prítomné, musia byť dĺžky 96)
+    for k in ("mult96", "rt_on96"):
+        if body[k] and len(body[k]) != N96:
+            raise ValueError(f"{k} musí mať dĺžku {N96} alebo byť prázdne (dostal som {len(body[k])})")
+    with open(p, "w") as f:
+        json.dump(body, f, ensure_ascii=False, indent=1)
+    return p
+
+
+def get_mode(name: str) -> str:
+    """Vráti mode daného profilu ('simulation'|'real'). Default 'simulation' pri zlom mene
+    alebo starých profiloch bez mode."""
+    if not name:
+        return MODE_SIM
+    p = load_profile(name)
+    if not p:
+        return MODE_SIM
+    m = str(p.get("mode") or "").strip().lower()
+    return m if m in VALID_MODES else MODE_SIM
+
+
+def is_real(name: str) -> bool:
+    """True ak je profile real (povolený realio overlay a manual writes)."""
+    return get_mode(name) == MODE_REAL
+
+
+def list_by_mode(mode: str) -> List[str]:
+    """Vráti zoznam profilov daného mode-u."""
+    if mode not in VALID_MODES:
+        return []
+    return [n for n in list_profiles() if get_mode(n) == mode]
+
+
+def load_profile(name: str) -> Optional[Dict[str, Any]]:
+    """Načíta profile alebo None ak neexistuje / je poškodený."""
+    p = _path(name)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def delete_profile(name: str) -> bool:
+    """Zmaže profile. True ak existoval."""
+    p = _path(name)
+    if not os.path.exists(p):
+        return False
+    try:
+        os.remove(p)
+        return True
+    except OSError:
+        return False
+
+
+def get_active() -> Optional[str]:
+    """Vráti názov aktívneho profilu alebo None."""
+    if not os.path.exists(_active_path()):
+        return None
+    try:
+        with open(_active_path()) as f:
+            d = json.load(f)
+        n = d.get("name")
+        if n and os.path.exists(_path(n)):
+            return n
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def set_active(name: Optional[str]) -> None:
+    """Označí profile ako aktívny (alebo None = žiadny aktívny)."""
+    _ensure_dir()
+    if name is None:
+        if os.path.exists(_active_path()):
+            try:
+                os.remove(_active_path())
+            except OSError:
+                pass
+        return
+    with open(_active_path(), "w") as f:
+        json.dump({"name": _safe_name(name), "set_at": datetime.now().isoformat(timespec="seconds")}, f)
+
+
+def apply_to_ui_and_overrides(name: str, ui_save_fn, po_module) -> Dict[str, Any]:
+    """Aplikuje profile na bežiacu aplikáciu:
+    - prepíše ui_settings.plan / dentrh / rt
+    - prepíše plan_overrides._template.json (mult96 + rt_on96)
+    Vracia dict so súhrnom (čo sa zmenilo).
+
+    ui_save_fn: callable(key, dict) — typicky app._ui_save
+    po_module: plan_overrides modul
+    """
+    p = load_profile(name)
+    if p is None:
+        raise FileNotFoundError(f"profile '{name}' neexistuje")
+    summary = {"applied": _safe_name(name), "updated": []}
+    # ── DÔLEŽITÉ poradie: set_active MUSÍ byť PRED save_template ──
+    # po.save_template() volá _resolve_profile() ktorý vracia aktívny profil.
+    # Keby sme zavolali save_template PRED set_active, mult96 nového profilu by sa zapísalo
+    # do priečinka STARÉHO aktívneho profilu → strata dát.
+    set_active(name)
+    if p.get("plan"):
+        ui_save_fn("plan", p["plan"])
+        summary["updated"].append("ui.plan")
+    if p.get("dentrh"):
+        ui_save_fn("dentrh", p["dentrh"])
+        summary["updated"].append("ui.dentrh")
+    if p.get("rt"):
+        ui_save_fn("rt", p["rt"])
+        summary["updated"].append("ui.rt")
+    # prepíš plan_overrides.template ak má profile vlastnú šablónu (do priečinka NOVÉHO aktívneho profilu)
+    if po_module is not None and p.get("mult96") and len(p["mult96"]) == N96:
+        import numpy as _np
+        arr = _np.array([(float(x) if x is not None else _np.nan) for x in p["mult96"]], dtype=float)
+        po_module.save_template(arr)
+        summary["updated"].append("po.template_mult")
+    if po_module is not None and p.get("rt_on96") and len(p["rt_on96"]) == N96:
+        import numpy as _np
+        arr = _np.array([(float(x) if x is not None else _np.nan) for x in p["rt_on96"]], dtype=float)
+        po_module.save_template_rt(arr)
+        summary["updated"].append("po.template_rt")
+    return summary
+
+
+def snapshot_current(name: str, ui_load_fn, po_module, note: str = "",
+                      mode: str = MODE_SIM) -> str:
+    """Vytvorí profile zo SÚČASNÝCH UI hodnôt + plan_overrides template.
+    Užitočné pre 'Uložiť aktuálne nastavenia ako profil'.
+
+    Mode: 'simulation' (default — historická simulácia) alebo 'real' (reálny chod).
+    Mode je fixovaný pri vzniku — nedá sa neskôr zmeniť.
+    """
+    data = {
+        "plan": ui_load_fn("plan", {}),
+        "dentrh": ui_load_fn("dentrh", {}),
+        "rt": ui_load_fn("rt", {}),
+        "note": note,
+        "mode": mode,
+    }
+    if po_module is not None:
+        try:
+            m = po_module.load_template().tolist()
+            rt = po_module.load_template_rt().tolist()
+            # mult/rt sú np arrays s NaN — pre JSON treba None
+            data["mult96"] = [None if x != x else float(x) for x in m]   # NaN check
+            data["rt_on96"] = [None if x != x else float(x) for x in rt]
+        except Exception:
+            pass
+    return save_profile(name, data)

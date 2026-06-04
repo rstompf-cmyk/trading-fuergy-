@@ -1,0 +1,88 @@
+# ─── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── Virtualenv ───────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ─── IDE / Editor ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── Citlivé súbory ───────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+*.p12
+out/realio_config.json
+out/seps_cookies.json
+auto_control_unlock.json
+out/cz/realio_config.json
+out/sk/realio_config.json
+out/*/realio_cookies*
+
+# ─── Runtime data (migruje sa cez script, neverziuje sa) ──────────────────
+out/
+!out/.gitkeep
+
+# ─── Database files (SQLite) ──────────────────────────────────────────────
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+db/data/*.db
+!db/data/.gitkeep
+
+# ─── Backup / archive ─────────────────────────────────────────────────────
+*.bak
+*.backup
+*.orig
+*.tmp
+Sudolsky/
+Downloads/
+app.v1.py
+=*.txt
+=3.7
+=4.0
+*_backup_*
+
+# ─── Logs ─────────────────────────────────────────────────────────────────
+*.log
+app_*.log
+nohup.out
+
+# ─── Build artifacts ──────────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+*.egg
+
+# ─── Docker ───────────────────────────────────────────────────────────────
+.dockerignore.local
+docker-compose.override.yml
+
+# ─── Misc ─────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+node_modules/

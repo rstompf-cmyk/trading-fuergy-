@@ -1,0 +1,26 @@
+# Dátová vrstva
+requests>=2.31
+pandas>=2.0
+lxml>=4.9
+openpyxl>=3.1
+# Model a optimalizácia
+scikit-learn>=1.3
+joblib>=1.3
+scipy>=1.10
+# Webová appka
+fastapi>=0.110
+uvicorn>=0.29
+# Background scheduler (denné fetche, auto D-1 plán)
+apscheduler>=3.10
+# Headless browser pre SEPS DAE cookie/XSRF refresh (post-install: playwright install chromium)
+playwright>=1.40
+# .env autoloading (credentials pre historian)
+python-dotenv>=1.0
+# PDF manažérsky report (export z /livesim)
+reportlab>=4.0
+matplotlib>=3.7
+# WebSocket klient pre realio write protokol (Bender dashboard)
+websocket-client>=1.7
+# WS-Security XML digital signature pre OKTE SOAP IdmOrderBook
+signxml>=3.2
+cryptography>=42.0

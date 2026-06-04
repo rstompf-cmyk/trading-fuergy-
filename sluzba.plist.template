@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Unikátny identifier per port (placeholder sa nahradí v install_sluzba.sh). -->
+    <key>Label</key>
+    <string>com.fuergy.ftv-app.{{PORT}}</string>
+
+    <!-- Príkaz na spustenie. Cesty sa nahradia v install_sluzba.sh -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PYTHON_BIN}}</string>
+        <string>{{APP_DIR}}/app.py</string>
+    </array>
+
+    <!-- Pracovný adresár — kde sa všetko relatívne hľadá (out/, profiles/, ...) -->
+    <key>WorkingDirectory</key>
+    <string>{{APP_DIR}}</string>
+
+    <!-- Environment premenné — TZ, MARKET, PORT, APP_PORT -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TZ</key>
+        <string>Europe/Bratislava</string>
+        <key>MARKET</key>
+        <string>{{MARKET}}</string>
+        <key>PORT</key>
+        <string>{{PORT}}</string>
+        <key>APP_PORT</key>
+        <string>{{PORT}}</string>
+        <key>APP_HOST</key>
+        <string>127.0.0.1</string>
+        <!-- Zachovať PATH pre subprocesy (modpoll, ssh, atd.) -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Štartuje pri každom prihlásení do Macu -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Reštartuje proces pri páde / neočakávanom ukončení -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle: ak proces padá rýchlo (< 30s), počká pred ďalším pokusom -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Logy — per port aby sa neprerezávali -->
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/Library/Logs/ftv-app-{{PORT}}.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/Library/Logs/ftv-app-{{PORT}}.err.log</string>
+
+    <!-- Vyšší limit otvorených súborov (SQLite + log rotácia + sieťové sockety) -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
+</dict>
+</plist>
