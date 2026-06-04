@@ -201,7 +201,8 @@ async def lifespan(app):
             print("[livesim-bg] " + ("zastavený" if not t.is_alive() else "thread sa nestihol zastaviť (5s timeout)"))
 
 
-app = FastAPI(title="Plán D-1 FTV + batéria", lifespan=lifespan)
+from core.state import APP_NAME as _APP_NAME
+app = FastAPI(title=_APP_NAME, lifespan=lifespan)
 os.makedirs("out", exist_ok=True)
 
 # ── Auth (Fáza 2) — opt-in cez AUTH_REQUIRED env flag ────────────────────────
@@ -2122,7 +2123,7 @@ def form_page(msg=""):
     def _chk(v):
         return "checked" if bool(v) else ""
     return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8">
-<title>Plán D-1 FTV + batéria</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_APP_NAME} — Plán D-1</title><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1680px;margin:24px auto;padding:0 16px;color:#222}}
@@ -2136,7 +2137,7 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 .wx-day{{background:#fff;border:1px solid #e0e0e0;border-radius:6px;padding:6px;text-align:center;font-size:11px}}
 .wx-day .d{{font-weight:600;color:#1F4E78}} .wx-day .t{{font-size:18px;color:#2E75B6;margin:2px 0}}
 .wx-day.today{{border:2px solid #2E7D32;background:#eef7ee}}</style></head><body>
-<h1>Plán D-1 — FTV + batéria</h1>
+<h1>⚡ {_APP_NAME} — Plán D-1</h1>
 {_nav("/")}
 <p style="color:#666">Predpoveď počasia → odhad ISOT → optimálny rozvrh batérie a obchodná pozícia → Excel.</p>
 {_overrides_status(tomorrow)}

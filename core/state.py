@@ -101,3 +101,7 @@ DEF = dict(lat=49.5961, lon=17.3634, kwp=99.0, tilt=30.0, azimuth=0.0, eff=0.85,
 
 # Kurz EUR/CZK — pre ČEPS odhady ZCO ktoré sú v CZK.
 FX_CZK = 24.3
+
+# Branding — názov aplikácie zobrazený v titulku, navigácii, login stránke.
+# Override cez env: APP_NAME="Iný názov".
+APP_NAME = os.environ.get("APP_NAME", "Trading Fuergy")

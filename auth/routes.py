@@ -87,7 +87,7 @@ def _auth_required_now() -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _LOGIN_HTML = """<!doctype html><html lang="sk"><head><meta charset="utf-8">
-<title>Prihlásenie — FTV+batéria</title>
+<title>Prihlásenie — {app_name}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 body{{font-family:-apple-system,Segoe UI,Arial;background:#f3f6fb;margin:0;
@@ -108,7 +108,7 @@ button:hover{{background:#16395a}}
 .foot{{text-align:center;color:#888;font-size:11px;margin-top:18px}}
 </style></head><body>
 <div class="box">
-<h1>⚡ FTV+batéria</h1>
+<h1>⚡ {app_name}</h1>
 <div class="sub">Prihlásenie do administračného rozhrania</div>
 {err_html}
 <form method="post" action="/login">
@@ -119,14 +119,22 @@ button:hover{{background:#16395a}}
 <input name="password" type="password" required autocomplete="current-password">
 <button type="submit">Prihlásiť</button>
 </form>
-<div class="foot">FUERGY · FTV+batéria management</div>
+<div class="foot">FUERGY · {app_name}</div>
 </div></body></html>"""
 
 
 def _login_page(error: str = "", next_url: str = "/") -> HTMLResponse:
     import html as _html
+    try:
+        from core.state import APP_NAME
+    except Exception:
+        APP_NAME = "Trading Fuergy"
     err_html = (f'<div class="err">{_html.escape(error)}</div>' if error else "")
-    body = _LOGIN_HTML.format(err_html=err_html, next_url=_html.escape(next_url or "/"))
+    body = _LOGIN_HTML.format(
+        app_name=_html.escape(APP_NAME),
+        err_html=err_html,
+        next_url=_html.escape(next_url or "/"),
+    )
     return HTMLResponse(body)
 
 
