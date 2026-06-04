@@ -1,0 +1,58 @@
+{# Hlavná navigácia — used by base.html. Active je current path. #}
+{% set nav_items = [
+  ("/", "🗓 Plán D-1"),
+  ("/dentrh", "⚡ Denný trh 15-min"),
+  ("/rt", "🔴 RT poradca"),
+  ("/plan_batch", "📦 Batch plán"),
+  ("/plans", "📋 Plány"),
+  ("/profiles", "⚙ Profily"),
+  ("/livesim", "🟢 Živá simulácia"),
+  ("/load_import", "🏠 Spotreba"),
+  ("/realio", "🔌 Reálne meranie"),
+  ("/auto_control", "🤖 Paper trading"),
+  ("/vdt", "💹 OKTE VDT"),
+  ("/kalibracia", "📈 Kalibrácia"),
+  ("/data", "💾 Dáta"),
+] %}
+<nav class="app-nav">
+  {% for href, label in nav_items %}
+    <a href="{{ href }}" target="_top" {% if href == nav_active %}class="active"{% endif %}>{{ label }}</a>
+  {% endfor %}
+  <span class="app-nav-right">
+    {% if active_profile %}
+      <span class="chip {{ active_profile.mode }}" title="Aktívny profil">
+        {{ active_profile.name }} · {{ active_profile.mode }}
+      </span>
+    {% endif %}
+    {% if active_market %}
+      <span class="chip" style="background:#fff;border:1px solid var(--border)">
+        {{ active_market | upper }}
+      </span>
+    {% endif %}
+    {# User chip + Odhlásiť — JS vyplní z /me ak je auth zapnutý #}
+    <span id="navUserChip" class="user-chip hidden">
+      <span id="navUserLabel">…</span>
+      <span id="navUserRole" class="chip">role</span>
+      <a href="/logout" target="_top" class="logout-btn" title="Odhlásiť">↪ Odhlásiť</a>
+    </span>
+  </span>
+</nav>
+<script>
+(function(){
+  try {
+    fetch("/me", {credentials: "same-origin"}).then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d || !d.authenticated) return;
+      var u = d.user || {};
+      var c = document.getElementById("navUserChip");
+      if (!c) return;
+      document.getElementById("navUserLabel").textContent = u.username || "?";
+      var rEl = document.getElementById("navUserRole");
+      var role = (u.role || "").toLowerCase();
+      rEl.textContent = role || "?";
+      rEl.className = "chip " + role;
+      c.classList.remove("hidden");
+    }).catch(function(){});
+  } catch (e) {}
+})();
+</script>

@@ -205,6 +205,14 @@ from core.state import APP_NAME as _APP_NAME
 app = FastAPI(title=_APP_NAME, lifespan=lifespan)
 os.makedirs("out", exist_ok=True)
 
+# Static files (CSS, JS, obrázky) — Fáza 3 Jinja2 refactor
+try:
+    from fastapi.staticfiles import StaticFiles
+    if os.path.isdir("static"):
+        app.mount("/static", StaticFiles(directory="static"), name="static")
+except Exception as _e_static:
+    print(f"[static] mount zlyhal: {_e_static}")
+
 # ── Auth (Fáza 2) — opt-in cez AUTH_REQUIRED env flag ────────────────────────
 # AUTH_REQUIRED=0 (default) → middleware aj routes sú no-op, žiadna zmena správania.
 # AUTH_REQUIRED=1 → session cookie validácia + /login redirect pre neautorizovaných.

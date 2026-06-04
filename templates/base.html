@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  {% block layout %}
+    <div class="container {% block container_class %}{% endblock %}">
+      {% block nav %}{% include "components/nav.html" %}{% endblock %}
+      {% block content %}{% endblock %}
+    </div>
+  {% endblock %}
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>
