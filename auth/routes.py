@@ -191,3 +191,10 @@ def register_auth_routes(app: FastAPI) -> None:
         if user is None:
             return JSONResponse({"authenticated": False, "auth_required": _auth_required_now()})
         return JSONResponse({"authenticated": True, "user": user})
+
+    # /admin/* endpointy
+    try:
+        from .admin_routes import register_admin_routes
+        register_admin_routes(app)
+    except Exception as _e:
+        print(f"[auth] admin routes init zlyhal: {_e}")
