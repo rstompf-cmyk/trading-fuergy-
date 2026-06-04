@@ -42,6 +42,26 @@ def _root() -> str:
 
 DIR = _root()        # back-compat const
 
+# ── Dual storage prepínač (Fáza 1.9 migrácie) ──────────────────────────────
+# USE_DB=1 v env → čítame z DB (zdroj pravdy), write je dual (DB + JSON).
+# USE_DB=0 (default) → pôvodný JSON-only režim. Toto umožňuje paralelný beh
+# main branch (port 8000) a refactor-v2 (port 8001) bez konfliktov.
+_USE_DB = os.environ.get("USE_DB", "0").strip() in ("1", "true", "True", "yes")
+
+def _db_available() -> bool:
+    """Vráti True ak `db` package je importovateľný a DB súbor existuje.
+
+    Pri USE_DB=1 ale chýbajúcej DB sa vrátime na JSON-only — žiadny crash.
+    """
+    if not _USE_DB:
+        return False
+    try:
+        from db import get_session   # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 # Mode konstanty — typ profilu fixovaný pri vzniku, NEDÁ SA prepnúť.
 #   MODE_SIM = 'simulation' — historická simulácia (livesim.advance cez minulé dni,
 #                              PVGIS + scenár, profit chC z modelu). Žiadny realio
@@ -81,6 +101,15 @@ def _path(name: str) -> str:
 
 def list_profiles() -> List[str]:
     """Vráti zoznam názvov dostupných profilov (bez '_active')."""
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import Profile as _DbProfile
+            with get_session() as s:
+                return sorted([p.name for p in s.query(_DbProfile).all()])
+        except Exception as e:
+            print(f"[profiles.list_profiles] DB read zlyhal, fallback na JSON: {e}")
+    # JSON storage (default + DB fallback)
     _ensure_dir()
     out = []
     _d = _root()
@@ -137,8 +166,36 @@ def save_profile(name: str, data: Dict[str, Any]) -> str:
     for k in ("mult96", "rt_on96"):
         if body[k] and len(body[k]) != N96:
             raise ValueError(f"{k} musí mať dĺžku {N96} alebo byť prázdne (dostal som {len(body[k])})")
+    # JSON write (vždy — back-compat pre moduly ktoré ešte nepoznajú DB)
     with open(p, "w") as f:
         json.dump(body, f, ensure_ascii=False, indent=1)
+    # DB write (dual storage)
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import Profile as _DbProfile
+            with get_session() as s:
+                existing_db = s.query(_DbProfile).filter_by(name=body["name"]).one_or_none()
+                if existing_db:
+                    existing_db.mode = body["mode"]
+                    existing_db.note = body["note"]
+                    existing_db.updated_at = body["updated_at"]
+                    existing_db.plan = body["plan"]
+                    existing_db.dentrh = body["dentrh"]
+                    existing_db.rt = body["rt"]
+                    existing_db.distribution = body["distribution"]
+                    existing_db.mult96 = body["mult96"]
+                    existing_db.rt_on96 = body["rt_on96"]
+                else:
+                    s.add(_DbProfile(
+                        name=body["name"], mode=body["mode"], note=body["note"],
+                        created_at=body["created_at"], updated_at=body["updated_at"],
+                        plan=body["plan"], dentrh=body["dentrh"], rt=body["rt"],
+                        distribution=body["distribution"],
+                        mult96=body["mult96"], rt_on96=body["rt_on96"],
+                    ))
+        except Exception as e:
+            print(f"[profiles.save_profile {body['name']}] DB write zlyhal: {e}")
     return p
 
 
@@ -168,6 +225,27 @@ def list_by_mode(mode: str) -> List[str]:
 
 def load_profile(name: str) -> Optional[Dict[str, Any]]:
     """Načíta profile alebo None ak neexistuje / je poškodený."""
+    safe = _safe_name(name)
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import Profile as _DbProfile
+            with get_session() as s:
+                p = s.query(_DbProfile).filter_by(name=safe).one_or_none()
+                if p is not None:
+                    return {
+                        "name": p.name, "mode": p.mode, "note": p.note,
+                        "created_at": p.created_at, "updated_at": p.updated_at,
+                        "plan": dict(p.plan or {}),
+                        "dentrh": dict(p.dentrh or {}),
+                        "rt": dict(p.rt or {}),
+                        "distribution": dict(p.distribution or {}),
+                        "mult96": list(p.mult96 or []),
+                        "rt_on96": list(p.rt_on96 or []),
+                    }
+        except Exception as e:
+            print(f"[profiles.load_profile {safe}] DB zlyhal, fallback na JSON: {e}")
+    # JSON storage
     p = _path(name)
     if not os.path.exists(p):
         return None
@@ -179,19 +257,58 @@ def load_profile(name: str) -> Optional[Dict[str, Any]]:
 
 
 def delete_profile(name: str) -> bool:
-    """Zmaže profile. True ak existoval."""
+    """Zmaže profile (DB aj JSON). True ak existoval aspoň v jednom úložisku."""
+    safe = _safe_name(name)
+    found = False
+    # DB delete (dual storage)
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import Profile as _DbProfile
+            with get_session() as s:
+                p_db = s.query(_DbProfile).filter_by(name=safe).one_or_none()
+                if p_db is not None:
+                    s.delete(p_db)
+                    found = True
+        except Exception as e:
+            print(f"[profiles.delete_profile {safe}] DB delete zlyhal: {e}")
+    # JSON delete (vždy)
     p = _path(name)
-    if not os.path.exists(p):
-        return False
+    if os.path.exists(p):
+        try:
+            os.remove(p)
+            found = True
+        except OSError:
+            pass
+    return found
+
+
+def _active_market() -> str:
+    """Aktuálny market ('cz' alebo 'sk') pre per-port ActiveProfile lookup."""
     try:
-        os.remove(p)
-        return True
-    except OSError:
-        return False
+        import market as _mk
+        return str(_mk.active_market() or "cz")
+    except Exception:
+        return "cz"
 
 
 def get_active() -> Optional[str]:
     """Vráti názov aktívneho profilu alebo None."""
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import ActiveProfile, Profile as _DbProfile
+            with get_session() as s:
+                ap = s.query(ActiveProfile).filter_by(
+                    port=_PORT, market=_active_market()
+                ).one_or_none()
+                if ap and ap.profile_id:
+                    p = s.query(_DbProfile).filter_by(id=ap.profile_id).one_or_none()
+                    if p:
+                        return p.name
+        except Exception as e:
+            print(f"[profiles.get_active] DB read zlyhal, fallback na JSON: {e}")
+    # JSON storage
     if not os.path.exists(_active_path()):
         return None
     try:
@@ -208,15 +325,40 @@ def get_active() -> Optional[str]:
 def set_active(name: Optional[str]) -> None:
     """Označí profile ako aktívny (alebo None = žiadny aktívny)."""
     _ensure_dir()
+    # JSON write (vždy back-compat)
     if name is None:
         if os.path.exists(_active_path()):
             try:
                 os.remove(_active_path())
             except OSError:
                 pass
-        return
-    with open(_active_path(), "w") as f:
-        json.dump({"name": _safe_name(name), "set_at": datetime.now().isoformat(timespec="seconds")}, f)
+    else:
+        with open(_active_path(), "w") as f:
+            json.dump({"name": _safe_name(name),
+                        "set_at": datetime.now().isoformat(timespec="seconds")}, f)
+    # DB write (dual storage)
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import ActiveProfile, Profile as _DbProfile
+            with get_session() as s:
+                mkt = _active_market()
+                ap = s.query(ActiveProfile).filter_by(port=_PORT, market=mkt).one_or_none()
+                if name is None:
+                    if ap:
+                        s.delete(ap)
+                else:
+                    p_db = s.query(_DbProfile).filter_by(name=_safe_name(name)).one_or_none()
+                    if p_db:
+                        if ap:
+                            ap.profile_id = p_db.id
+                            ap.set_at = datetime.now().isoformat(timespec="seconds")
+                        else:
+                            s.add(ActiveProfile(port=_PORT, market=mkt,
+                                                  profile_id=p_db.id,
+                                                  set_at=datetime.now().isoformat(timespec="seconds")))
+        except Exception as e:
+            print(f"[profiles.set_active {name}] DB write zlyhal: {e}")
 
 
 def apply_to_ui_and_overrides(name: str, ui_save_fn, po_module) -> Dict[str, Any]:
