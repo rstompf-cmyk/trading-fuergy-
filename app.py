@@ -5461,124 +5461,56 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
 # LOAD IMPORT — CSV spotreby zákazníka per-profil (15-min timestamp + kW)
 # ═══════════════════════════════════════════════════════════════════
 
-def _load_import_page(msg: str = "", msg_kind: str = "info") -> str:
-    """GET /load_import — formulár na upload CSV + zobrazenie aktuálnej spotreby aktívneho profilu."""
+def _load_import_page(msg: str = "", msg_kind: str = "info",
+                        request=None) -> "HTMLResponse":
+    """Render /load_import stránky cez Jinja2 template (Fáza 3 refactor).
+
+    msg_kind: 'ok'|'err'|'info' → mapuje sa na banner.success/error/info.
+    """
+    from ui.templates import render
     active = "—"
     try:
         if pr is not None:
             active = pr.get_active() or "—"
     except Exception:
         pass
-    meta_html = ""
-    chart_html = ""
+    meta = None
+    chart_labels = "[]"
+    chart_wd = "[]"
+    chart_we = "[]"
     if lp is not None:
         meta = lp.get_meta()
         if meta:
             wd = meta.get("weekday_profile_kw") or []
             we = meta.get("weekend_profile_kw") or []
-            wd_data = "[" + ",".join(f"{x:.3f}" for x in wd) + "]" if wd else "[]"
-            we_data = "[" + ",".join(f"{x:.3f}" for x in we) + "]" if we else "[]"
-            labels = "[" + ",".join(f"'{i//4:02d}:{(i%4)*15:02d}'" for i in range(96)) + "]"
-            avg_kwh = meta.get("kwh_per_day_avg") or 0
-            warn = meta.get("warning")
-            warn_html = (f"<div style='background:#ffe8e0;border-left:4px solid #C0392B;"
-                          f"border-radius:5px;padding:8px 12px;margin:6px 0;color:#7a1810;font-size:13px'>"
-                          f"⚠ {warn}</div>") if warn else ""
-            meta_html = (
-                f"<div style='background:#e8f5e9;border-left:4px solid #2E7D32;border-radius:6px;"
-                f"padding:10px 14px;margin:10px 0;font-size:13px;color:#1B5E20'>"
-                f"✓ <b>Spotreba načítaná pre profil {active}</b><br>"
-                f"• Importované dni: <b>{meta.get('n_days_total', 0)}</b> "
-                f"(pracovné: {meta.get('n_days_wd', 0)}, víkendy: {meta.get('n_days_we', 0)})<br>"
-                f"• Rozsah dátumov: <b>{meta.get('date_min', '—')} → {meta.get('date_max', '—')}</b><br>"
-                f"• Priemerná denná spotreba: <b>{avg_kwh:.1f} kWh/deň</b><br>"
-                f"• Rozsah hodnôt: <b>{meta.get('value_min_kw', 0):.2f}</b> až "
-                f"<b>{meta.get('value_max_kw', 0):.2f}</b> kW "
-                f"(priemer {meta.get('value_mean_kw', 0):.2f} kW)<br>"
-                f"• Detegované stĺpce: timestamp <code>{meta.get('detected_ts_col','—')}</code>, "
-                f"kW <code>{meta.get('detected_kw_col','—')}</code><br>"
-                f"• Zdroj: <code>{meta.get('source_file', '—')}</code> ({meta.get('imported_at', '—')})"
-                f"{warn_html}</div>")
-            chart_html = (
-                f"<h2>Denný profil spotreby (15-min priemery, profil <code>{active}</code>)</h2>"
-                f"<div style='height:300px'><canvas id='chLoad'></canvas></div>"
-                f"<script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js'></script>"
-                f"<script>new Chart(document.getElementById('chLoad'),{{type:'line',data:{{labels:{labels},datasets:["
-                f"{{label:'Pracovný deň kW',data:{wd_data},borderColor:'#1F4E78',backgroundColor:'rgba(31,78,120,.10)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
-                f"{{label:'Víkend kW',data:{we_data},borderColor:'#E0A800',backgroundColor:'rgba(224,168,0,.12)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}}"
-                f"]}},options:{{responsive:true,maintainAspectRatio:false,elements:{{point:{{radius:0}}}},scales:{{y:{{title:{{display:true,text:'kW'}}}}}}}}}});</script>"
-                f"<form method='post' action='/load_import/clear' style='display:inline-block;margin:8px 0' "
-                f"onsubmit=\"return confirm('Naozaj zmazať importovanú spotrebu pre profil {active}?')\">"
-                f"<button type='submit' style='background:#C0392B;color:#fff;border:0;padding:6px 14px;border-radius:7px;cursor:pointer'>"
-                f"🗑 Vymazať spotrebu profilu</button></form>")
-        else:
-            meta_html = (
-                f"<div style='background:#fff3cd;border-left:4px solid #E0A800;border-radius:6px;"
-                f"padding:10px 14px;margin:10px 0;font-size:13px;color:#7a5d00'>"
-                f"ℹ Pre profil <b>{active}</b> ešte nie je naimportovaná spotreba. "
-                f"Nahraj 15-min CSV nižšie — pre LP plánovanie aj /livesim simulátor sa použije ako predikcia spotreby (net-meter formula).</div>")
-    msg_color = {"ok": "#1B5E20", "err": "#C0392B", "info": "#1F4E78"}.get(msg_kind, "#1F4E78")
-    msg_bg = {"ok": "#e8f5e9", "err": "#fbe9e7", "info": "#e3f2fd"}.get(msg_kind, "#e3f2fd")
-    msg_html = (f"<div style='background:{msg_bg};border-left:4px solid {msg_color};border-radius:6px;"
-                f"padding:10px 14px;margin:10px 0;font-size:13px;color:{msg_color}'>{msg}</div>") if msg else ""
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Import spotreby</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}}
-h1,h2{{color:#1F4E78}} fieldset{{border:1px solid #e0e0e0;border-radius:10px;margin:10px 0;padding:12px 16px}}
-legend{{color:#2E75B6;font-weight:600}} input,button{{padding:6px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px}}
-button[type=submit]{{background:#2E7D32;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600}}
-.hint{{color:#666;font-size:12px}}</style></head><body>
-<h1>🏠 Import spotreby zákazníka</h1>
-{_nav("/load_import")}
-{msg_html}
-{meta_html}
-<fieldset><legend>Nahrať CSV (15-min timestamp + value)</legend>
-<p class="hint">CSV musí obsahovať 2 stĺpce: <b>timestamp</b> (napr. <code>2026-05-01 00:00:00</code> alebo <code>01.05.2026 12:30</code>) a <b>value</b> (okamžitý výkon alebo 15-min energia).
-Oddeľovač čiarka, bodkočiarka alebo tabulátor — auto-detekcia. Desatinná bodka aj čiarka.<br>
-Z dát sa vyrobí <b>priemerný denný profil zvlášť pre pracovný deň a víkend</b>, ktorý sa potom použije pre plánovanie aj simuláciu (pre dni mimo importu).</p>
-<form method="post" action="/load_import" enctype="multipart/form-data">
-  <input type="file" name="file" accept=".csv,text/csv" required>
-  <label style="margin-left:14px">Jednotka v CSV:
-    <select name="unit" style="padding:5px 8px;border:1px solid #ccc;border-radius:6px">
-      <option value="kW" selected>kW (priemerný výkon)</option>
-      <option value="W">W (priemerný výkon vo wattoch)</option>
-      <option value="kWh_15min">kWh za 15-min slot</option>
-      <option value="Wh_15min">Wh za 15-min slot</option>
-    </select>
-  </label>
-  <br><br>
-  <label><input type="radio" name="mode" value="replace" checked> Nahradiť existujúce dáta</label>
-  <label style="margin-left:8px"><input type="radio" name="mode" value="append"> Pridať k existujúcim</label>
-  <br><br>
-  <button type="submit">⬆ Nahrať a spracovať</button>
-</form>
-</fieldset>
-<fieldset><legend>Konverzia existujúcich dát (bez re-uploadu)</legend>
-<p class="hint">Ak si nahral dáta v zlej jednotke, vieš ich naškálovať konštantou — všetky hodnoty sa prenásobia.</p>
-<form method="post" action="/load_import/rescale" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-  <button type="submit" name="factor" value="0.001" style="background:#1F4E78;color:#fff;border:0;padding:8px 14px;border-radius:7px;cursor:pointer">W → kW (× 0.001)</button>
-  <button type="submit" name="factor" value="1000" style="background:#1F4E78;color:#fff;border:0;padding:8px 14px;border-radius:7px;cursor:pointer">kW → W (× 1000)</button>
-  <button type="submit" name="factor" value="4" style="background:#5E35B1;color:#fff;border:0;padding:8px 14px;border-radius:7px;cursor:pointer">kWh/15min → kW (× 4)</button>
-  <button type="submit" name="factor" value="0.25" style="background:#5E35B1;color:#fff;border:0;padding:8px 14px;border-radius:7px;cursor:pointer">kW → kWh/15min (× 0.25)</button>
-  <span style="color:#666;font-size:12px;margin-left:auto">Konverzia je idempotentná — opätovné kliknutie znova prenásobí.</span>
-</form>
-</fieldset>
-{chart_html}
-</body></html>"""
+            if wd:
+                chart_wd = "[" + ",".join(f"{x:.3f}" for x in wd) + "]"
+            if we:
+                chart_we = "[" + ",".join(f"{x:.3f}" for x in we) + "]"
+            chart_labels = "[" + ",".join(
+                f"'{i//4:02d}:{(i%4)*15:02d}'" for i in range(96)) + "]"
+    # Map msg_kind → banner CSS class
+    kind_map = {"ok": "success", "err": "error", "info": "info"}
+    banner_kind = kind_map.get(msg_kind, "info")
+    return render(request, "pages/load_import.html",
+                   msg=msg, msg_kind=banner_kind,
+                   active=active, meta=meta,
+                   chart_labels=chart_labels, chart_wd=chart_wd, chart_we=chart_we)
 
 
 @app.get("/load_import", response_class=HTMLResponse)
-def load_import_get():
+def load_import_get(request: Request):
     if lp is None:
-        return "<p>load_profile modul nedostupný.</p>"
-    return _load_import_page()
+        return HTMLResponse("<p>load_profile modul nedostupný.</p>", status_code=503)
+    return _load_import_page(request=request)
 
 
 @app.post("/load_import", response_class=HTMLResponse)
-def load_import_post(file: UploadFile = File(...), mode: str = Form(default="replace"),
+def load_import_post(request: Request, file: UploadFile = File(...),
+                      mode: str = Form(default="replace"),
                       unit: str = Form(default="kW")):
     if lp is None:
-        return _load_import_page("load_profile modul nedostupný.", "err")
+        return _load_import_page("load_profile modul nedostupný.", "err", request=request)
     try:
         # ulož upload do dočasného súboru a parsuj
         import tempfile
@@ -5606,36 +5538,38 @@ def load_import_post(file: UploadFile = File(...), mode: str = Form(default="rep
 
 
 @app.post("/load_import/rescale", response_class=HTMLResponse)
-def load_import_rescale(factor: float = Form(...)):
+def load_import_rescale(request: Request, factor: float = Form(...)):
     if lp is None:
-        return _load_import_page("load_profile modul nedostupný.", "err")
+        return _load_import_page("load_profile modul nedostupný.", "err", request=request)
     try:
         f = float(factor)
         if f == 0 or not (1e-9 < abs(f) < 1e9):
-            return _load_import_page(f"❌ Neplatný faktor: {factor}", "err")
+            return _load_import_page(f"❌ Neplatný faktor: {factor}", "err", request=request)
         ok = lp.rescale(f)
         if ok:
-            _clear_livesim_logs()       # invalidate livesim log → fresh prepočet so škálovanou spotrebou
+            _clear_livesim_logs()
             meta = lp.get_meta() or {}
             return _load_import_page(
                 f"✓ Hodnoty prenásobené × {f}. Nový rozsah: "
                 f"{meta.get('value_min_kw', 0):.2f} až {meta.get('value_max_kw', 0):.2f} kW "
-                f"(priemer {meta.get('value_mean_kw', 0):.2f} kW). Livesim log vyresetovaný.", "ok")
-        return _load_import_page("⚠ Žiadne dáta na konverziu — najprv naimportuj CSV.", "info")
+                f"(priemer {meta.get('value_mean_kw', 0):.2f} kW). Livesim log vyresetovaný.",
+                "ok", request=request)
+        return _load_import_page("⚠ Žiadne dáta na konverziu — najprv naimportuj CSV.",
+                                    "info", request=request)
     except Exception as e:
-        return _load_import_page(f"❌ Chyba pri rescale: {e}", "err")
+        return _load_import_page(f"❌ Chyba pri rescale: {e}", "err", request=request)
 
 
 @app.post("/load_import/clear", response_class=HTMLResponse)
-def load_import_clear():
+def load_import_clear(request: Request):
     if lp is None:
-        return "<p>load_profile modul nedostupný.</p>"
+        return HTMLResponse("<p>load_profile modul nedostupný.</p>", status_code=503)
     ok = lp.clear()
     if ok:
         _clear_livesim_logs()
     msg = ("✓ Importovaná spotreba zmazaná pre aktívny profil. Livesim log vyresetovaný." if ok
            else "⚠ Žiadne dáta pre aktívny profil neboli k dispozícii.")
-    return _load_import_page(msg, "ok" if ok else "info")
+    return _load_import_page(msg, "ok" if ok else "info", request=request)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

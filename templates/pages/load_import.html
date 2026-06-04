@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Import spotreby — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <h1>🏠 Import spotreby zákazníka</h1>
+
+  {% if msg %}
+    <div class="banner {{ msg_kind|default('info') }}">{{ msg|safe }}</div>
+  {% endif %}
+
+  {% if meta %}
+    <div class="banner success">
+      ✓ <b>Spotreba načítaná pre profil {{ active }}</b><br>
+      • Importované dni: <b>{{ meta.n_days_total|default(0) }}</b>
+        (pracovné: {{ meta.n_days_wd|default(0) }}, víkendy: {{ meta.n_days_we|default(0) }})<br>
+      • Rozsah dátumov: <b>{{ meta.date_min|default('—') }} → {{ meta.date_max|default('—') }}</b><br>
+      • Priemerná denná spotreba: <b>{{ "%.1f"|format(meta.kwh_per_day_avg|default(0)|float) }} kWh/deň</b><br>
+      • Rozsah hodnôt: <b>{{ "%.2f"|format(meta.value_min_kw|default(0)|float) }}</b> až
+        <b>{{ "%.2f"|format(meta.value_max_kw|default(0)|float) }}</b> kW
+        (priemer {{ "%.2f"|format(meta.value_mean_kw|default(0)|float) }} kW)<br>
+      • Detegované stĺpce: timestamp <code>{{ meta.detected_ts_col|default('—') }}</code>,
+        kW <code>{{ meta.detected_kw_col|default('—') }}</code><br>
+      • Zdroj: <code>{{ meta.source_file|default('—') }}</code>
+        ({{ meta.imported_at|default('—') }})
+      {% if meta.warning %}
+        <div class="banner error mt-8" style="margin-bottom:0">⚠ {{ meta.warning }}</div>
+      {% endif %}
+    </div>
+  {% elif active != '—' %}
+    <div class="banner warn">
+      ℹ Pre profil <b>{{ active }}</b> ešte nie je naimportovaná spotreba.
+      Nahraj 15-min CSV nižšie — pre LP plánovanie aj /livesim simulátor sa použije
+      ako predikcia spotreby (net-meter formula).
+    </div>
+  {% endif %}
+
+  <fieldset>
+    <legend>Nahrať CSV (15-min timestamp + value)</legend>
+    <p class="muted" style="font-size:12px">
+      CSV musí obsahovať 2 stĺpce: <b>timestamp</b>
+      (napr. <code>2026-05-01 00:00:00</code> alebo <code>01.05.2026 12:30</code>)
+      a <b>value</b> (okamžitý výkon alebo 15-min energia).
+      Oddeľovač čiarka, bodkočiarka alebo tabulátor — auto-detekcia. Desatinná bodka aj čiarka.<br>
+      Z dát sa vyrobí <b>priemerný denný profil zvlášť pre pracovný deň a víkend</b>,
+      ktorý sa potom použije pre plánovanie aj simuláciu (pre dni mimo importu).
+    </p>
+    <form method="post" action="/load_import" enctype="multipart/form-data">
+      <input type="file" name="file" accept=".csv,text/csv" required>
+      <label style="margin-left:14px">Jednotka v CSV:
+        <select name="unit">
+          <option value="kW" selected>kW (priemerný výkon)</option>
+          <option value="W">W (priemerný výkon vo wattoch)</option>
+          <option value="kWh_15min">kWh za 15-min slot</option>
+          <option value="Wh_15min">Wh za 15-min slot</option>
+        </select>
+      </label>
+      <br><br>
+      <label><input type="radio" name="mode" value="replace" checked> Nahradiť existujúce dáta</label>
+      <label style="margin-left:8px"><input type="radio" name="mode" value="append"> Pridať k existujúcim</label>
+      <br><br>
+      <button type="submit" class="btn green lg">⬆ Nahrať a spracovať</button>
+    </form>
+  </fieldset>
+
+  <fieldset>
+    <legend>Konverzia existujúcich dát (bez re-uploadu)</legend>
+    <p class="muted" style="font-size:12px">
+      Ak si nahral dáta v zlej jednotke, vieš ich naškálovať konštantou —
+      všetky hodnoty sa prenásobia.
+    </p>
+    <form method="post" action="/load_import/rescale" class="flex gap-12 items-center flex-wrap">
+      <button type="submit" name="factor" value="0.001" class="btn">W → kW (× 0.001)</button>
+      <button type="submit" name="factor" value="1000" class="btn">kW → W (× 1000)</button>
+      <button type="submit" name="factor" value="4" class="btn" style="background:#5E35B1">kWh/15min → kW (× 4)</button>
+      <button type="submit" name="factor" value="0.25" class="btn" style="background:#5E35B1">kW → kWh/15min (× 0.25)</button>
+      <span class="muted" style="font-size:12px;margin-left:auto">
+        Konverzia je idempotentná — opätovné kliknutie znova prenásobí.
+      </span>
+    </form>
+  </fieldset>
+
+  {% if meta %}
+    <h2>Denný profil spotreby (15-min priemery, profil <code>{{ active }}</code>)</h2>
+    <div style="height:300px"><canvas id="chLoad"></canvas></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <script>
+      new Chart(document.getElementById('chLoad'), {
+        type: 'line',
+        data: {
+          labels: {{ chart_labels|safe }},
+          datasets: [
+            { label: 'Pracovný deň kW', data: {{ chart_wd|safe }},
+              borderColor: '#1F4E78', backgroundColor: 'rgba(31,78,120,.10)',
+              fill: true, stepped: true, pointRadius: 0, borderWidth: 1.8 },
+            { label: 'Víkend kW', data: {{ chart_we|safe }},
+              borderColor: '#E0A800', backgroundColor: 'rgba(224,168,0,.12)',
+              fill: true, stepped: true, pointRadius: 0, borderWidth: 1.8 }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          elements: { point: { radius: 0 } },
+          scales: { y: { title: { display: true, text: 'kW' } } }
+        }
+      });
+    </script>
+    <form method="post" action="/load_import/clear" class="mt-16"
+           onsubmit="return confirm('Naozaj zmazať importovanú spotrebu pre profil {{ active }}?')">
+      <button type="submit" class="btn red">🗑 Vymazať spotrebu profilu</button>
+    </form>
+  {% endif %}
+{% endblock %}
