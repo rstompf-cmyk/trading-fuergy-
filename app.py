@@ -209,7 +209,12 @@ os.makedirs("out", exist_ok=True)
 # AUTH_REQUIRED=1 → session cookie validácia + /login redirect pre neautorizovaných.
 try:
     from auth.routes import register_auth_routes, AuthMiddleware
+    from auth.policy import PolicyMiddleware
     register_auth_routes(app)
+    # Pozor: middlewares aplikujú sa v reverznom poradí.
+    # Add Policy ako prvé → AuthMiddleware sa exec PRVÝ (set user from cookie),
+    # Policy potom dostane request.state.user a aplikuje matrix.
+    app.add_middleware(PolicyMiddleware)
     app.add_middleware(AuthMiddleware)
 except Exception as _e_auth:
     print(f"[auth] init zlyhal — beh bez auth: {_e_auth}")
