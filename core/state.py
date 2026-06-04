@@ -22,9 +22,35 @@ _PORT = os.environ.get("PORT") or os.environ.get("APP_PORT") or "8000"
 UI_PATH = "out/ui_settings.json" if _PORT == "8000" else f"out/ui_settings_{_PORT}.json"
 
 
+# ── Dual storage prepínač (Fáza 1.13 migrácie) ──────────────────────────
+_USE_DB = os.environ.get("USE_DB", "0").strip() in ("1", "true", "True", "yes")
+
+
+def _db_available() -> bool:
+    if not _USE_DB:
+        return False
+    try:
+        from db import get_session   # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def _ui_load(key: str, defaults: dict) -> dict:
     """Načíta uložený stav formulára pre `key` (napr. 'plan', 'dentrh', 'rt').
     Vracia merge defaults + uložené hodnoty. Pri chybe vracia kópiu defaults."""
+    # DB read prvé
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import UiSettings as _DbUi
+            with get_session() as s:
+                row = s.query(_DbUi).filter_by(port=_PORT, key=str(key)).one_or_none()
+                if row is not None:
+                    return {**defaults, **(row.data or {})}
+        except Exception as e:
+            print(f"[core.state._ui_load DB] zlyhal: {e}")
+    # JSON fallback
     try:
         with open(UI_PATH) as fh:
             return {**defaults, **json.load(fh).get(key, {})}
@@ -34,6 +60,7 @@ def _ui_load(key: str, defaults: dict) -> dict:
 
 def _ui_save(key: str, values: dict) -> None:
     """Uloží `values` pod `key` do UI_PATH (in-place merge s existujúcim JSON)."""
+    # JSON write (vždy)
     try:
         d = {}
         if os.path.exists(UI_PATH):
@@ -44,6 +71,23 @@ def _ui_save(key: str, values: dict) -> None:
             json.dump(d, fh)
     except Exception:
         pass
+    # DB dual write
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import UiSettings as _DbUi
+            from datetime import datetime as _dt
+            now_iso = _dt.now().isoformat(timespec="seconds")
+            with get_session() as s:
+                row = s.query(_DbUi).filter_by(port=_PORT, key=str(key)).one_or_none()
+                if row:
+                    row.data = dict(values or {})
+                    row.updated_at = now_iso
+                else:
+                    s.add(_DbUi(port=_PORT, key=str(key),
+                                  data=dict(values or {}), updated_at=now_iso))
+        except Exception as e:
+            print(f"[core.state._ui_save DB] zlyhal: {e}")
 
 
 # Defaultné hodnoty /plan formulára. Užívateľ ich môže prepísať v UI, profiles tieto override-ujú.

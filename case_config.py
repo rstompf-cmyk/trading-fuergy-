@@ -107,7 +107,31 @@ def _path(name: str) -> str:
     return os.path.join(CASES_DIR, f"{safe}.json")
 
 
+# ── Dual storage prepínač (Fáza 1.13 migrácie) ─────────────────────────────
+_USE_DB = os.environ.get("USE_DB", "0").strip() in ("1", "true", "True", "yes")
+
+
+def _db_available() -> bool:
+    if not _USE_DB:
+        return False
+    try:
+        from db import get_session   # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def list_cases() -> list[str]:
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import Case as _DbCase
+            with get_session() as s:
+                names = sorted(c.name for c in s.query(_DbCase).all())
+                if names:
+                    return names
+        except Exception as e:
+            print(f"[case_config.list_cases DB] zlyhal: {e}")
     if not os.path.isdir(CASES_DIR):
         return ["default"]
     out = sorted(f[:-5] for f in os.listdir(CASES_DIR) if f.endswith(".json"))
@@ -115,6 +139,20 @@ def list_cases() -> list[str]:
 
 
 def load_case(name: str = "default") -> CaseConfig:
+    # DB read prvé
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import Case as _DbCase
+            with get_session() as s:
+                row = s.query(_DbCase).filter_by(name=name).one_or_none()
+                if row is not None:
+                    cfg = CaseConfig.from_dict(dict(row.config or {}))
+                    cfg.name = name
+                    return cfg
+        except Exception as e:
+            print(f"[case_config.load_case DB] zlyhal: {e}")
+    # JSON fallback
     p = _path(name)
     if os.path.exists(p):
         try:
@@ -130,8 +168,26 @@ def load_case(name: str = "default") -> CaseConfig:
 def save_case(cfg: CaseConfig) -> str:
     os.makedirs(CASES_DIR, exist_ok=True)
     p = _path(cfg.name)
+    # JSON write (vždy back-compat)
     with open(p, "w", encoding="utf-8") as fh:
         json.dump(cfg.to_dict(), fh, ensure_ascii=False, indent=2)
+    # DB dual write
+    if _db_available():
+        try:
+            from db import get_session
+            from db.models import Case as _DbCase
+            from datetime import datetime as _dt
+            now_iso = _dt.now().isoformat(timespec="seconds")
+            with get_session() as s:
+                row = s.query(_DbCase).filter_by(name=cfg.name).one_or_none()
+                if row:
+                    row.config = cfg.to_dict()
+                    row.updated_at = now_iso
+                else:
+                    s.add(_DbCase(name=cfg.name, config=cfg.to_dict(),
+                                    locked=False, updated_at=now_iso))
+        except Exception as e:
+            print(f"[case_config.save_case DB] zlyhal: {e}")
     return p
 
 
