@@ -210,10 +210,13 @@ os.makedirs("out", exist_ok=True)
 try:
     from auth.routes import register_auth_routes, AuthMiddleware
     from auth.policy import PolicyMiddleware
+    from auth.audit import AuditLogMiddleware
     register_auth_routes(app)
     # Pozor: middlewares aplikujú sa v reverznom poradí.
-    # Add Policy ako prvé → AuthMiddleware sa exec PRVÝ (set user from cookie),
-    # Policy potom dostane request.state.user a aplikuje matrix.
+    # Add Audit prvé → exec NAPOSLEDY (zachytí status_code aj user z policy).
+    # Policy ďalšie → check rolí
+    # Auth posledné → set request.state.user (exec PRVÝ)
+    app.add_middleware(AuditLogMiddleware)
     app.add_middleware(PolicyMiddleware)
     app.add_middleware(AuthMiddleware)
 except Exception as _e_auth:

@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from db import get_session
-from db.models import User, Profile, UserProfileAccess, AuthSession
+from db.models import User, Profile, UserProfileAccess, AuthSession, AuditLog
 from .passwords import hash_password
 from .permissions import require_role, ROLE_ADMIN, VALID_ROLES
 
@@ -68,6 +68,7 @@ def _admin_nav(user: dict, current: str = "users") -> str:
         f'display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">'
         f'<div><b style="color:#1F4E78">⚙ Admin</b> · '
         f'<a href="/admin/users" style="margin:0 8px;color:#1F4E78;text-decoration:none">Užívatelia</a> · '
+        f'<a href="/admin/audit_log" style="margin:0 8px;color:#1F4E78;text-decoration:none">Audit log</a> · '
         f'<a href="/" style="margin:0 8px;color:#666;text-decoration:none">← Späť na appku</a></div>'
         f'<div style="font-size:13px;color:#666">'
         f'{_html.escape(user.get("username", ""))} '
@@ -284,6 +285,44 @@ def register_admin_routes(app: FastAPI) -> None:
             f'<button class="btn" type="submit">Uložiť prístupy</button> '
             f'<a class="btn sec" href="/admin/users">← Späť</a></div>'
             f'</form></body></html>'
+        )
+        return HTMLResponse(body)
+
+    @app.get("/admin/audit_log", response_class=HTMLResponse)
+    @require_role(ROLE_ADMIN)
+    def admin_audit_log(request: Request, limit: int = 200):
+        user = getattr(request.state, "user", None) or {}
+        with get_session() as s:
+            rows_db = (s.query(AuditLog)
+                          .order_by(AuditLog.id.desc())
+                          .limit(min(max(limit, 1), 2000)).all())
+            user_lookup = {u.id: u.username for u in s.query(User).all()}
+            rows = ""
+            for r in rows_db:
+                uname = user_lookup.get(r.user_id, "—")
+                d = r.details or {}
+                status = d.get("status", "?")
+                method = d.get("method", "?")
+                status_color = "#2E7D32" if 200 <= int(status or 0) < 400 else "#C62828"
+                rows += (
+                    f'<tr>'
+                    f'<td class="muted">{_html.escape(r.ts or "")}</td>'
+                    f'<td><b>{_html.escape(uname)}</b></td>'
+                    f'<td><span style="font-family:monospace;font-size:12px">'
+                    f'{_html.escape(method)} {_html.escape(d.get("path",""))}</span></td>'
+                    f'<td style="color:{status_color};font-weight:600">{status}</td>'
+                    f'<td class="muted">{_html.escape(r.ip_address or "—")}</td>'
+                    f'</tr>'
+                )
+        body = (
+            f'<!doctype html><html lang="sk"><head><meta charset="utf-8">'
+            f'<title>Admin · Audit log</title>{_ADMIN_CSS}</head><body>'
+            f'{_admin_nav(user)}'
+            f'<div class="bar"><h1>📋 Audit log</h1>'
+            f'<span class="muted">posledných {min(limit, 2000)} záznamov</span></div>'
+            f'<table class="tbl-comp"><tr><th>Čas</th><th>User</th><th>Akcia</th>'
+            f'<th>Status</th><th>IP</th></tr>{rows}</table>'
+            f'</body></html>'
         )
         return HTMLResponse(body)
 
