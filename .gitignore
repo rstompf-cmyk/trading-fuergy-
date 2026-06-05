@@ -87,6 +87,7 @@ docker-compose.override.yml
 *.ipynb
 node_modules/
 data/
+data-dev/
 backups/
 data.OLD/
 data.pre-restore.*/

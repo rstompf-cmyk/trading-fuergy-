@@ -28,6 +28,9 @@ env/
 out/
 db/data/*
 !db/data/.gitkeep
+data/
+data-dev/
+backups/
 .env
 .env.local
 *.sqlite

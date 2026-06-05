@@ -243,6 +243,76 @@ Move-Item data data.OLD
 
 ---
 
+## Dev environment paralelne s produkciou (port 8001)
+
+Pre testovanie nových funkcií **bez rizika** že položíš produkciu, beží na rovnakom servere druhý container `trading-fuergy-dev` na porte **8001**, z `dev` git branch, so samostatnými dátami v `data-dev/`. Prod beží nedotknutý na 8000.
+
+### Prvé spustenie dev (jednorazovo)
+
+V `C:\Users\radoslav.stompf\Documents\_FUERGY\TradingFuergy`:
+
+```powershell
+.\scripts\setup_dev_windows.ps1
+```
+
+Script automaticky: vytvorí `data-dev/`, pridá `DEV_PORT=8001` do `.env` (ak ešte nie je), buildne dev image, spustí container, spustí `alembic upgrade head` + seed admin, čaká na healthy.
+
+Po dokončení otvor `http://localhost:8001` (alebo `http://<server>:8001` z LAN). Login `admin/admin`.
+
+### Workflow nového feature
+
+```powershell
+# Na serveri:
+cd C:\Users\radoslav.stompf\Documents\_FUERGY\TradingFuergy
+git fetch origin
+git checkout dev
+git pull origin dev
+docker compose up -d --build trading-fuergy-dev
+docker compose logs -f trading-fuergy-dev
+```
+
+Po overení že feature funguje na 8001, **promote do produkcie**:
+
+```powershell
+git checkout refactor-v2
+git merge --no-ff dev
+git push origin refactor-v2
+docker compose up -d --build trading-fuergy     # prod rebuild
+```
+
+### Užitočné dev príkazy
+
+| Operácia | Príkaz |
+|---|---|
+| Status oboch services | `docker compose ps` |
+| Sleduj len dev logy | `docker compose logs -f trading-fuergy-dev` |
+| Reštart dev (bez build) | `docker compose restart trading-fuergy-dev` |
+| Zastav dev (prod ostáva) | `docker compose stop trading-fuergy-dev` |
+| Komplet reset dev (vymaže `data-dev/`) | `docker compose down trading-fuergy-dev; Remove-Item data-dev -Recurse; .\scripts\setup_dev_windows.ps1` |
+
+---
+
+## Stála prevádzka — autostart pri reboot servera
+
+Aby Trading Fuergy bežal **24/7 aj po reboote Windows servera**, treba aby Docker Desktop sa spúšťal automaticky pri prihlásení používateľa:
+
+1. Otvor **Docker Desktop**
+2. Klik na **ozubené koliesko** (Settings) vpravo hore
+3. Sekcia **General**:
+   - Zaškrtni **"Start Docker Desktop when you sign in to your computer"**
+   - Zaškrtni **"Open Docker Dashboard at startup"** (voliteľné — len UI)
+4. **Apply & Restart**
+
+Container `trading-fuergy` má v `docker-compose.yml` `restart: unless-stopped` → po štarte Docker Desktop sa appka rozbehne sama. Dev container (`trading-fuergy-dev`) je v profile `dev` a treba ho explicitne spustiť po reboote ak si želáš:
+
+```powershell
+docker compose up -d trading-fuergy-dev
+```
+
+**Windows ako server**: aby Docker bežal aj keď nie si fyzicky prihlásený, používateľ `radoslav.stompf` musí mať aktívnu session (nezamknutú). Pre úplne headless prevádzku zváž **Windows Server 2019+ s Docker Engine namiesto Docker Desktop**, alebo Linux VPS s Docker.
+
+---
+
 ## Bezpečnostné odporúčania
 
 1. **Hneď zmen admin heslo** po prvom login (Krok 7).

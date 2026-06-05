@@ -69,3 +69,62 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+
+  # ===========================================================================
+  # DEV environment — paralelne s prod, port 8001, samostatne data-dev/
+  # ---------------------------------------------------------------------------
+  # Zdielany image build, ale samostatne data + DB. Pri vyvoji:
+  #   git checkout dev
+  #   git pull
+  #   docker compose up -d --build trading-fuergy-dev
+  # Prod bezi nedotknuty. Po overeni dev -> merge do refactor-v2 -> rebuild prod.
+  # ===========================================================================
+  trading-fuergy-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: trading-fuergy:dev
+    container_name: trading-fuergy-dev
+    restart: unless-stopped
+
+    ports:
+      - "${DEV_PORT:-8001}:8000"
+
+    # Samostatne bind mounty — dev DB/plany/cookies nezdielaju s prod
+    volumes:
+      - ./data-dev/db:/app/db/data
+      - ./data-dev/out:/app/out
+      - ./data-dev/okte_credentials:/app/okte_credentials
+      - ./data-dev/realio_cookies.json:/app/realio_cookies.json
+      - ./data-dev/seps_cookies.json:/app/seps_cookies.json
+      - ./data-dev/historian_cookies.json:/app/historian_cookies.json
+
+    env_file:
+      - ./.env
+
+    environment:
+      USE_DB: "1"
+      AUTH_REQUIRED: "1"
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8000"
+      PORT: "8000"
+      # Dev flag pre prip. UI banner ze ide o dev (appka moze citat ENV=dev)
+      ENV: "dev"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8000/me"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+    # Default: dev sa nestartuje automaticky pri `docker compose up`
+    # Spustenie len: `docker compose up -d trading-fuergy-dev`
+    profiles:
+      - dev
