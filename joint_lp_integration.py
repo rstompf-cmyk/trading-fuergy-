@@ -228,11 +228,30 @@ def optimize_day_or_joint(
     else:
         joint_flags = normalize_flags(joint_flags)
 
+    # ── Toggle = INPUT FILTER ──────────────────────────────────────────────
+    # Sémantika: zaškrtnutie BAT/FTV/LOAD určuje ČO sa zahŕňa do optimalizácie.
+    # Ak je toggle vypnutý, ten zdroj LP vôbec nedostane (vynulujeme ho na vstupe).
+    # Tým LP nemôže napríklad obísť trade_ftv=False cez PV → batt → grid buffer
+    # (lebo LP nemá PV vôbec). Pôvodné PV/load zostanú v zobrazení tabuľky.
+    pv_arr_real = np.asarray(pv_kwh, float)
+    load_arr_real = (np.asarray(load_kwh, float).reshape(-1)[:len(pv_arr_real)]
+                     if load_kwh is not None else None)
+
+    pv_for_lp = pv_arr_real.copy()
+    load_for_lp = load_arr_real.copy() if load_arr_real is not None else None
+
+    if joint_flags.get("enabled"):
+        if not joint_flags.get("trade_ftv", True):
+            pv_for_lp = np.zeros_like(pv_for_lp)
+        if not joint_flags.get("trade_load", True):
+            load_for_lp = np.zeros_like(pv_for_lp) if load_for_lp is None else np.zeros_like(load_for_lp)
+    # Joint LP vypnutý → klasický optimizer používa pôvodné vstupy (toggle len pre Joint LP)
+
     # Fallback na pôvodný optimize_day ak joint LP nie je zapnutý
     if not joint_flags.get("enabled"):
         from optimizer import optimize_day as _od
         return _od(
-            pv_kwh, price_eur,
+            pv_arr_real, price_eur,
             batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
             soc_min_pct=soc_min_pct, soc_max_pct=soc_max_pct, soc_init_pct=soc_init_pct,
             grid_kw=grid_kw, grid_kw_export=grid_kw_export, grid_kw_import=grid_kw_import,
@@ -244,18 +263,18 @@ def optimize_day_or_joint(
             max_cycles=max_cycles, batt_kw_override=batt_kw_override,
             block_planned_discharge=block_planned_discharge,
             settle_price=settle_price,
-            load_kwh=load_kwh,
+            load_kwh=load_arr_real,
             max_export_kwh_day=max_export_kwh_day, max_import_kwh_day=max_import_kwh_day,
             dt=dt,
         )
 
     # Joint LP path
     import joint_lp as _jlp
-    pv = np.asarray(pv_kwh, float)
+    # LP dostane už ZFILTROVANÉ pv_for_lp / load_for_lp (toggle vypnutý → 0)
+    pv = pv_for_lp
     pr = np.asarray(price_eur, float)
     T = len(pv)
-    load = (np.asarray(load_kwh, float).reshape(-1)[:T]
-             if load_kwh is not None else np.zeros(T))
+    load = (load_for_lp if load_for_lp is not None else np.zeros(T))
     if load.size < T:
         load = np.concatenate([load, np.zeros(T - load.size)])
 
@@ -327,8 +346,11 @@ def optimize_day_or_joint(
         summary["_joint_lp_fallback"] = True
         return sch, summary
 
+    # Pre sched display použijeme PÔVODNÉ PV (pv_arr_real) — užívateľ vidí
+    # skutočnú FTV výrobu v stĺpci, aj keď LP počítal s nulou. Tým je tabuľka
+    # informatívna: vidíš čo FTV vyrobilo aj keď ho LP "ignoroval" kvôli toggle.
     return _joint_to_optimize_day_format(
-        res, pv, pr, batt_kwh, dt, grid_fee, cycle_cost,
+        res, pv_arr_real, pr, batt_kwh, dt, grid_fee, cycle_cost,
         settle_price=settle_price,
         max_export_kwh_day=max_export_kwh_day,
         max_import_kwh_day=max_import_kwh_day,
