@@ -90,6 +90,7 @@ def _joint_to_optimize_day_format(
         settle_price: Optional[np.ndarray] = None,
         max_export_kwh_day: Optional[float] = None,
         max_import_kwh_day: Optional[float] = None,
+        load_kwh: Optional[np.ndarray] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Prevedie výstup joint_lp na (DataFrame sch, dict summary) formát.
 
@@ -118,6 +119,13 @@ def _joint_to_optimize_day_format(
         order = np.round(grid / 1000.0, 3)
     spr = price if settle_price is None else np.asarray(settle_price, float)
 
+    # Spotreba (informačne) — parita s optimizer.optimize_day výstupom (sch["load_kwh"])
+    if load_kwh is not None:
+        _load_arr = np.asarray(load_kwh, float).reshape(-1)[:T]
+        if _load_arr.size < T:
+            _load_arr = np.concatenate([_load_arr, np.zeros(T - _load_arr.size)])
+    else:
+        _load_arr = np.zeros(T, dtype=float)
     sch = pd.DataFrame({
         "hour": range(T),
         "pv_kwh": np.round(pv, 1),
@@ -132,6 +140,7 @@ def _joint_to_optimize_day_format(
         "_export_kwh": np.round(ex, 1),
         "_import_kwh": np.round(im, 1),
         "soc_kwh": np.round(soc_kwh, 1),
+        "load_kwh": np.round(_load_arr, 2),
     })
 
     econ = joint_res.get("economics", {})
@@ -356,6 +365,7 @@ def optimize_day_or_joint(
         settle_price=settle_price,
         max_export_kwh_day=max_export_kwh_day,
         max_import_kwh_day=max_import_kwh_day,
+        load_kwh=load_arr_real,
     )
 
 

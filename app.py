@@ -451,8 +451,20 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                 load24 = None
         _mex = float(fp.get("max_export_kwh_day", 0) or 0)
         _mim = float(fp.get("max_import_kwh_day", 0) or 0)
-        sch, summ = optimize_day(
-            pv_arr, decision_price, settle_price=price_arr,
+        # Joint LP flags z aktívneho profilu (parita s /plan handlerom — fix bug B).
+        # Bez tohto by batch volal čistý optimize_day a výsledky by sa líšili od single /plan.
+        from joint_lp_integration import (optimize_day_or_joint as _od_or_joint_batch,
+                                          get_flags_from_profile as _gjlp_batch)
+        try:
+            import plan_store as _ps_jlb
+            _jb_prof = _ps_jlb.resolve_profile() or "default"
+        except Exception:
+            _jb_prof = "default"
+        _joint_flags_b = _gjlp_batch(_jb_prof if _jb_prof != "default" else None)
+        sch, summ = _od_or_joint_batch(
+            pv_arr, decision_price,
+            joint_flags=_joint_flags_b, profile=_jb_prof,
+            settle_price=price_arr,
             batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])), batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
             eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
             soc_min_pct=float(fp.get("soc_min", DEF["soc_min"])),
@@ -519,7 +531,17 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                 load96 = None
         _mex15 = float(fp.get("max_export_kwh_day", 0) or 0)
         _mim15 = float(fp.get("max_import_kwh_day", 0) or 0)
-        sch, summ = optimize_day(pv15[:n], price15[:n], dt=0.25,
+        # Joint LP flags z aktívneho profilu (parita s /dentrh handlerom — fix bug B 15-min)
+        from joint_lp_integration import (optimize_day_or_joint as _od_or_joint_batch15,
+                                          get_flags_from_profile as _gjlp_batch15)
+        try:
+            import plan_store as _ps_jlb15
+            _jb_prof15 = _ps_jlb15.resolve_profile() or "default"
+        except Exception:
+            _jb_prof15 = "default"
+        _joint_flags_b15 = _gjlp_batch15(_jb_prof15 if _jb_prof15 != "default" else None)
+        sch, summ = _od_or_joint_batch15(pv15[:n], price15[:n], dt=0.25,
+                                  joint_flags=_joint_flags_b15, profile=_jb_prof15,
                                   batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])),
                                   batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
                                   eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
