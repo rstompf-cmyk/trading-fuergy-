@@ -1,0 +1,15 @@
+{# Light wrapper pre legacy f-string stránky.
+   Body je raw HTML (obvykle s vlastným <style>, <script>, Chart.js) — nech sa renderuje cez |safe.
+   Získa: base.html (nav, app.css, app_name v <title>, user chip, logout).
+   Hlavička `nav` block prichádza z components/nav.html. #}
+{% extends "base.html" %}
+{% block title %}{% if legacy_title %}{{ legacy_title }} — {% endif %}{{ app_name }}{% endblock %}
+{% block head_extra %}
+  {% if legacy_head_extra %}{{ legacy_head_extra|safe }}{% endif %}
+{% endblock %}
+{% block content %}
+  {{ legacy_body|safe }}
+{% endblock %}
+{% block scripts %}
+  {% if legacy_scripts %}{{ legacy_scripts|safe }}{% endif %}
+{% endblock %}

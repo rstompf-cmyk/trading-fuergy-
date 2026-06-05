@@ -92,4 +92,26 @@ def render(request: Optional[Request], template_name: str,
     return HTMLResponse(body, status_code=status_code)
 
 
-__all__ = ["render", "env"]
+def render_legacy_body(request: Optional[Request], title: str,
+                        body_html: str, head_extra: str = "",
+                        scripts: str = "") -> HTMLResponse:
+    """Wrapper pre legacy f-string stránky — vloží raw HTML body do base.html.
+
+    Použitie v legacy handleroch:
+        return render_legacy_body(request, "OKTE VDT", body_html)
+
+    Body sa vloží cez |safe, takže môže obsahovať <style>, <script>, Chart.js.
+    Stránka získa: navigáciu, /static/css/app.css link, Trading Fuergy v <title>,
+    user chip s logoutom (auth-conditional).
+
+    `head_extra` sa vloží do <head> bloku (napr. dodatočné CDN linky).
+    `scripts` sa vloží na koniec body (napr. inicializačné JS).
+    """
+    return render(request, "pages/_legacy_body.html",
+                   legacy_title=title,
+                   legacy_body=body_html,
+                   legacy_head_extra=head_extra,
+                   legacy_scripts=scripts)
+
+
+__all__ = ["render", "render_legacy_body", "env"]

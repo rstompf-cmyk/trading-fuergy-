@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse, FileResponse, Response, StreamingRes
 import data_sources as ds
 import livesim as lsim
 import case_config as cc
+from ui.templates import render_legacy_body
 from price_model import PriceModel, FEATURES
 from optimizer import optimize_day
 from report import build_plan_excel
@@ -7273,7 +7274,7 @@ def vdt_live_advisor_page(
             except Exception:
                 pass
             body += "</div></body></html>"
-            return f"<!doctype html><html><head><meta charset='utf-8'><title>VDT Live Advisor</title></head><body>{body}"
+            return render_legacy_body(None, "VDT Live Advisor", body)
 
     # Hlavná karta — ČO TERAZ
     cur = res["current"]
@@ -8042,7 +8043,7 @@ def vdt_d1_page(date: str = "", profile: str = ""):
             f" alebo <a href='/plan?date={date_obj.isoformat()}' style='color:#1F4E78'>Plán D-1 (hodinový)</a>."
             f"</span></div></div></body></html>"
         )
-        return f"<!doctype html><html><head><meta charset='utf-8'><title>VDT D-1</title></head><body>{body}"
+        return render_legacy_body(None, "VDT D-1", body)
 
     # Convert Dict[str, list] na list of dicts pre zobrazenie
     if isinstance(schedule, dict):
@@ -8214,8 +8215,7 @@ def vdt_d1_page(date: str = "", profile: str = ""):
         f"</div>"
     )
 
-    return ("<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
-            "<title>VDT D-1</title></head><body>" + body + "</body></html>")
+    return render_legacy_body(None, "VDT D-1", body)
 
 
 @app.get("/vdt/backtest", response_class=HTMLResponse)
@@ -8349,7 +8349,7 @@ def vdt_backtest_page(
             "(IDM/DAM) a sčíta výsledky.</p>"
             "</div></body></html>"
         )
-        return f"<!doctype html><html><head><meta charset='utf-8'><title>VDT Backtest</title></head><body>{body}"
+        return render_legacy_body(None, "VDT Backtest", body)
 
     # Loop per deň
     days_results = []
@@ -8656,7 +8656,7 @@ def vdt_simulator_page(
             "aby maximalizoval profit pri zadaných obmedzeniach.</p>"
             "</div></body></html>"
         )
-        return f"<!doctype html><html><head><meta charset='utf-8'><title>VDT Simulátor</title></head><body>{body}"
+        return render_legacy_body(None, "VDT Simulátor", body)
 
     # Fetch snapshot + orderbook
     today = _dt.date.today()
@@ -9554,7 +9554,7 @@ def vdt_wsdl_page():
         body += f"<details><summary style='cursor:pointer'>Zobraziť celý WSDL ({len(wsdl)} znakov)</summary>"
         body += f"<pre style='background:#f0f0f0;padding:10px;font-size:10px;max-height:600px;overflow:auto'>{_html.escape(wsdl)}</pre></details>"
     body += "</div>"
-    return f"<!doctype html><html><head><meta charset='utf-8'><title>VDT WSDL</title></head><body>{body}</body></html>"
+    return render_legacy_body(None, "VDT WSDL", body)
 
 
 @app.get("/vdt/zco_backtest", response_class=HTMLResponse)
@@ -10475,11 +10475,11 @@ def vdt_test_orderbook_page(duration: int = 0):
 
         f"</div>"
     )
-    return f"<!doctype html><html><head><meta charset='utf-8'><title>VDT debug</title></head><body>{body}</body></html>"
+    return render_legacy_body(None, "VDT debug", body)
 
 
 @app.get("/vdt", response_class=HTMLResponse)
-def vdt_page():
+def vdt_page(request: Request):
     """OKTE ISOT VDT (intraday) — READ-ONLY view na participant účet.
 
     4 sekcie: status, aktívne príkazy, vlastné obchody, pozícia + balance.
@@ -10618,7 +10618,8 @@ def vdt_page():
         f"{sec_h2h}"
         f"</div>"
     )
-    return f"<!doctype html><html lang='sk'><head><meta charset='utf-8'><title>OKTE VDT</title></head><body>{body}</body></html>"
+    from ui.templates import render_legacy_body
+    return render_legacy_body(request, "OKTE VDT", body)
 
 
 @app.post("/vdt/inspect_cert", response_class=HTMLResponse)
@@ -10651,7 +10652,7 @@ def vdt_inspect_cert_endpoint():
         f"<a href='/vdt' style='padding:8px 16px;background:#1F4E78;color:#fff;text-decoration:none;border-radius:6px'>← Späť</a></p>"
         f"</div>"
     )
-    return f"<!doctype html><html lang='sk'><head><meta charset='utf-8'><title>OKTE cert</title></head><body>{body}</body></html>"
+    return render_legacy_body(None, "OKTE cert", body)
 
 
 @app.post("/vdt/discover", response_class=HTMLResponse)
@@ -10726,7 +10727,7 @@ def vdt_discover_endpoint():
         f"text-decoration:none;border-radius:6px'>← Späť</a></p>"
         f"</div>"
     )
-    return f"<!doctype html><html lang='sk'><head><meta charset='utf-8'><title>OKTE discover</title></head><body>{body}</body></html>"
+    return render_legacy_body(None, "OKTE discover", body)
 
 
 @app.post("/vdt/probe", response_class=HTMLResponse)
@@ -10754,7 +10755,7 @@ def vdt_probe_endpoint():
         f"background:#1F4E78;color:#fff;text-decoration:none;border-radius:6px'>← Späť na /vdt</a>"
         f"</div>"
     )
-    return f"<!doctype html><html lang='sk'><head><meta charset='utf-8'><title>OKTE probe</title></head><body>{body}</body></html>"
+    return render_legacy_body(None, "OKTE probe", body)
 
 
 @app.get("/realio", response_class=HTMLResponse)
@@ -11327,7 +11328,7 @@ def realio_batt_plan_export_preview(day: str = "", profile: str = ""):
         f"</form>"
         f"</div>"
     )
-    return f"<!doctype html><html lang='sk'><head><meta charset='utf-8'><title>Export batt plán 15-min</title></head><body>{body}</body></html>"
+    return render_legacy_body(None, "Export batt plán 15-min", body)
 
 
 @app.post("/realio/batt_plan_export/submit", response_class=HTMLResponse)
