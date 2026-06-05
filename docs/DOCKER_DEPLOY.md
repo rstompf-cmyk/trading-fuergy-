@@ -13,7 +13,7 @@ Windows server (LAN)
 │       ├── Playwright Chromium (SEPS/historian refresh)
 │       └── APScheduler (denné fetche, D-1 plán)
 │
-└── Host bind mounts → C:\TradingFuergy\
+└── Host bind mounts → C:\Users\radoslav.stompf\Documents\_FUERGY\TradingFuergy\
     ├── data/db/                    # SQLite databáza
     ├── data/out/                   # plány, profily, livesim CSV, cache
     ├── data/okte_credentials/      # OKTE mTLS cert + kľúč
@@ -60,9 +60,9 @@ Skopíruj výstup `.pub` súboru do GitHub → Settings → SSH and GPG keys →
 
 ```powershell
 # Z PowerShell ako Administrator
-cd C:\
+cd C:\Users\radoslav.stompf\Documents\_FUERGY
 git clone --branch refactor-v2 git@github.com:fuergy/trading-fuergy.git TradingFuergy
-cd C:\TradingFuergy
+cd TradingFuergy
 .\scripts\setup_windows.ps1
 ```
 
@@ -80,7 +80,7 @@ Ak používaš OKTE VDT (SK trh):
 
 ```powershell
 # Skopíruj .p12 cert do Windows
-Copy-Item D:\stiahnute\okte_cert.p12 C:\TradingFuergy\data\okte_credentials\
+Copy-Item D:\stiahnute\okte_cert.p12 C:\Users\radoslav.stompf\Documents\_FUERGY\TradingFuergy\data\okte_credentials\
 
 # Spusti install_okte_cert.sh vnútri containeru
 docker compose exec trading-fuergy bash
@@ -117,7 +117,7 @@ git push origin refactor-v2
 ### Na Windows server
 
 ```powershell
-cd C:\TradingFuergy
+cd C:\Users\radoslav.stompf\Documents\_FUERGY\TradingFuergy
 git pull origin refactor-v2
 docker compose up -d --build
 # Sleduj health check:
@@ -174,7 +174,7 @@ V `scripts/backup.sh` je skript ktorý vytvorí tar.gz snapshot dát:
 
 ```bash
 # Z WSL bash:
-cd /mnt/c/TradingFuergy
+cd /mnt/c/Users/radoslav.stompf/Documents/_FUERGY/TradingFuergy
 ./scripts/backup.sh
 # Vytvorí: backups/trading-fuergy_YYYYMMDD_HHMMSS.tar.gz
 ```
@@ -185,7 +185,7 @@ cd /mnt/c/TradingFuergy
 2. Trigger: Daily at 03:00
 3. Action: Start a program
    - Program: `C:\Windows\System32\wsl.exe`
-   - Arguments: `bash -c "cd /mnt/c/TradingFuergy && ./scripts/backup.sh"`
+   - Arguments: `bash -c "cd /mnt/c/Users/radoslav.stompf/Documents/_FUERGY/TradingFuergy && ./scripts/backup.sh"`
 
 Backup obsahuje:
 - SQLite databáza (`data/db/app.db`)
@@ -263,7 +263,7 @@ Container má jediný bežiaci proces, ale ak si robil `docker compose down` bru
 ```powershell
 docker compose down
 # Skontroluj že SQLite WAL nie je rozbity:
-wsl bash -c "cd /mnt/c/TradingFuergy/data/db && sqlite3 app.db 'PRAGMA integrity_check;'"
+wsl bash -c "cd /mnt/c/Users/radoslav.stompf/Documents/_FUERGY/TradingFuergy/data/db && sqlite3 app.db 'PRAGMA integrity_check;'"
 docker compose up -d
 ```
 

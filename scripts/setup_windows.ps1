@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param(
     [string]$RepoUrl = "https://github.com/fuergy/trading-fuergy.git",
-    [string]$InstallDir = "C:\TradingFuergy",
+    [string]$InstallDir = "C:\Users\radoslav.stompf\Documents\_FUERGY\TradingFuergy",
     [string]$Branch = "refactor-v2"
 )
 
