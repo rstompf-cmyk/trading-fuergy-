@@ -104,8 +104,18 @@ def _joint_to_optimize_day_format(
     cu = np.asarray(joint_res["cu_kwh"])
     soc_kwh = np.asarray(joint_res["soc_kwh"])
 
+    # grid_kwh = fyzický grid balance (zachované pre downstream — livesim, VDT chart, settlement)
     grid = ex - im
-    order = np.round(grid / 1000.0, 3)
+
+    # order_mwh = stĺpec "Obchod MWh" — IBA toggle-aktívne streams (decomposition fix #513).
+    # Tým pri trade_ftv=False FTV export sa nezobrazí ako obchod (lebo je len intern cez batt),
+    # pri trade_load=False import na load sa nezobrazí (lebo je iba interný flow), atď.
+    # DIST je iba v účelovke — nikdy nie v obchode.
+    if "obchod_kwh" in joint_res:
+        order = np.round(np.asarray(joint_res["obchod_kwh"]) / 1000.0, 3)
+    else:
+        # Fallback ak je starý joint_lp bez decomposition
+        order = np.round(grid / 1000.0, 3)
     spr = price if settle_price is None else np.asarray(settle_price, float)
 
     sch = pd.DataFrame({
