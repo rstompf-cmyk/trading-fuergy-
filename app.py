@@ -7205,8 +7205,8 @@ def vdt_live_advisor_page(
             profile=active_profile,
         )
     except Exception as e:
-        body += f"<p style='color:#C0392B'>Advisor zlyhal: {_html.escape(str(e))}</p></div></body></html>"
-        return f"<!doctype html><html><head><meta charset='utf-8'>{body}"
+        body += f"<p style='color:#C0392B'>Advisor zlyhal: {_html.escape(str(e))}</p></div>"
+        return render_legacy_body(None, "VDT Live Advisor", body)
 
     if not res.get("ok"):
         soc = res.get("soc", {})
@@ -7918,9 +7918,8 @@ def vdt_live_advisor_page(
         f"</div>"
     )
 
-    return ("<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
-            "<meta http-equiv='refresh' content='60'>"
-            "<title>VDT Live Advisor</title></head><body>" + body + "</body></html>")
+    return render_legacy_body(None, "VDT Live Advisor", body,
+                                head_extra="<meta http-equiv='refresh' content='60'>")
 
 
 @app.get("/vdt/d1", response_class=HTMLResponse)
@@ -8654,8 +8653,8 @@ def vdt_simulator_page(
     try:
         snapshot = _arb.get_market_snapshot(today, days_ahead=1, from_current_slot=True)
     except Exception as e:
-        body += f"<p style='color:#C0392B'>get_market_snapshot zlyhal: {_html.escape(str(e))}</p></div></body></html>"
-        return f"<!doctype html><html><head><meta charset='utf-8'>{body}"
+        body += f"<p style='color:#C0392B'>get_market_snapshot zlyhal: {_html.escape(str(e))}</p></div>"
+        return render_legacy_body(None, "VDT Simulátor", body)
 
     ob_status = "(nedostupné)"
     if use_orderbook:
@@ -8686,16 +8685,16 @@ def vdt_simulator_page(
             future_only=True,
         )
     except Exception as e:
-        body += f"<p style='color:#C0392B'>Optimizer zlyhal: {_html.escape(str(e))}</p></div></body></html>"
-        return f"<!doctype html><html><head><meta charset='utf-8'>{body}"
+        body += f"<p style='color:#C0392B'>Optimizer zlyhal: {_html.escape(str(e))}</p></div>"
+        return render_legacy_body(None, "VDT Simulátor", body)
 
     if not result.get("ok"):
         body += (
             f"<div style='background:#ffe7e7;border-left:4px solid #C0392B;padding:14px;border-radius:6px'>"
             f"<b>Simulácia zlyhala:</b> {_html.escape(str(result.get('error','?')))}</div>"
-            "</div></body></html>"
+            "</div>"
         )
-        return f"<!doctype html><html><head><meta charset='utf-8'>{body}"
+        return render_legacy_body(None, "VDT Simulátor", body)
 
     # Sumár
     s = result["summary"]
@@ -9662,8 +9661,8 @@ def vdt_zco_backtest_page(date_from: str = "", date_to: str = "",
     try:
         res = _zbt.run_backtest(from_d, to_d, profile=profile, grid_fee=grid_fee)
     except Exception as e:
-        body += f"<p style='color:#C0392B'>Backtest zlyhal: {_html.escape(str(e))}</p></div></body></html>"
-        return f"<!doctype html><html><head><meta charset='utf-8'>{body}"
+        body += f"<p style='color:#C0392B'>Backtest zlyhal: {_html.escape(str(e))}</p></div>"
+        return render_legacy_body(None, "ZCO Backtest", body)
 
     if not res.get("ok"):
         body += (
@@ -9672,9 +9671,9 @@ def vdt_zco_backtest_page(date_from: str = "", date_to: str = "",
             f"<b>⚠ {_html.escape(str(res.get('error','?')))}</b><br>"
             f"<span style='color:#666;font-size:12px'>"
             f"Potrebujem aspoň jeden deň s plánom (z /dentrh alebo /plan) + ZCO/VDT cenami v historian CSV."
-            f"</span></div></div></body></html>"
+            f"</span></div></div>"
         )
-        return f"<!doctype html><html><head><meta charset='utf-8'>{body}"
+        return render_legacy_body(None, "ZCO Backtest", body)
 
     summary = res["summary"]
     days = res["days"]
