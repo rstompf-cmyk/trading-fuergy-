@@ -964,18 +964,44 @@ def profiles_save(name: str = Form(...), note: str = Form(default=""),
 
 @app.post("/profiles/apply", response_class=HTMLResponse)
 def profiles_apply(name: str = Form(...)):
-    """Aplikuje profile: prepíše ui_settings.plan/dentrh/rt + plan_overrides template."""
+    """Aplikuje profile: prepíše ui_settings.plan/dentrh/rt + plan_overrides template.
+    Plus auto-detect: ak profil má v plan_store iný kind (15-min vs hodinový),
+    automaticky nastaví ui_settings.livesim.case aby livesim STRICT nepadal."""
     if pr is None:
         return "<p>profiles modul nedostupný.</p>"
     try:
         summary = pr.apply_to_ui_and_overrides(name, _ui_save, po)
     except FileNotFoundError as e:
         return f"<p>Profile <b>{name}</b> nenájdený: {e}</p><a href='/profiles'>← Späť</a>"
+
+    # Auto-detect: zisti ktorý kind plánov profil najviac používa (dentrh vs plan)
+    # a nastav ui_settings.livesim.case zhodne — tým sa user vyhne STRICT chybe
+    # keď prepne profil ktorý plánuje len 15-min, alebo naopak.
+    livesim_case_changed = ""
+    try:
+        if ps is not None:
+            plans_all = ps.list_plans(profile=name) or []
+            n_dentrh = sum(1 for p in plans_all if (p.get("kind") or "") == "dentrh")
+            n_plan = sum(1 for p in plans_all if (p.get("kind") or "") == "plan")
+            # Preferuj kind ktorý má aspoň nejaké plány; pri rovnosti uprednosti dentrh (mode='real' default)
+            if n_dentrh > 0 or n_plan > 0:
+                target_case = "dt_15min" if n_dentrh >= n_plan else "plan_d1"
+                cur_ls = _ui_load("livesim", {"case": "plan_d1", "start": "", "to": "",
+                                                 "rt_kdis": 1.5, "rt_kchg": 2.5, "use_rt": True})
+                if cur_ls.get("case") != target_case:
+                    cur_ls["case"] = target_case
+                    _ui_save("livesim", cur_ls)
+                    livesim_case_changed = (
+                        f" · livesim case → <b>{target_case}</b> "
+                        f"(profil má {n_dentrh}× dentrh, {n_plan}× plan)")
+    except Exception as _ae:
+        print(f"[profiles_apply] auto-detect livesim case zlyhal: {_ae}")
+
     _clear_livesim_logs()           # iný profil = iné nastavenia + iná šablóna → fresh log
     upd = ", ".join(summary.get("updated", []))
     return (f"<!doctype html><html><head><meta charset='utf-8'>"
              f"<meta http-equiv='refresh' content='1;url=/profiles'></head><body>"
-             f"<p>✓ Profile <b>{name}</b> aplikovaný. Aktualizované: <code>{upd}</code>. "
+             f"<p>✓ Profile <b>{name}</b> aplikovaný. Aktualizované: <code>{upd}</code>{livesim_case_changed}. "
              f"Livesim log vyresetovaný. Redirect na /profiles…</p></body></html>")
 
 
