@@ -12108,17 +12108,17 @@ a{{color:#1F4E78}}</style></head><body>
         _hidden += "<input type='hidden' name='block_neg_import' value='1'>"
     if npd:
         _hidden += "<input type='hidden' name='no_planned_discharge' value='1'>"
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Plán {date}</title>
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:980px;margin:24px auto;padding:0 16px;color:#222}}
-h1{{color:#1F4E78}} table{{border-collapse:collapse;width:100%;font-size:14px}}
-th,td{{border:1px solid #e3e3e3;padding:5px 8px;text-align:right}} th{{background:#1F4E78;color:#fff}}
-td:first-child{{text-align:center}} a.btn,a.btn:visited{{display:inline-block;background:#2E7D32;color:#fff;
-padding:10px 18px;border-radius:8px;text-decoration:none;margin:12px 0}}
-button.mb{{background:#1F4E78;color:#fff;border:0;padding:8px 14px;border-radius:7px;cursor:pointer;margin:0 4px 0 0;font-size:13px}}
-button.mb.s{{background:#2E7D32}} button.mb.w{{background:#8a8a8a}} button.mb.x{{background:#aa3a3a}}
-input[type=number]{{border:1px solid #ddd;border-radius:4px;padding:2px 4px}}</style></head><body>
+    body = f"""<style>
+table{{border-collapse:collapse;width:100%;font-size:14px}}
+table th,table td{{border:1px solid #e3e3e3;padding:5px 8px;text-align:right}}
+table th{{background:var(--primary);color:#fff}}
+table td:first-child{{text-align:center}}
+a.btn,a.btn:visited{{display:inline-block;background:var(--success);color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;margin:12px 0}}
+button.mb{{background:var(--primary);color:#fff;border:0;padding:8px 14px;border-radius:7px;cursor:pointer;margin:0 4px 0 0;font-size:13px}}
+button.mb.s{{background:var(--success)}} button.mb.w{{background:#8a8a8a}} button.mb.x{{background:#aa3a3a}}
+input[type=number]{{border:1px solid #ddd;border-radius:4px;padding:2px 4px}}
+</style>
 <h1>Plán D-1 — {date}</h1>
-{_nav("/")}
 <div style="display:flex;gap:12px;margin:12px 0">{cards}</div>
 {joint_lp_card}
 <p style="background:#f8f9fb;border-radius:8px;padding:8px 12px;font-size:14px;margin:8px 0">{info}</p>
@@ -12136,7 +12136,8 @@ input[type=number]{{border:1px solid #ddd;border-radius:4px;padding:2px 4px}}</s
   Šablóna platí pre celý aktívny profil — pre všetky dni rovnako.
 </p>
 <p style="color:#666;font-size:13px">Batéria: + vybíja / − nabíja &nbsp;•&nbsp; Sieť: + predaj / − nákup &nbsp;•&nbsp; Žltý podklad v stĺpci × = aktívny násobiteľ ≠ 1.00</p>
-</body></html>"""
+"""
+    return render_legacy_body(None, f"Plán {date}", body)
 
 
 SIM_DEF = dict(start="2026-03-01", end="", rt_margin=30.0, max_cycles=2.0)
