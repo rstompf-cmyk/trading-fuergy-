@@ -582,20 +582,13 @@ def plan_batch_form(from_date: str = None, to_date: str = None, step_min: int = 
                        f"<td>{k}</td>"
                        f"<td style='color:#666;font-size:11px'>{it.get('generated_at','')}</td></tr>")
         return "".join(out)
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8">
-<title>Batch plánovanie</title><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}}
-h1,h2{{color:#1F4E78}} fieldset{{border:1px solid #e0e0e0;border-radius:10px;margin:12px 0;padding:12px 16px}}
+    body = f"""<style>
+fieldset{{border:1px solid #e0e0e0;border-radius:10px;margin:12px 0;padding:12px 16px}}
 legend{{color:#2E75B6;font-weight:600}}
-label{{display:flex;justify-content:space-between;margin:8px 0;align-items:center;gap:12px}}
-input,select{{padding:6px 8px;border:1px solid #ccc;border-radius:7px;font-size:14px}}
-button{{background:#2E7D32;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-size:15px;cursor:pointer;font-weight:600}}
-table{{border-collapse:collapse;width:100%;font-size:13px;margin-top:6px}}
-th,td{{border:1px solid #e3e3e3;padding:5px 8px;text-align:left}} th{{background:#1F4E78;color:#fff}}
-.cols{{display:grid;grid-template-columns:1fr 1fr;gap:18px}}</style></head><body>
+.cols{{display:grid;grid-template-columns:1fr 1fr;gap:18px}}
+</style>
 <h1>📦 Batch generovanie D-1 plánov</h1>
-{_nav("/plan_batch")}
-<p style="color:#666">Vygeneruje plány pre rozsah dátumov a uloží ich do <code>out/plans/</code>.
+<p class="muted">Vygeneruje plány pre rozsah dátumov a uloží ich do <code>out/plans/</code>.
 Livesim ich potom v <b>strict mode</b> načíta — bez disku žiaden plán nebeží.
 Nastavenia (lokácia, batéria, ekonomika, násobitele, RT-freedom, bias…) sa berú z aktuálnych
 hodnôt vo formulári <a href="/">/Plán D-1</a> a <a href="/dentrh">/Denný trh 15-min</a>.</p>
@@ -629,7 +622,8 @@ hodnôt vo formulári <a href="/">/Plán D-1</a> a <a href="/dentrh">/Denný trh
 <table><tr><th>Dátum</th><th>kind</th><th>Vygenerované</th></tr>{_rows(by_step.get(15, []))}</table>
 </div>
 </div>
-</body></html>"""
+"""
+    return render_legacy_body(None, "Batch plánovanie", body)
 
 
 @app.post("/plan_batch", response_class=HTMLResponse)
@@ -1192,17 +1186,11 @@ def plan_view(date: str, step: int = 60, kind: str = "plan"):
     # mults / rt_mask
     mult_active = sum(1 for x in (plan.get("mults") or []) if x is not None and abs(float(x) - 1.0) > 1e-6)
     rt_off = sum(1 for x in (plan.get("rt_mask") or []) if x is not None and float(x) < 0.5)
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8">
-<title>Plán {date} ({step}m, {kind})</title>
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}}
-h1,h2{{color:#1F4E78}} table{{border-collapse:collapse;width:100%;font-size:13px;margin-top:6px}}
-th,td{{border:1px solid #e3e3e3;padding:4px 8px;text-align:right}} th{{background:#1F4E78;color:#fff}}
-td:first-child{{text-align:left}}
+    body = f"""<style>
 .cols{{display:grid;grid-template-columns:1fr 1fr;gap:18px}}
 .box{{background:#f3f6fb;padding:10px 14px;border-radius:8px;margin:8px 0;font-size:13px}}
-code{{color:#666;font-size:12px}} a{{color:#1F4E78}}</style></head><body>
+</style>
 <h1>📋 Plán {date}</h1>
-{_nav("")}
 <div class="box">
 <b>Krok:</b> {step} min &nbsp;•&nbsp; <b>Kind:</b> {kind} &nbsp;•&nbsp;
 <b>Vygenerované:</b> {plan.get('generated_at','?')} &nbsp;•&nbsp;
@@ -1214,13 +1202,14 @@ code{{color:#666;font-size:12px}} a{{color:#1F4E78}}</style></head><body>
 <b>RT freedom:</b> {plan.get('rt_freedom', True)}
 </div>
 <h2>Rozvrh</h2>
-<div style="max-height:480px;overflow:auto"><table><tr>{''.join(f'<th>{c[0]}</th>' for c in cols)}</tr>{''.join(rows)}</table></div>
+<div style="max-height:480px;overflow:auto"><table class="tbl-compact"><tr>{''.join(f'<th>{c[0]}</th>' for c in cols)}</tr>{''.join(rows)}</table></div>
 <div class="cols">
-<div><h2>Súhrn (ekonomika)</h2><table>{summary_rows or '<tr><td>(prázdne)</td></tr>'}</table></div>
-<div><h2>Parametre plánu</h2><table>{param_rows or '<tr><td>(prázdne)</td></tr>'}</table></div>
+<div><h2>Súhrn (ekonomika)</h2><table class="tbl-compact">{summary_rows or '<tr><td>(prázdne)</td></tr>'}</table></div>
+<div><h2>Parametre plánu</h2><table class="tbl-compact">{param_rows or '<tr><td>(prázdne)</td></tr>'}</table></div>
 </div>
 <p style="margin-top:14px"><a href="/plan_batch">← Späť na batch</a> &nbsp;|&nbsp; <a href="/livesim">Živá simulácia</a></p>
-</body></html>"""
+"""
+    return render_legacy_body(None, f"Plán {date} ({step}m, {kind})", body)
 
 
 def _render_mult_warnings(summ) -> str:
@@ -12435,25 +12424,19 @@ def simulacia(start: str = Form(default=""), end: str = Form(default=""),
         s = g[["baseline", "d1", "rt", "combined", "prinos_baterie"]].sum()
         drows += (f"<tr style='font-weight:600;background:#f6f8fb'><td>── {m}</td><td>{s.baseline:.1f}</td>"
                   f"<td>{s.d1:.1f}</td><td>{s.rt:.1f}</td><td>{s.combined:.1f}</td><td>{s.prinos_baterie:.1f}</td><td></td></tr>")
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Výsledok simulácie</title>
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:900px;margin:24px auto;padding:0 16px;color:#222}}
-h1,h2{{color:#1F4E78}} table{{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0}}
-th,td{{border:1px solid #e3e3e3;padding:5px 8px;text-align:right}} th{{background:#1F4E78;color:#fff}}
-td:first-child{{text-align:left}}</style></head><body>
-<h1>Simulácia — {R.date.min()} … {R.date.max()} ({nd} dní)</h1>
-{_nav("/simulacia")}
-<p style="color:#2E7D32;font-size:14px">Výroba: {cal_note}</p>
+    body = f"""<h1>Simulácia — {R.date.min()} … {R.date.max()} ({nd} dní)</h1>
+<p style="color:var(--success);font-size:14px">Výroba: {cal_note}</p>
 {_sim_range_banner(start, end, R, _skipped, _step_now, _kind_now, rt_note)}
-{_nav("/simulacia")}
-<p><a href="/simulacia" style="color:#2E75B6">← Späť na nastavenia</a></p>
+<p><a href="/simulacia">← Späť na nastavenia</a></p>
 <div style="display:flex;gap:12px;margin:12px 0;flex-wrap:wrap">{cards}</div>
 <h2>Po mesiacoch (€)</h2>
-<table><tr><th>mesiac</th><th>dní</th><th>baseline</th><th>D-1</th><th>RT</th><th>spolu</th><th>prínos bat.</th><th>€/deň</th></tr>{mrows}</table>
+<table class="tbl-compact"><tr><th>mesiac</th><th>dní</th><th>baseline</th><th>D-1</th><th>RT</th><th>spolu</th><th>prínos bat.</th><th>€/deň</th></tr>{mrows}</table>
 <h2>Po dňoch (€)</h2>
-<table><tr><th>dátum</th><th>baseline</th><th>D-1</th><th>RT</th><th>spolu</th><th>prínos bat.</th><th>cykly D-1</th></tr>{drows}</table>
-<p style="color:#666;font-size:13px">baseline = bez batérie · D-1 = denný trh · RT = odchýlka · spolu = kombinovaný · prínos = spolu − baseline.
+<table class="tbl-compact"><tr><th>dátum</th><th>baseline</th><th>D-1</th><th>RT</th><th>spolu</th><th>prínos bat.</th><th>cykly D-1</th></tr>{drows}</table>
+<p class="muted" style="font-size:13px">baseline = bez batérie · D-1 = denný trh · RT = odchýlka · spolu = kombinovaný · prínos = spolu − baseline.
 Detail aj v out/combined_backtest.csv</p>
-</body></html>"""
+"""
+    return render_legacy_body(None, "Výsledok simulácie", body)
 
 
 def kalibracia_form(msg="", extra="", request=None):
