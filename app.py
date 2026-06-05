@@ -9327,11 +9327,9 @@ def vdt_board_page(
 
         f"</div>"
     )
-    # Auto-refresh 30s
-    return ("<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
-            "<meta http-equiv='refresh' content='30'>"
-            "<title>VDT Arbitrage</title></head><body>"
-            + body + "</body></html>")
+    # Auto-refresh 30s (cez meta refresh v head_extra)
+    return render_legacy_body(None, "VDT Arbitrage", body,
+                                head_extra="<meta http-equiv='refresh' content='30'>")
 
 
 def _vdt_subnav(active: str = "") -> str:
@@ -9768,8 +9766,7 @@ def vdt_zco_backtest_page(date_from: str = "", date_to: str = "",
         f"</div>"
     )
 
-    return ("<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
-            "<title>ZCO Backtest</title></head><body>" + body + "</body></html>")
+    return render_legacy_body(None, "ZCO Backtest", body)
 
 
 @app.post("/vdt/zco_profile_rebuild", response_class=HTMLResponse)
@@ -10348,9 +10345,8 @@ def auto_control_page():
     )
 
     body += "</div>"
-    return ("<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
-            "<meta http-equiv='refresh' content='60'>"
-            "<title>Paper trading</title></head><body>" + body + "</body></html>")
+    return render_legacy_body(None, "Paper trading", body,
+                                head_extra="<meta http-equiv='refresh' content='60'>")
 
 
 @app.post("/auto_control/kill_switch", response_class=HTMLResponse)
