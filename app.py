@@ -2537,15 +2537,15 @@ a{{color:#1F4E78}}</style></head><body>
     C = "[" + ",".join(f"{x:.1f}" for x in sch["curtail_kwh"].tolist()) + "]"
     PVU = "[" + ",".join(f"{max(float(p)-float(c),0):.1f}"
                          for p, c in zip(sch["pv_kwh"], sch["curtail_kwh"])) + "]"
-    return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Denný trh {date}</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1680px;margin:24px auto;padding:0 16px;color:#222}}
-h1,h2{{color:#1F4E78}} table{{border-collapse:collapse;width:100%;font-size:13px}}
-th,td{{border:1px solid #e3e3e3;padding:4px 8px;text-align:right}} th{{background:#1F4E78;color:#fff;position:sticky;top:0}}
-td:first-child{{text-align:center}} .wrap{{max-height:420px;overflow:auto;border-radius:8px}}</style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script></head><body>
+    body = f"""<style>
+table{{border-collapse:collapse;width:100%;font-size:13px}}
+table th,table td{{border:1px solid #e3e3e3;padding:4px 8px;text-align:right}}
+table th{{background:var(--primary);color:#fff;position:sticky;top:0}}
+table td:first-child{{text-align:center}}
+.wrap{{max-height:420px;overflow:auto;border-radius:8px}}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <h1>⚡ Denný trh 15-min — {date}</h1>
-{_nav("/dentrh")}
 {now_card}
 <div style="display:flex;gap:12px;margin:12px 0;flex-wrap:wrap">{cards}</div>
 <p style="background:#f8f9fb;border-radius:8px;padding:8px 12px;font-size:14px">{info}</p>
@@ -2579,7 +2579,9 @@ new Chart(document.getElementById('ch2'),{{type:'bar',data:{{labels:{L},datasets
 ]}},options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},
 plugins:{{tooltip:{{callbacks:{{footer:(it)=>'Predikcia spolu: '+it.reduce((s,x)=>s+x.parsed.y,0).toFixed(1)+' kWh'}}}}}},
 scales:{{x:{{stacked:true}},y:{{stacked:true,title:{{display:true,text:'kWh / 15 min'}}}}}}}}}});
-</script></body></html>"""
+</script>
+"""
+    return render_legacy_body(None, f"Denný trh {date}", body)
 
 
 def _data_page(report=None, logs=None, request=None):
