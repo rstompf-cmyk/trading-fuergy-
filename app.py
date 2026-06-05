@@ -12100,6 +12100,21 @@ a{{color:#1F4E78}}</style></head><body>
         _tou_row = (_row(("TOU + TPS + SS + OZE (distribúcia)" if _jflags.get("optimize_distribution")
                           else "TOU (distribúcia vypnutá)"), _tou, "cost")
                      if _tou > 0.001 or _jflags.get("optimize_distribution") else "")
+        # Distribučná úspora — koľko sme ušetrili oproti baseline (load bez batt arbitráže)
+        _tou_base = float(_econ.get("tou_baseline_eur", 0))
+        _tou_sav = float(_econ.get("tou_savings_eur", 0))
+        _tou_savings_row = ""
+        if _jflags.get("optimize_distribution") and (_tou_base > 0.001 or abs(_tou_sav) > 0.001):
+            _sav_color = "#2E7D32" if _tou_sav >= 0 else "#C0392B"
+            _sav_sign = "+" if _tou_sav >= 0 else "−"
+            _tou_savings_row = (
+                f"<tr><td style='padding:4px 10px;color:#555'>"
+                f"<span title='Baseline = TOU × load (bez batt arbitráže). "
+                f"Úspora = baseline − aktuálne. Vyšší export/lepšie načasovanie spotreby zvyšuje úsporu.'>"
+                f"Úspora distribúcie (baseline {_tou_base:.2f} €)</span></td>"
+                f"<td style='padding:4px 10px;text-align:right;color:{_sav_color};font-weight:600;"
+                f"font-variant-numeric:tabular-nums'>{_sav_sign}{abs(_tou_sav):.2f} €</td></tr>"
+            )
         _vdt_rows = ""
         if _jflags.get("use_vdt"):
             _vdt_rows = (_row("VDT predaj (export)", _vdt_rev, "rev")
@@ -12117,6 +12132,7 @@ a{{color:#1F4E78}}</style></head><body>
             f"{_row('Poplatok prenos (grid_fee × import)', _fee, 'cost')}"
             f"{_row('Náklad cyklov batérie', _cyc, 'cost')}"
             f"{_tou_row}"
+            f"{_tou_savings_row}"
             f"<tr><td colspan='2' style='border-top:2px solid #1F4E78;padding:6px 10px;"
             f"text-align:right;font-size:11px;color:#666'>"
             f"Σ príjmy {_rev_total:+.2f} € • Σ náklady {_cost_total:.2f} €</td></tr>"

@@ -451,6 +451,14 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
     fee_total = float(np.sum(grid_fee * (im_dam + im_vdt)) / 1000.0)
     cycle_total = float(np.sum(cycle_cost * (ch + di)) / 1000.0 / 2.0)
     tou_total = float(np.sum(tou * (im_dam + im_vdt)) / 1000.0) if optimize_distribution else 0.0
+    # Distribučná úspora — koľko by si zaplatil za TOU bez batt arbitráže:
+    #   baseline = sum(tou × load)  — všetka spotreba ide z gridu za TOU sadzbu
+    #   actual   = tou_total = sum(tou × (im_dam + im_vdt))  — len reálny import
+    #   úspora   = baseline - actual
+    # Pri load=0 (žiadna spotreba v profile) úspora = 0.
+    # Pri trade_load=False sa nezohľadňuje (load nepokrýva grid, ale batt/PV).
+    tou_baseline = float(np.sum(tou * np.asarray(load, float)) / 1000.0) if optimize_distribution else 0.0
+    tou_savings = tou_baseline - tou_total
     net = dam_rev - dam_cost + vdt_rev - vdt_cost - fee_total - cycle_total - tou_total
 
     return {
@@ -486,6 +494,8 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
             "grid_fee_eur": round(fee_total, 3),
             "cycle_cost_eur": round(cycle_total, 3),
             "tou_cost_eur": round(tou_total, 3),
+            "tou_baseline_eur": round(tou_baseline, 3),
+            "tou_savings_eur": round(tou_savings, 3),
             "net_profit_eur": round(net, 3),
         },
         "flags": {

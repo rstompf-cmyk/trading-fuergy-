@@ -170,6 +170,8 @@ def _joint_to_optimize_day_format(
         "_joint_dam_cost": econ.get("dam_cost_eur", 0),
         "_joint_vdt_cost": econ.get("vdt_cost_eur", 0),
         "_joint_tou_cost": econ.get("tou_cost_eur", 0),
+        "_joint_tou_baseline": econ.get("tou_baseline_eur", 0),
+        "_joint_tou_savings": econ.get("tou_savings_eur", 0),
     }
     return sch, summary
 
