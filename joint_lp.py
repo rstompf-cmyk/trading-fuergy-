@@ -191,14 +191,41 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
     g_ex_kwh = g_ex * dt
     batt_kwh_per_slot = batt_kw * dt
 
-    # Premenné: ch, di, ex_dam, im_dam, ex_vdt, im_vdt, cu — každá dĺžky T
-    # poradie indexov: g=0..6 × T
-    n_groups = 7
+    # Premenné per slot — rozšírený model so sub-streams pre fyzicky správny
+    # toggle behavior (trade_ftv=False naozaj zakáže FTV export, atď.).
+    #
+    # Aggregate streams (cieľ obchodu — DAM vs VDT):
+    #   CH, DI                         — batéria total charge/discharge
+    #   EX_DAM, IM_DAM                 — grid export/import cez DAM
+    #   EX_VDT, IM_VDT                 — grid export/import cez VDT (intraday)
+    #   CU                             — orezanie FTV
+    #
+    # Sub-streams (ZDROJ exportu / CIEĽ importu — toggle-able):
+    #   PV_LOAD                        — PV → load (intern, free)
+    #   PV_BATT                        — PV → batt (intern, free)
+    #   EX_FTV                         — PV → grid (gated trade_ftv)
+    #   DI_LOAD                        — batt → load (intern, free)
+    #   EX_BATT                        — batt → grid (gated trade_batt)
+    #   IM_LOAD                        — grid → load (gated trade_load)
+    #   IM_BATT                        — grid → batt (gated trade_batt)
+    #
+    # 6 decomposition constraints per slot zabezpečia konzistentnosť:
+    #   PV bilancia:   pv[t]      = PV_LOAD + PV_BATT + EX_FTV + CU
+    #   Load bilancia: load[t]    = PV_LOAD + DI_LOAD + IM_LOAD
+    #   Batt charge:   CH         = PV_BATT + IM_BATT
+    #   Batt discharge:DI         = DI_LOAD + EX_BATT
+    #   Grid export:   EX_DAM+EX_VDT = EX_FTV + EX_BATT
+    #   Grid import:   IM_DAM+IM_VDT = IM_LOAD + IM_BATT
+    #
+    # Tieto rovnice nahrádzajú pôvodnú aggregate balance — sú s ňou matematicky
+    # ekvivalentné, ale exponujú zdroje, takže toggle-y fungujú fyzicky.
+    n_groups = 14
     n = n_groups * T
     def idx(g, t):
         return g * T + t
 
-    CH, DI, EX_DAM, IM_DAM, EX_VDT, IM_VDT, CU = range(n_groups)
+    (CH, DI, EX_DAM, IM_DAM, EX_VDT, IM_VDT, CU,
+     PV_LOAD, PV_BATT, EX_FTV, DI_LOAD, EX_BATT, IM_LOAD, IM_BATT) = range(n_groups)
 
     # Účelová funkcia — minimalizujeme -profit
     # Konvencia rovnaká ako optimizer.optimize_day:
@@ -223,20 +250,66 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
             c[idx(IM_VDT, t)] += tou[t] / 1000.0
         # Curtailment — žiadny náklad (FTV je voľná)
 
-    # Bilancia per slot: di + im_dam + im_vdt − ex_dam − ex_vdt − ch − cu = load − pv
+    # Decomposition constraints per slot (6 rovníc namiesto pôvodnej aggregate):
+    #   PV bilancia:    pv[t]      = PV_LOAD + PV_BATT + EX_FTV + CU
+    #   Load bilancia:  load[t]    = PV_LOAD + DI_LOAD + IM_LOAD
+    #   Batt charge:    CH         = PV_BATT + IM_BATT
+    #   Batt discharge: DI         = DI_LOAD + EX_BATT
+    #   Grid export:    EX_DAM+EX_VDT = EX_FTV + EX_BATT
+    #   Grid import:    IM_DAM+IM_VDT = IM_LOAD + IM_BATT
     A_eq = []
     b_eq = []
     for t in range(T):
+        # PV: PV_LOAD + PV_BATT + EX_FTV + CU = pv[t]
         row = np.zeros(n)
-        row[idx(DI, t)] = 1
+        row[idx(PV_LOAD, t)] = 1
+        row[idx(PV_BATT, t)] = 1
+        row[idx(EX_FTV, t)] = 1
+        row[idx(CU, t)] = 1
+        A_eq.append(row)
+        b_eq.append(pv[t])
+
+        # Load: PV_LOAD + DI_LOAD + IM_LOAD = load[t]
+        row = np.zeros(n)
+        row[idx(PV_LOAD, t)] = 1
+        row[idx(DI_LOAD, t)] = 1
+        row[idx(IM_LOAD, t)] = 1
+        A_eq.append(row)
+        b_eq.append(load[t])
+
+        # Batt charge: PV_BATT + IM_BATT − CH = 0
+        row = np.zeros(n)
+        row[idx(PV_BATT, t)] = 1
+        row[idx(IM_BATT, t)] = 1
+        row[idx(CH, t)] = -1
+        A_eq.append(row)
+        b_eq.append(0.0)
+
+        # Batt discharge: DI_LOAD + EX_BATT − DI = 0
+        row = np.zeros(n)
+        row[idx(DI_LOAD, t)] = 1
+        row[idx(EX_BATT, t)] = 1
+        row[idx(DI, t)] = -1
+        A_eq.append(row)
+        b_eq.append(0.0)
+
+        # Grid export: EX_DAM + EX_VDT − EX_FTV − EX_BATT = 0
+        row = np.zeros(n)
+        row[idx(EX_DAM, t)] = 1
+        row[idx(EX_VDT, t)] = 1
+        row[idx(EX_FTV, t)] = -1
+        row[idx(EX_BATT, t)] = -1
+        A_eq.append(row)
+        b_eq.append(0.0)
+
+        # Grid import: IM_DAM + IM_VDT − IM_LOAD − IM_BATT = 0
+        row = np.zeros(n)
         row[idx(IM_DAM, t)] = 1
         row[idx(IM_VDT, t)] = 1
-        row[idx(EX_DAM, t)] = -1
-        row[idx(EX_VDT, t)] = -1
-        row[idx(CH, t)] = -1
-        row[idx(CU, t)] = -1
+        row[idx(IM_LOAD, t)] = -1
+        row[idx(IM_BATT, t)] = -1
         A_eq.append(row)
-        b_eq.append(load[t] - pv[t])
+        b_eq.append(0.0)
 
     # SOC constraints — running cumulative
     # SOC[t] = soc0 + Σ_{i=0..t} (eff_c·ch[i] − di[i]/eff_d)
@@ -272,30 +345,51 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         A_ub.append(row_c)
         b_ub.append(max_cycles * batt_kwh)
 
-    # Bounds (lower=0, upper podľa toggle)
+    # Bounds — toggle gating je teraz na sub-streams (EX_FTV/EX_BATT/IM_LOAD/IM_BATT),
+    # nie na aggregate EX_DAM/IM_DAM. Tým fyzicky vynútime semantiku toggle-ov.
     bounds = []
     for g in range(n_groups):
         for t in range(T):
             lb = 0.0
             ub = None
+            # ---- Aggregate batt streams (gated cez trade_batt) ----
             if g == CH:
                 ub = batt_kwh_per_slot if trade_batt else 0.0
             elif g == DI:
                 ub = batt_kwh_per_slot if trade_batt else 0.0
+            # ---- Aggregate grid streams (limit iba sieťovou kapacitou) ----
             elif g == EX_DAM:
-                # Export do siete povolený ak trade_ftv=True (export FTV nadbytku)
-                # ALEBO trade_batt=True (discharge batt → grid arbitráž).
-                ub = g_ex_kwh if (trade_ftv or trade_batt) else 0.0
+                ub = g_ex_kwh
             elif g == IM_DAM:
-                # Import zo siete povolený ak trade_load=True (grid → load)
-                # ALEBO trade_batt=True (grid → batt charge arbitráž).
-                ub = g_im_kwh if (trade_load or trade_batt) else 0.0
+                ub = g_im_kwh
             elif g == EX_VDT:
-                ub = g_ex_kwh if (use_vdt and (trade_ftv or trade_batt)) else 0.0
+                ub = g_ex_kwh if use_vdt else 0.0
             elif g == IM_VDT:
-                ub = g_im_kwh if (use_vdt and (trade_load or trade_batt)) else 0.0
+                ub = g_im_kwh if use_vdt else 0.0
             elif g == CU:
                 ub = float(max(pv[t], 0))   # max curtailment = aktuálna PV
+            # ---- Sub-streams (toggle-gated) ----
+            elif g == PV_LOAD:
+                # PV → load: voľný (intern), max = min(pv, load)
+                ub = float(min(max(pv[t], 0), max(load[t], 0)))
+            elif g == PV_BATT:
+                # PV → batt: voľný (intern), max = min(pv, batt_kwh_per_slot)
+                ub = float(min(max(pv[t], 0), batt_kwh_per_slot)) if trade_batt else 0.0
+            elif g == EX_FTV:
+                # PV → grid: gated cez trade_ftv
+                ub = float(max(pv[t], 0)) if trade_ftv else 0.0
+            elif g == DI_LOAD:
+                # batt → load: voľný (intern, pre self-consumption)
+                ub = float(min(batt_kwh_per_slot, max(load[t], 0))) if trade_batt else 0.0
+            elif g == EX_BATT:
+                # batt → grid: gated cez trade_batt
+                ub = batt_kwh_per_slot if trade_batt else 0.0
+            elif g == IM_LOAD:
+                # grid → load: gated cez trade_load
+                ub = float(max(load[t], 0)) if trade_load else 0.0
+            elif g == IM_BATT:
+                # grid → batt: gated cez trade_batt
+                ub = batt_kwh_per_slot if trade_batt else 0.0
             bounds.append((lb, ub))
 
     # Solver
@@ -322,6 +416,25 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
     ex_vdt = x[idx(EX_VDT, 0):idx(EX_VDT, 0)+T]
     im_vdt = x[idx(IM_VDT, 0):idx(IM_VDT, 0)+T]
     cu = x[idx(CU, 0):idx(CU, 0)+T]
+    # Sub-streams (intern + per-toggle gated)
+    pv_load = x[idx(PV_LOAD, 0):idx(PV_LOAD, 0)+T]
+    pv_batt = x[idx(PV_BATT, 0):idx(PV_BATT, 0)+T]
+    ex_ftv = x[idx(EX_FTV, 0):idx(EX_FTV, 0)+T]
+    di_load = x[idx(DI_LOAD, 0):idx(DI_LOAD, 0)+T]
+    ex_batt = x[idx(EX_BATT, 0):idx(EX_BATT, 0)+T]
+    im_load = x[idx(IM_LOAD, 0):idx(IM_LOAD, 0)+T]
+    im_batt = x[idx(IM_BATT, 0):idx(IM_BATT, 0)+T]
+
+    # Obchod kWh per slot — zahŕňa IBA streams ktoré sú aktuálne zaškrtnuté.
+    # Konvencia: + export (predaj), − import (nákup).
+    # DIST sa nikdy neobchoduje (je iba v účelovke).
+    obchod = np.zeros(T)
+    if trade_ftv:
+        obchod += ex_ftv
+    if trade_batt:
+        obchod += ex_batt - im_batt
+    if trade_load:
+        obchod -= im_load
 
     # SOC trajektória
     soc_traj = np.zeros(T)
@@ -349,6 +462,16 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         "ex_kwh": (ex_dam + ex_vdt).tolist(),
         "im_kwh": (im_dam + im_vdt).tolist(),
         "cu_kwh": cu.tolist(),
+        # Sub-streams — per-toggle gated, ukázané v "Obchod" stĺpci
+        "pv_load_kwh": pv_load.tolist(),
+        "pv_batt_kwh": pv_batt.tolist(),
+        "ex_ftv_kwh": ex_ftv.tolist(),
+        "di_load_kwh": di_load.tolist(),
+        "ex_batt_kwh": ex_batt.tolist(),
+        "im_load_kwh": im_load.tolist(),
+        "im_batt_kwh": im_batt.tolist(),
+        # Obchod per slot (iba toggle-aktívne streams; + export, − import)
+        "obchod_kwh": obchod.tolist(),
         "soc_kwh": soc_traj.tolist(),
         "soc_pct": (soc_traj / batt_kwh * 100.0).tolist(),
         "_charge_kw": (ch / dt).tolist(),
