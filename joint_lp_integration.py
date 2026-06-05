@@ -329,6 +329,14 @@ def optimize_day_or_joint(
         use_vdt=joint_flags["use_vdt"],
         optimize_distribution=joint_flags["optimize_distribution"],
         max_cycles=max_cycles,
+        # parita s optimizer.optimize_day — propagovať šablónu × + denné kapy + flagy
+        batt_kw_override=batt_kw_override,
+        max_export_kwh_day=max_export_kwh_day,
+        max_import_kwh_day=max_import_kwh_day,
+        allow_curtail=allow_curtail,
+        allow_grid_charge=allow_grid_charge,
+        block_planned_discharge=block_planned_discharge,
+        block_neg_import=block_neg_import,
         dt=dt,
     )
 
