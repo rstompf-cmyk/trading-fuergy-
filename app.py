@@ -776,6 +776,12 @@ def profiles_browse(request: Request):
         return HTMLResponse("<p>profiles modul nedostupný.</p>", status_code=503)
     profiles_list = pr.list_profiles()
     active = pr.get_active()
+    # Per-market enabled set (scheduler background flag) — pre indikátor v zozname
+    try:
+        import auto_control as _ac
+        bg_set = _ac.get_enabled_profiles()
+    except Exception:
+        bg_set = set()
     rows = []
     active_mode = "simulation"
     for n in profiles_list:
@@ -793,6 +799,7 @@ def profiles_browse(request: Request):
             "name": n,
             "active": (n == active),
             "mode": prof_mode,
+            "bg_enabled": (n in bg_set),
             "updated_at": p.get("updated_at", ""),
             "mults_changed": mn,
             "rt_off_count": rt_off,
@@ -924,11 +931,32 @@ def profiles_save(name: str = Form(...), note: str = Form(default=""),
                                     "note": note, "mode": mode,
                                     "distribution": dist_d})
     # Background scheduler enabled toggle (per aktuálny market) — best-effort, neblokujeme save
+    bg_was_on = False
     try:
         import auto_control as _ac
+        bg_was_on = (name in _ac.get_enabled_profiles())
         _ac.set_profile_enabled(name, bool(bg_enabled))
     except Exception as _bg_e:
         print(f"[profiles_save] set_profile_enabled({name}, {bool(bg_enabled)}) zlyhal: {_bg_e}")
+
+    # Trigger immediate D-1 plán generation ak sa bg_enabled toggleol OFF→ON
+    # (nečakaj na nasledujúci 14:00 autoplan_d1 cron). Beží v thread, neblokuje response.
+    if bool(bg_enabled) and not bg_was_on:
+        try:
+            import threading, datetime as _dt
+            def _autoplan_now(_n=name):
+                try:
+                    import d1_planner as _dp
+                    import market as _mk
+                    tomorrow = _dt.date.today() + _dt.timedelta(days=1)
+                    res = _dp.compute_d1_plan(tomorrow, market=_mk.active_market(), profile=_n)
+                    print(f"[profiles_save] immediate autoplan({_n}, {tomorrow}) → "
+                          f"{res.get('status','?')} · ZISK {res.get('zisk_eur', 0):+.2f}")
+                except Exception as _ape:
+                    print(f"[profiles_save] immediate autoplan({_n}) zlyhal: {_ape}")
+            threading.Thread(target=_autoplan_now, daemon=True).start()
+        except Exception as _te:
+            print(f"[profiles_save] autoplan thread spawn zlyhal: {_te}")
     return (f"<!doctype html><html><head><meta charset='utf-8'>"
              f"<meta http-equiv='refresh' content='1;url=/profiles'></head><body>"
              f"<p>✓ Profile <b>{name}</b> uložený do <code>{path}</code>. Redirect na /profiles…</p></body></html>")

@@ -48,6 +48,13 @@
           <td>
             <span class="chip {{ r.mode }}">{{ r.mode }}</span>
             <b>{{ r.name }}{% if r.active %} ★{% endif %}</b>
+            {% if r.bg_enabled %}
+              <span title="Beží na pozadí — scheduler robí každú 15-min: D-1 plán, VDT live advisor, auto_control"
+                     style="display:inline-block;width:11px;height:11px;border-radius:50%;
+                            background:#1F88E5;box-shadow:0 0 0 2px rgba(31,136,229,.25);
+                            margin-left:6px;vertical-align:middle">⠀</span>
+              <span style="font-size:11px;color:#1F88E5;font-weight:600;margin-left:4px">beží</span>
+            {% endif %}
           </td>
           <td class="muted" style="font-size:12px">{{ r.updated_at }}</td>
           <td>{{ r.mults_changed }}</td>
