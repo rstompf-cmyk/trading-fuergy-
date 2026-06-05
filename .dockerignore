@@ -1,0 +1,66 @@
+# Build artefakty
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.Python
+.pytest_cache/
+.mypy_cache/
+
+# Virtuálne prostredia
+.venv/
+venv/
+env/
+
+# Git + IDE
+.git/
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Lokálne dáta — patria do bind-mountovaného hostiteľského adresára, nie do image
+out/
+db/data/*
+!db/data/.gitkeep
+.env
+.env.local
+*.sqlite
+*.sqlite-journal
+
+# OKTE certifikáty — bind-mountnuté zvonku, neverziujeme v image
+okte_credentials/
+realio_cookies.json
+seps_cookies.json
+historian_cookies.json
+
+# Logs
+*.log
+nohup.out
+
+# Docker artefakty
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Dokumentácia (zbytočné v image, len kód)
+docs/
+*.md
+
+# Testy a tools (nie v produkčnom image)
+tests/
+tools/migrate_csv_to_db.py
+
+# macOS / launchd skripty (Win produkcia ich nepotrebuje)
+install_sluzba.sh
+uninstall_sluzba.sh
+restart_sluzby.sh
+stav_sluzby.sh
+start_dev.sh
+stop_dev.sh
+*.plist

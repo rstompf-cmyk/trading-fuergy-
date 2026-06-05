@@ -1,0 +1,71 @@
+# Trading Fuergy — Docker Compose pre Windows produkciu
+#
+# Použitie:
+#   docker compose up -d           # spustí v pozadí
+#   docker compose logs -f         # sleduje logy
+#   docker compose down            # zastaví + odstráni container (dáta v ./data zostanú)
+#   docker compose pull && docker compose up -d --build   # update po git pull
+#
+# Perzistentné dáta sú v ./data/ na hostiteľovi — backupy treba robiť tam.
+# Network mode: bridge (default) — container má prístup k host LAN cez NAT.
+# Bender (10.200.136.21) + historian (192.168.34.31) sú dostupné rovnako ako z hostiteľa.
+
+services:
+  trading-fuergy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: trading-fuergy:latest
+    container_name: trading-fuergy
+    restart: unless-stopped
+
+    # Port mapping — host:container. Zmena hostiteľského portu v .env (DOCKER_PORT).
+    ports:
+      - "${DOCKER_PORT:-8000}:8000"
+
+    # Bind mounty — všetky dáta na hostiteľovi, container je stateless.
+    # Pri update appky (git pull + rebuild) sa DB, plány, profily neztratia.
+    volumes:
+      # SQLite databáza (auth users, profily, plány, vdt trades, audit log)
+      - ./data/db:/app/db/data
+      # Výstupné dáta: livesim CSV, plan_store, plan_overrides, load_profile,
+      # ftv_scenarios, vdt_paper_trades, auto_control_log, realio_db.sqlite,
+      # cache (OTE, PVF), historian CSV
+      - ./data/out:/app/out
+      # OKTE mTLS certifikáty (pre SOAP IdmOrderBook)
+      - ./data/okte_credentials:/app/okte_credentials
+      # Cookies pre Bender / SEPS / historian (auto-refresh cez Playwright)
+      - ./data/realio_cookies.json:/app/realio_cookies.json
+      - ./data/seps_cookies.json:/app/seps_cookies.json
+      - ./data/historian_cookies.json:/app/historian_cookies.json
+
+    # Credentials a config sa načítajú z .env (vedľa docker-compose.yml).
+    env_file:
+      - ./.env
+
+    # Defaultné env vars — môžu byť prepísané v .env
+    environment:
+      USE_DB: "1"
+      AUTH_REQUIRED: "1"
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8000"
+      # PORT — používa core/state.py pre per-port state isolation
+      PORT: "8000"
+      # Vypnúť background úlohy pri prvom spustení (kým neoveríš že appka beží)
+      # Po prvom úspešnom štarte odkomentuj na produkčné fungovanie:
+      # NO_BACKFILL: "1"
+
+    # Health check — Docker bude sledovať že /me odpovedá
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8000/me"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    # Logging limity (aby logy nezaplnili disk)
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

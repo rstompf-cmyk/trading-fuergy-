@@ -86,3 +86,7 @@ docker-compose.override.yml
 .ipynb_checkpoints/
 *.ipynb
 node_modules/
+data/
+backups/
+data.OLD/
+data.pre-restore.*/
