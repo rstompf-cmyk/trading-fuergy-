@@ -45,6 +45,9 @@ services:
 
     # Defaultné env vars — môžu byť prepísané v .env
     environment:
+      # Timezone — bez toho container beží v UTC a všetky timestampy/grafy
+      # sú posunuté o 1-2h voči lokálnemu času Windows hosta.
+      TZ: "Europe/Bratislava"
       USE_DB: "1"
       AUTH_REQUIRED: "1"
       APP_HOST: "0.0.0.0"
@@ -103,6 +106,7 @@ services:
       - ./.env
 
     environment:
+      TZ: "Europe/Bratislava"
       USE_DB: "1"
       AUTH_REQUIRED: "1"
       APP_HOST: "0.0.0.0"

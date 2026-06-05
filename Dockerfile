@@ -48,6 +48,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # - libgomp1 — OpenMP pre SciPy/sklearn
 # - curl — health check + debug
 # - tini — proper signal handling (graceful shutdown)
+# - tzdata — pre TZ env var (Europe/Bratislava) namiesto UTC defaultu
 # - Playwright dependencies (Chromium headless) — bez nich SEPS/historian cookies refresh nepojde
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libxml2 \
@@ -56,6 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
         curl \
         tini \
+        tzdata \
         # Playwright Chromium headless dependencies
         libnss3 \
         libnspr4 \
