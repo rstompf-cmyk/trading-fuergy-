@@ -98,9 +98,12 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         vdt_buy_price: [T] VDT ask €/MWh (None = use_vdt=False)
         vdt_sell_price: [T] VDT bid €/MWh (None = use_vdt=False)
         tou_price_eur: [T] distribučná TOU sadzba €/MWh per slot
-        trade_batt: ak False, ch[t] = di[t] = 0
-        trade_ftv: ak False, FTV nemôže ísť do siete (musí kryť load alebo curtail)
-        trade_load: ak False, import nesmie kryť load (len ch batt)
+        trade_batt: ak False, ch[t] = di[t] = 0 (batt vypnutá).
+                    Ak True, batt môže ísť do/zo siete cez DAM (charge zo siete + discharge do siete = arbitráž).
+        trade_ftv: ak False, FTV nemôže ísť do siete (musí kryť load alebo curtail).
+                   Ak True, FTV nadbytky môžu byť exportované cez DAM.
+        trade_load: ak False, grid nesmie kryť load (load musí byť pokrytá FTV alebo batt).
+                    Ak True, grid môže importovať na pokrytie load.
         use_vdt: ak False, im_vdt[t] = ex_vdt[t] = 0
         optimize_distribution: ak True, do účelovky pripočítaj tou_price × im_dam
         max_cycles: max počet cyklov za deň
@@ -280,17 +283,17 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
             elif g == DI:
                 ub = batt_kwh_per_slot if trade_batt else 0.0
             elif g == EX_DAM:
-                # Export do siete povolený IBA ak trade_ftv=True.
-                # (Aj keď batt vybíja, exportovať nesmie keď trade_ftv=False —
-                # discharge musí byť pre kryť load, ináč curtail.)
-                ub = g_ex_kwh if trade_ftv else 0.0
+                # Export do siete povolený ak trade_ftv=True (export FTV nadbytku)
+                # ALEBO trade_batt=True (discharge batt → grid arbitráž).
+                ub = g_ex_kwh if (trade_ftv or trade_batt) else 0.0
             elif g == IM_DAM:
-                # Import zo siete povolený IBA ak trade_load=True.
-                ub = g_im_kwh if trade_load else 0.0
+                # Import zo siete povolený ak trade_load=True (grid → load)
+                # ALEBO trade_batt=True (grid → batt charge arbitráž).
+                ub = g_im_kwh if (trade_load or trade_batt) else 0.0
             elif g == EX_VDT:
-                ub = g_ex_kwh if (use_vdt and trade_ftv) else 0.0
+                ub = g_ex_kwh if (use_vdt and (trade_ftv or trade_batt)) else 0.0
             elif g == IM_VDT:
-                ub = g_im_kwh if (use_vdt and trade_load) else 0.0
+                ub = g_im_kwh if (use_vdt and (trade_load or trade_batt)) else 0.0
             elif g == CU:
                 ub = float(max(pv[t], 0))   # max curtailment = aktuálna PV
             bounds.append((lb, ub))
