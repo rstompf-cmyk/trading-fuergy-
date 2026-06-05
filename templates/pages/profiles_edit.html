@@ -52,30 +52,27 @@
           <code>/realio?tab=riadenie</code> na reálne riadenie batérie.
         </p>
       {% else %}
-        <div class="mt-8">
+        <div class="mt-8" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
           <span class="chip {{ profile_mode }}" style="font-size:14px;padding:6px 12px">
             {% if profile_mode == "real" %}🔴 Reálny chod{% else %}🎮 Simulácia{% endif %}
           </span>
-          <span style="color:#666;font-size:12px;margin-left:10px">
-            🔒 fixované pri vzniku — pre iný mód vytvor nový profil
+          <span style="color:#666;font-size:12px">
+            🔒 fixované pri vzniku
           </span>
           <input type="hidden" name="mode" value="{{ profile_mode }}">
-        </div>
-      {% endif %}
 
-      {% if not is_new %}
-        <div class="mt-16" style="padding:10px 14px;background:#f3f6fb;border-left:4px solid #1F4E78;border-radius:6px">
-          <label style="display:flex;gap:10px;align-items:center;cursor:pointer;font-weight:600">
+          {# Beží na pozadí — kompaktný toggle chip vedľa typu profilu #}
+          <label title="Keď zapnuté, scheduler robí pre tento profil každú 15-min D-1 plán, VDT live advisor (paper trades) a auto_control. Real-mode profily nepíšu na batériu, len paper trade."
+                  style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;
+                          padding:6px 12px;border-radius:14px;font-size:13px;font-weight:600;
+                          background:{% if bg_enabled %}#e8f5e9{% else %}#f3f3f3{% endif %};
+                          color:{% if bg_enabled %}#1B5E20{% else %}#666{% endif %};
+                          border:1.5px solid {% if bg_enabled %}#2E7D32{% else %}#ccc{% endif %};
+                          margin-left:auto">
             <input type="checkbox" name="bg_enabled" value="1" {% if bg_enabled %}checked{% endif %}
-                    style="width:18px;height:18px;cursor:pointer">
-            <span>⚙️ Beží na pozadí (scheduler)</span>
+                    style="width:14px;height:14px;cursor:pointer;margin:0">
+            ⚙️ Beží na pozadí
           </label>
-          <p style="margin:6px 0 0 28px;color:#555;font-size:12px;line-height:1.4">
-            Keď je zapnuté, scheduler v background-e robí pre tento profil každú 15-min:
-            D-1 plán, VDT live advisor (paper trades), auto_control setpoint výpočet.
-            UI ukáže jeho výsledky až keď ho aktivuješ ako primárny profil.<br>
-            <span style="color:#7a3500">⚠ Real-mode profily: scheduler nepíše na batériu — len paper trade.</span>
-          </p>
         </div>
       {% endif %}
     </fieldset>
