@@ -413,13 +413,25 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         raise RuntimeError("plan_store modul nie je dostupný")
     d = dt.date.fromisoformat(date_iso)
     if int(step_min) == 60 and kind == "plan":
-        wx = _fetch_pv_cached(float(fp.get("lat", DEF["lat"])), float(fp.get("lon", DEF["lon"])),
-                                    float(fp.get("kwp", DEF["kwp"])), float(fp.get("tilt", DEF["tilt"])),
-                                    float(fp.get("azimuth", DEF["azimuth"])), float(fp.get("eff", DEF["eff"])),
-                                    start=d, end=d)
-        wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].copy()
-        if wx.empty:
-            raise RuntimeError(f"PV forecast nedostupný pre {d}")
+        # Ak profil nemá FTV (kwp=0), netreba volať PVF — pv_arr = 0 array.
+        # Cena sa berie zo ISOT predikcie nezávisle od počasia (model nemá GTI keď nie je PV).
+        _kwp = float(fp.get("kwp", DEF["kwp"]))
+        _has_pv = _kwp > 0.01
+        if _has_pv:
+            wx = _fetch_pv_cached(float(fp.get("lat", DEF["lat"])), float(fp.get("lon", DEF["lon"])),
+                                        _kwp, float(fp.get("tilt", DEF["tilt"])),
+                                        float(fp.get("azimuth", DEF["azimuth"])), float(fp.get("eff", DEF["eff"])),
+                                        start=d, end=d)
+            wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].copy()
+            if wx.empty:
+                raise RuntimeError(f"PV forecast nedostupný pre {d}")
+        else:
+            # No-FTV profil: vytvor prázdny wx grid s 24 hodinami (00..23) pre daný dátum
+            wx = pd.DataFrame({
+                "time": pd.date_range(pd.Timestamp(d), periods=24, freq="h"),
+                "kw": np.zeros(24), "gti": np.zeros(24),
+                "temp": np.full(24, 15.0), "cloud": np.full(24, 50.0),
+            })
         hist = _isot_history(d, days=8)
         wx2 = wx[["time", "gti", "temp", "cloud"]].copy(); wx2["isot_eur"] = np.nan
         h2 = hist.copy()
@@ -501,17 +513,23 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
     elif int(step_min) == 15 and kind == "dentrh":
         ote = _fetch_ote_cached(d)
         price15 = _dt15_from_ote(ote)
-        wx = _fetch_pv_cached(float(fp.get("lat", DEF["lat"])), float(fp.get("lon", DEF["lon"])),
-                                    float(fp.get("kwp", DEF["kwp"])), float(fp.get("tilt", DEF["tilt"])),
-                                    float(fp.get("azimuth", DEF["azimuth"])), float(fp.get("eff", DEF["eff"])),
-                                    start=d, end=d)
-        wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].sort_values("time")
-        if wx.empty:
-            raise RuntimeError(f"PV forecast nedostupný pre {d}")
-        cal = _cal_for(d)
-        pv_h = wx.kw.values * cal
-        if len(pv_h) < 24:
-            pv_h = np.concatenate([pv_h, np.zeros(24 - len(pv_h))])
+        # Ak profil nemá FTV (kwp=0), netreba volať PVF
+        _kwp15 = float(fp.get("kwp", DEF["kwp"]))
+        if _kwp15 > 0.01:
+            wx = _fetch_pv_cached(float(fp.get("lat", DEF["lat"])), float(fp.get("lon", DEF["lon"])),
+                                        _kwp15, float(fp.get("tilt", DEF["tilt"])),
+                                        float(fp.get("azimuth", DEF["azimuth"])), float(fp.get("eff", DEF["eff"])),
+                                        start=d, end=d)
+            wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].sort_values("time")
+            if wx.empty:
+                raise RuntimeError(f"PV forecast nedostupný pre {d}")
+            cal = _cal_for(d)
+            pv_h = wx.kw.values * cal
+            if len(pv_h) < 24:
+                pv_h = np.concatenate([pv_h, np.zeros(24 - len(pv_h))])
+        else:
+            # No-FTV profil: 24 hodín × 0 kW
+            pv_h = np.zeros(24)
         pv15 = np.repeat(pv_h[:24], 4) / 4.0
         n = min(len(pv15), len(price15))
         npd = bool(fp.get("no_planned_discharge", False))
