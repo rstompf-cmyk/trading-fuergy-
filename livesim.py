@@ -588,8 +588,12 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             if _user_start < _meta_start:
                 _need_reset = True
                 _reset_reason = f"start posunutý dozadu ({_meta_start.date()} → {_user_start.date()})"
-            else:
-                # Skontroluj CSV — či prvý logovaný deň zodpovedá user_start
+            elif _user_start > _meta_start:
+                # Druhá kontrola: CSV začína neskôr ako user deklaroval — IBA ak meta.start_date
+                # bol iný (stale stav z minulého behu). Ak meta.start_date == user_start (po reset
+                # alebo prvý beh), CSV začiatok > user_start znamená iba že staré dni nemali dáta
+                # (sys_MW chýba pre dávnu históriu) → NIE je to dôvod resetovať, lebo nový reset
+                # by viedol k tomu istému výsledku (loop).
                 try:
                     _head = pd.read_csv(csv_path, nrows=1, usecols=["time"])
                     if not _head.empty:
@@ -597,7 +601,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         if _csv_first > _user_start:
                             _need_reset = True
                             _reset_reason = (f"CSV začína {_csv_first.date()} ale user_start={_user_start.date()} "
-                                              f"(pravdepodobne stale stav z predošlého behu)")
+                                              f"a meta.start_date={_meta_start.date()} (stale stav)")
                 except (FileNotFoundError, ValueError, KeyError, pd.errors.EmptyDataError):
                     pass
         except Exception:
@@ -641,10 +645,14 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             mn_day = mn_day_full[mn_day_full["time"] <= now]  # fyzika len po „teraz“
         if mn_day.empty:
             day += pd.Timedelta(days=1); continue
-        # Pre HISTORICKÉ dni ZCO povinný (settlement). Pre TODAY (in-progress)
-        # nie — SK trh publikuje ZCO až D-1, takže dnes ide bez ZCO; reálny
-        # zisk sa prepočíta keď ZCO príde. CZ má ZCO odhad z CEPS aj pre dnes.
-        if d < today.date() and mn_day["zco_eur"].notna().sum() == 0:
+        # Pre HISTORICKÉ dni ZCO ideálne dostupný (RT settlement). Ak chýba (SK trh
+        # publikuje ZCO až D+1 ~11:30, alebo OKTE backend zlyhal), nech sa deň
+        # PREDSA spracuje s DT-only zúčtovaním: CSV bude obsahovať sys_MW, plánový
+        # DT zisk a RT akciu z rt_controller (ten už akceptuje ZCO=NaN). Reálny RT
+        # settlement sa dopočíta keď ZCO príde (zatiaľ rt_rev_min ≈ 0).
+        # Skip IBA ak nemáme NIČ (ani sys_MW) — vtedy fyzika nebeží.
+        _has_sys_mw = mn_day.get("sys_MW")
+        if d < today.date() and (_has_sys_mw is None or _has_sys_mw.notna().sum() == 0):
             day += pd.Timedelta(days=1); continue
         try:
             try:

@@ -81,6 +81,14 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
                         optimize_distribution: bool = False,
                         # ostatné
                         max_cycles: Optional[float] = None,
+                        # parita s optimizer.optimize_day — chýbajúce parametre
+                        batt_kw_override=None,
+                        max_export_kwh_day: Optional[float] = None,
+                        max_import_kwh_day: Optional[float] = None,
+                        allow_curtail: bool = True,
+                        allow_grid_charge: bool = True,
+                        block_planned_discharge: bool = False,
+                        block_neg_import: bool = False,
                         dt: float = 1.0) -> Dict[str, Any]:
     """Joint LP optimalizácia.
 
@@ -172,6 +180,19 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         tou = np.asarray(tou_price_eur, float).reshape(-1)[:T]
         if tou.size < T:
             tou = np.concatenate([tou, np.zeros(T - tou.size)])
+
+    # Per-slot batt multiplier (× šablóna) — parita s optimizer.optimize_day.
+    # mult=1.0 → bez zmeny, mult=0.5 → polovica batt_kw v slote, mult=0 → batt zablokovaná.
+    if batt_kw_override is None:
+        mults = np.ones(T, dtype=float)
+    else:
+        mults = np.asarray(batt_kw_override, float).reshape(-1)
+        if mults.size < T:
+            mults = np.concatenate([mults, np.ones(T - mults.size)])
+        else:
+            mults = mults[:T]
+        # Sanity: clamp do [0, 5] (mults > 1 sú "boost" sloty)
+        mults = np.clip(mults, 0.0, 5.0)
 
     # SOC limity
     socmin = batt_kwh * soc_min_pct / 100.0
@@ -345,51 +366,95 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         A_ub.append(row_c)
         b_ub.append(max_cycles * batt_kwh)
 
-    # Bounds — toggle gating je teraz na sub-streams (EX_FTV/EX_BATT/IM_LOAD/IM_BATT),
-    # nie na aggregate EX_DAM/IM_DAM. Tým fyzicky vynútime semantiku toggle-ov.
+    # Denné kapy DAM (parita s optimizer.optimize_day):
+    #   sum(EX_DAM + EX_VDT) ≤ max_export_kwh_day
+    #   sum(IM_DAM + IM_VDT) ≤ max_import_kwh_day
+    if max_export_kwh_day is not None and float(max_export_kwh_day) > 0:
+        row_ex = np.zeros(n)
+        for i in range(T):
+            row_ex[idx(EX_DAM, i)] = 1.0
+            row_ex[idx(EX_VDT, i)] = 1.0
+        A_ub.append(row_ex)
+        b_ub.append(float(max_export_kwh_day))
+    if max_import_kwh_day is not None and float(max_import_kwh_day) > 0:
+        row_im = np.zeros(n)
+        for i in range(T):
+            row_im[idx(IM_DAM, i)] = 1.0
+            row_im[idx(IM_VDT, i)] = 1.0
+        A_ub.append(row_im)
+        b_ub.append(float(max_import_kwh_day))
+
+    # Bounds — toggle gating je na sub-streams (EX_FTV/EX_BATT/IM_LOAD/IM_BATT).
+    # Aplikujeme aj per-slot mults (× šablóna) a ďalšie flagy parity s optimizer.optimize_day:
+    #   - allow_curtail=False → CU = 0
+    #   - allow_grid_charge=False → IM_BATT = 0 (grid nesmie nabíjať batériu)
+    #   - block_planned_discharge=True → DI_LOAD = EX_BATT = 0 (žiadny D-1 výboj)
+    #   - block_neg_import=True a price < 0 → IM_DAM[t] = 0 (žiadny import za zápornú cenu)
     bounds = []
     for g in range(n_groups):
         for t in range(T):
             lb = 0.0
             ub = None
-            # ---- Aggregate batt streams (gated cez trade_batt) ----
+            # Per-slot batt cap (× šablóna). mult=0 znamená "slot vypnutý — batt sa nehýbe".
+            batt_slot_cap = batt_kwh_per_slot * float(mults[t])
+            # ---- Aggregate batt streams (gated cez trade_batt + mults + block_planned_discharge) ----
             if g == CH:
-                ub = batt_kwh_per_slot if trade_batt else 0.0
+                ub = batt_slot_cap if trade_batt else 0.0
             elif g == DI:
-                ub = batt_kwh_per_slot if trade_batt else 0.0
-            # ---- Aggregate grid streams (limit iba sieťovou kapacitou) ----
+                # block_planned_discharge: D-1 plán nesmie vybíjať (mults=0 alebo flag)
+                if not trade_batt or block_planned_discharge:
+                    ub = 0.0
+                else:
+                    ub = batt_slot_cap
+            # ---- Aggregate grid streams (limit iba sieťovou kapacitou + block_neg_import) ----
             elif g == EX_DAM:
                 ub = g_ex_kwh
             elif g == IM_DAM:
-                ub = g_im_kwh
+                # Žiadny import keď je cena záporná (block_neg_import).
+                ub = 0.0 if (block_neg_import and pr_dam[t] < 0) else g_im_kwh
             elif g == EX_VDT:
                 ub = g_ex_kwh if use_vdt else 0.0
             elif g == IM_VDT:
-                ub = g_im_kwh if use_vdt else 0.0
+                if not use_vdt:
+                    ub = 0.0
+                elif block_neg_import and vdt_buy[t] < 0:
+                    ub = 0.0
+                else:
+                    ub = g_im_kwh
             elif g == CU:
-                ub = float(max(pv[t], 0))   # max curtailment = aktuálna PV
-            # ---- Sub-streams (toggle-gated) ----
+                # max curtailment = aktuálna PV. Ak allow_curtail=False, blokované.
+                ub = float(max(pv[t], 0)) if allow_curtail else 0.0
+            # ---- Sub-streams (toggle-gated + mults) ----
             elif g == PV_LOAD:
-                # PV → load: voľný (intern), max = min(pv, load)
+                # PV → load: voľný (intern), max = min(pv, load). Nezávislé od mults (free path).
                 ub = float(min(max(pv[t], 0), max(load[t], 0)))
             elif g == PV_BATT:
-                # PV → batt: voľný (intern), max = min(pv, batt_kwh_per_slot)
-                ub = float(min(max(pv[t], 0), batt_kwh_per_slot)) if trade_batt else 0.0
+                # PV → batt: gated cez trade_batt + mults
+                ub = float(min(max(pv[t], 0), batt_slot_cap)) if trade_batt else 0.0
             elif g == EX_FTV:
-                # PV → grid: gated cez trade_ftv
+                # PV → grid: gated cez trade_ftv (PV→grid je nezávislé od batt mults)
                 ub = float(max(pv[t], 0)) if trade_ftv else 0.0
             elif g == DI_LOAD:
-                # batt → load: voľný (intern, pre self-consumption)
-                ub = float(min(batt_kwh_per_slot, max(load[t], 0))) if trade_batt else 0.0
+                # batt → load: gated cez trade_batt + mults + block_planned_discharge
+                if not trade_batt or block_planned_discharge:
+                    ub = 0.0
+                else:
+                    ub = float(min(batt_slot_cap, max(load[t], 0)))
             elif g == EX_BATT:
-                # batt → grid: gated cez trade_batt
-                ub = batt_kwh_per_slot if trade_batt else 0.0
+                # batt → grid: gated cez trade_batt + mults + block_planned_discharge
+                if not trade_batt or block_planned_discharge:
+                    ub = 0.0
+                else:
+                    ub = batt_slot_cap
             elif g == IM_LOAD:
                 # grid → load: gated cez trade_load
                 ub = float(max(load[t], 0)) if trade_load else 0.0
             elif g == IM_BATT:
-                # grid → batt: gated cez trade_batt
-                ub = batt_kwh_per_slot if trade_batt else 0.0
+                # grid → batt: gated cez trade_batt + mults + allow_grid_charge
+                if not trade_batt or not allow_grid_charge:
+                    ub = 0.0
+                else:
+                    ub = batt_slot_cap
             bounds.append((lb, ub))
 
     # Solver
@@ -451,6 +516,14 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
     fee_total = float(np.sum(grid_fee * (im_dam + im_vdt)) / 1000.0)
     cycle_total = float(np.sum(cycle_cost * (ch + di)) / 1000.0 / 2.0)
     tou_total = float(np.sum(tou * (im_dam + im_vdt)) / 1000.0) if optimize_distribution else 0.0
+    # Distribučná úspora — koľko by si zaplatil za TOU bez batt arbitráže:
+    #   baseline = sum(tou × load)  — všetka spotreba ide z gridu za TOU sadzbu
+    #   actual   = tou_total = sum(tou × (im_dam + im_vdt))  — len reálny import
+    #   úspora   = baseline - actual
+    # Pri load=0 (žiadna spotreba v profile) úspora = 0.
+    # Pri trade_load=False sa nezohľadňuje (load nepokrýva grid, ale batt/PV).
+    tou_baseline = float(np.sum(tou * np.asarray(load, float)) / 1000.0) if optimize_distribution else 0.0
+    tou_savings = tou_baseline - tou_total
     net = dam_rev - dam_cost + vdt_rev - vdt_cost - fee_total - cycle_total - tou_total
 
     return {
@@ -486,6 +559,8 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
             "grid_fee_eur": round(fee_total, 3),
             "cycle_cost_eur": round(cycle_total, 3),
             "tou_cost_eur": round(tou_total, 3),
+            "tou_baseline_eur": round(tou_baseline, 3),
+            "tou_savings_eur": round(tou_savings, 3),
             "net_profit_eur": round(net, 3),
         },
         "flags": {

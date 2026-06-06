@@ -90,6 +90,7 @@ def _joint_to_optimize_day_format(
         settle_price: Optional[np.ndarray] = None,
         max_export_kwh_day: Optional[float] = None,
         max_import_kwh_day: Optional[float] = None,
+        load_kwh: Optional[np.ndarray] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Prevedie výstup joint_lp na (DataFrame sch, dict summary) formát.
 
@@ -118,6 +119,13 @@ def _joint_to_optimize_day_format(
         order = np.round(grid / 1000.0, 3)
     spr = price if settle_price is None else np.asarray(settle_price, float)
 
+    # Spotreba (informačne) — parita s optimizer.optimize_day výstupom (sch["load_kwh"])
+    if load_kwh is not None:
+        _load_arr = np.asarray(load_kwh, float).reshape(-1)[:T]
+        if _load_arr.size < T:
+            _load_arr = np.concatenate([_load_arr, np.zeros(T - _load_arr.size)])
+    else:
+        _load_arr = np.zeros(T, dtype=float)
     sch = pd.DataFrame({
         "hour": range(T),
         "pv_kwh": np.round(pv, 1),
@@ -132,6 +140,7 @@ def _joint_to_optimize_day_format(
         "_export_kwh": np.round(ex, 1),
         "_import_kwh": np.round(im, 1),
         "soc_kwh": np.round(soc_kwh, 1),
+        "load_kwh": np.round(_load_arr, 2),
     })
 
     econ = joint_res.get("economics", {})
@@ -170,6 +179,8 @@ def _joint_to_optimize_day_format(
         "_joint_dam_cost": econ.get("dam_cost_eur", 0),
         "_joint_vdt_cost": econ.get("vdt_cost_eur", 0),
         "_joint_tou_cost": econ.get("tou_cost_eur", 0),
+        "_joint_tou_baseline": econ.get("tou_baseline_eur", 0),
+        "_joint_tou_savings": econ.get("tou_savings_eur", 0),
     }
     return sch, summary
 
@@ -318,6 +329,14 @@ def optimize_day_or_joint(
         use_vdt=joint_flags["use_vdt"],
         optimize_distribution=joint_flags["optimize_distribution"],
         max_cycles=max_cycles,
+        # parita s optimizer.optimize_day — propagovať šablónu × + denné kapy + flagy
+        batt_kw_override=batt_kw_override,
+        max_export_kwh_day=max_export_kwh_day,
+        max_import_kwh_day=max_import_kwh_day,
+        allow_curtail=allow_curtail,
+        allow_grid_charge=allow_grid_charge,
+        block_planned_discharge=block_planned_discharge,
+        block_neg_import=block_neg_import,
         dt=dt,
     )
 
@@ -354,6 +373,7 @@ def optimize_day_or_joint(
         settle_price=settle_price,
         max_export_kwh_day=max_export_kwh_day,
         max_import_kwh_day=max_import_kwh_day,
+        load_kwh=load_arr_real,
     )
 
 

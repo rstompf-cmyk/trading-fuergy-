@@ -96,20 +96,48 @@ def backfill_imbalance(end=None, log=print):
         return dict(dataset="odchýlka (15-min + minúty)", total=len(days), missing=0, added=0)
     log(f"Odchýlka: dopĺňam {len(todo)} chýbajúcich dní…")
     added = 0
+    # Helper: normalizuj tz na naive (CSV konvencia). Mix tz-aware + tz-naive
+    # spadne v sort_values("ts") s "'<' not supported between instances of 'Timestamp'".
+    def _strip_tz_col(df, col):
+        if df is None or col not in df.columns:
+            return df
+        try:
+            s = pd.to_datetime(df[col], errors="coerce")
+            if hasattr(s.dt, "tz") and s.dt.tz is not None:
+                s = s.dt.tz_localize(None)
+            df = df.copy()
+            df[col] = s
+        except (TypeError, AttributeError, ValueError):
+            pass
+        return df
     for d in todo:
         try:
             p15, pmin = fih.fetch_day(d)
+            # Normalizuj TZ na strane p15/pmin (fresh fetch) aj old (z disku).
+            p15 = _strip_tz_col(p15, "ts")
+            pmin = _strip_tz_col(pmin, "time")
             old = pd.read_csv(fih.OUT, parse_dates=["ts"]) if os.path.exists(fih.OUT) else None
+            old = _strip_tz_col(old, "ts")
             full = pd.concat([old, p15], ignore_index=True) if old is not None else p15
+            full = _strip_tz_col(full, "ts")
             full = full.drop_duplicates(subset=["ts"]).sort_values("ts")
             full.to_csv(fih.OUT, index=False)
             oldm = pd.read_csv(fih.OUT_MIN, parse_dates=["time"]) if os.path.exists(fih.OUT_MIN) else None
+            oldm = _strip_tz_col(oldm, "time")
             fm = pd.concat([oldm, pmin], ignore_index=True) if oldm is not None else pmin
+            fm = _strip_tz_col(fm, "time")
             fm = fm.drop_duplicates(subset=["time"]).sort_values("time")
             fm.to_csv(fih.OUT_MIN, index=False)
             added += 1; log(f"  ✓ odchýlka {d}  ({added}/{len(todo)})")
         except Exception as e:
-            log(f"  ✗ odchýlka {d}: {str(e)[:50]}")
+            # Rozšírený traceback iba pre prvý fail (aby log nepretiekol pri 97 chybách).
+            import traceback as _tb
+            _msg = f"{type(e).__name__}: {str(e)[:200]}"
+            if added == 0 and d == todo[0]:
+                log(f"  ✗ odchýlka {d}: {_msg}")
+                log(f"     TRACEBACK:\n{_tb.format_exc()[-1500:]}")
+            else:
+                log(f"  ✗ odchýlka {d}: {_msg[:80]}")
         _t.sleep(0.2)
     return dict(dataset="odchýlka (15-min + minúty)", total=len(days), missing=len(todo), added=added)
 

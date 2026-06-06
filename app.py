@@ -413,13 +413,25 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         raise RuntimeError("plan_store modul nie je dostupný")
     d = dt.date.fromisoformat(date_iso)
     if int(step_min) == 60 and kind == "plan":
-        wx = _fetch_pv_cached(float(fp.get("lat", DEF["lat"])), float(fp.get("lon", DEF["lon"])),
-                                    float(fp.get("kwp", DEF["kwp"])), float(fp.get("tilt", DEF["tilt"])),
-                                    float(fp.get("azimuth", DEF["azimuth"])), float(fp.get("eff", DEF["eff"])),
-                                    start=d, end=d)
-        wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].copy()
-        if wx.empty:
-            raise RuntimeError(f"PV forecast nedostupný pre {d}")
+        # Ak profil nemá FTV (kwp=0), netreba volať PVF — pv_arr = 0 array.
+        # Cena sa berie zo ISOT predikcie nezávisle od počasia (model nemá GTI keď nie je PV).
+        _kwp = float(fp.get("kwp", DEF["kwp"]))
+        _has_pv = _kwp > 0.01
+        if _has_pv:
+            wx = _fetch_pv_cached(float(fp.get("lat", DEF["lat"])), float(fp.get("lon", DEF["lon"])),
+                                        _kwp, float(fp.get("tilt", DEF["tilt"])),
+                                        float(fp.get("azimuth", DEF["azimuth"])), float(fp.get("eff", DEF["eff"])),
+                                        start=d, end=d)
+            wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].copy()
+            if wx.empty:
+                raise RuntimeError(f"PV forecast nedostupný pre {d}")
+        else:
+            # No-FTV profil: vytvor prázdny wx grid s 24 hodinami (00..23) pre daný dátum
+            wx = pd.DataFrame({
+                "time": pd.date_range(pd.Timestamp(d), periods=24, freq="h"),
+                "kw": np.zeros(24), "gti": np.zeros(24),
+                "temp": np.full(24, 15.0), "cloud": np.full(24, 50.0),
+            })
         hist = _isot_history(d, days=8)
         wx2 = wx[["time", "gti", "temp", "cloud"]].copy(); wx2["isot_eur"] = np.nan
         h2 = hist.copy()
@@ -451,8 +463,20 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                 load24 = None
         _mex = float(fp.get("max_export_kwh_day", 0) or 0)
         _mim = float(fp.get("max_import_kwh_day", 0) or 0)
-        sch, summ = optimize_day(
-            pv_arr, decision_price, settle_price=price_arr,
+        # Joint LP flags z aktívneho profilu (parita s /plan handlerom — fix bug B).
+        # Bez tohto by batch volal čistý optimize_day a výsledky by sa líšili od single /plan.
+        from joint_lp_integration import (optimize_day_or_joint as _od_or_joint_batch,
+                                          get_flags_from_profile as _gjlp_batch)
+        try:
+            import plan_store as _ps_jlb
+            _jb_prof = _ps_jlb.resolve_profile() or "default"
+        except Exception:
+            _jb_prof = "default"
+        _joint_flags_b = _gjlp_batch(_jb_prof if _jb_prof != "default" else None)
+        sch, summ = _od_or_joint_batch(
+            pv_arr, decision_price,
+            joint_flags=_joint_flags_b, profile=_jb_prof,
+            settle_price=price_arr,
             batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])), batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
             eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
             soc_min_pct=float(fp.get("soc_min", DEF["soc_min"])),
@@ -489,17 +513,23 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
     elif int(step_min) == 15 and kind == "dentrh":
         ote = _fetch_ote_cached(d)
         price15 = _dt15_from_ote(ote)
-        wx = _fetch_pv_cached(float(fp.get("lat", DEF["lat"])), float(fp.get("lon", DEF["lon"])),
-                                    float(fp.get("kwp", DEF["kwp"])), float(fp.get("tilt", DEF["tilt"])),
-                                    float(fp.get("azimuth", DEF["azimuth"])), float(fp.get("eff", DEF["eff"])),
-                                    start=d, end=d)
-        wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].sort_values("time")
-        if wx.empty:
-            raise RuntimeError(f"PV forecast nedostupný pre {d}")
-        cal = _cal_for(d)
-        pv_h = wx.kw.values * cal
-        if len(pv_h) < 24:
-            pv_h = np.concatenate([pv_h, np.zeros(24 - len(pv_h))])
+        # Ak profil nemá FTV (kwp=0), netreba volať PVF
+        _kwp15 = float(fp.get("kwp", DEF["kwp"]))
+        if _kwp15 > 0.01:
+            wx = _fetch_pv_cached(float(fp.get("lat", DEF["lat"])), float(fp.get("lon", DEF["lon"])),
+                                        _kwp15, float(fp.get("tilt", DEF["tilt"])),
+                                        float(fp.get("azimuth", DEF["azimuth"])), float(fp.get("eff", DEF["eff"])),
+                                        start=d, end=d)
+            wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].sort_values("time")
+            if wx.empty:
+                raise RuntimeError(f"PV forecast nedostupný pre {d}")
+            cal = _cal_for(d)
+            pv_h = wx.kw.values * cal
+            if len(pv_h) < 24:
+                pv_h = np.concatenate([pv_h, np.zeros(24 - len(pv_h))])
+        else:
+            # No-FTV profil: 24 hodín × 0 kW
+            pv_h = np.zeros(24)
         pv15 = np.repeat(pv_h[:24], 4) / 4.0
         n = min(len(pv15), len(price15))
         npd = bool(fp.get("no_planned_discharge", False))
@@ -519,7 +549,17 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                 load96 = None
         _mex15 = float(fp.get("max_export_kwh_day", 0) or 0)
         _mim15 = float(fp.get("max_import_kwh_day", 0) or 0)
-        sch, summ = optimize_day(pv15[:n], price15[:n], dt=0.25,
+        # Joint LP flags z aktívneho profilu (parita s /dentrh handlerom — fix bug B 15-min)
+        from joint_lp_integration import (optimize_day_or_joint as _od_or_joint_batch15,
+                                          get_flags_from_profile as _gjlp_batch15)
+        try:
+            import plan_store as _ps_jlb15
+            _jb_prof15 = _ps_jlb15.resolve_profile() or "default"
+        except Exception:
+            _jb_prof15 = "default"
+        _joint_flags_b15 = _gjlp_batch15(_jb_prof15 if _jb_prof15 != "default" else None)
+        sch, summ = _od_or_joint_batch15(pv15[:n], price15[:n], dt=0.25,
+                                  joint_flags=_joint_flags_b15, profile=_jb_prof15,
                                   batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])),
                                   batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
                                   eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
@@ -4194,11 +4234,32 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
             )
             return HTMLResponse(_page)
         days = lsim.available_days(case, port=_PORT)
+        # Rozšíriť dropdown o dni so saved plánmi pre aktívny profil (minulé aj budúce),
+        # aby sa dali pozrieť aj dni, na ktoré livesim ešte nedobehol. plan_store iteruje
+        # iba aktívny profil/market, takže nevidíš plány z iného profilu.
+        # Step_min sa odvodí z plan_kind (60 pre 'plan', 15 pre 'dentrh').
+        try:
+            if ps is not None:
+                _live_step = 15 if plan_kind == "dentrh" else 60
+                _plan_items = ps.list_plans(kind=plan_kind) or []
+                _plan_days = set()
+                for _pi in _plan_items:
+                    if int(_pi.get("step_min", 60)) != _live_step:
+                        continue
+                    try:
+                        _plan_days.add(dt.date.fromisoformat(_pi["date"]))
+                    except Exception:
+                        pass
+                if _plan_days:
+                    days = sorted(set(days) | _plan_days)
+        except Exception as _e_pl:
+            print(f"[/livesim] list_plans pre dropdown zlyhal: {_e_pl}")
         prov = r.get("prov_date")
         if prov:
             pdate = dt.date.fromisoformat(prov)
             if pdate not in days:
                 days = days + [pdate]
+                days = sorted(set(days))
         view_day = view or (prov if prov else (days[-1].isoformat() if days else None))
         dfull = lsim.load_series(case, port=_PORT)
         # `trace_full` drží plnú minútovú resolution (predtým decimovanú do dview),
@@ -4219,6 +4280,34 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
             dview = tdf
         else:
             dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=600) if view_day else dfull
+        # Banner ak vybraný deň má saved plán ale livesim CSV pre neho nemá záznamy
+        # (typicky: budúci deň, alebo minulý deň pre ktorý sa livesim neobehol).
+        plan_only_warn = ""
+        try:
+            if view_day and (dview is None or dview.empty):
+                _has_plan = ps.has_plan(view_day, _st, plan_kind) if ps is not None else False
+                _is_future = dt.date.fromisoformat(view_day) > dt.date.today()
+                if _has_plan:
+                    _label = "budúci" if _is_future else "minulý"
+                    plan_only_warn = (
+                        f"<div style='background:#fff3cd;border-left:4px solid #f0b80f;border-radius:6px;"
+                        f"padding:10px 14px;margin:10px 0;font-size:13px;color:#7a5c00'>"
+                        f"📅 <b>Pre {_label} deň {view_day} existuje uložený plán</b>, ale živá simulácia "
+                        f"pre tento deň ešte nemá žiadne minútové záznamy. Grafy preto nezobrazia reálne "
+                        f"hodnoty (FTV, batéria, SOC, RT) — uvidíš len holý plán.<br>"
+                        f"<b>Pre minulé dni:</b> klikni <b>Spustiť/Obnoviť simuláciu</b> nižšie (livesim "
+                        f"dobehne história od najstaršej minúty). <b>Pre budúce dni:</b> reálne dáta "
+                        f"pribudnú postupne ako deň prebehne.</div>")
+                elif _is_future:
+                    plan_only_warn = (
+                        f"<div style='background:#eef3fb;border-left:4px solid #1F4E78;border-radius:6px;"
+                        f"padding:10px 14px;margin:10px 0;font-size:13px;color:#33506e'>"
+                        f"📆 <b>Vybraný deň {view_day} je v budúcnosti</b> a ešte nemá vygenerovaný plán "
+                        f"ani simuláciu. <a href='/' style='color:#1F4E78;font-weight:600'>/plan</a> alebo "
+                        f"<a href='/plan_batch' style='color:#1F4E78;font-weight:600'>batch generátor</a> "
+                        f"pre vytvorenie plánu.</div>")
+        except Exception:
+            pass
         # ── all-zero plán detekcia: ak má aktuálne zobrazený deň rt_mask aj mults samé 0,
         #     RT engine sa nikdy nestrelí a batéria nereaguje. Tipická chyba: rt_freedom=False
         #     + mults=0 v šablóne. Banner ponúkne 1-klik re-generáciu s rt_freedom=on.
@@ -4380,7 +4469,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     f"margin:10px 0;font-size:13px'><b>⚠ Realio overlay zlyhal:</b> {_ovl_err}</div>")
         body = _livesim_body(r, dfull, dview, view_day, days, realio_overlay=realio_on, trace_full=trace_full)
         return (head.replace("</head>", '<meta http-equiv="refresh" content="60">' + "</head>")
-                + form + plan_warn + zero_plan_warn + realio_banner + body + "</body></html>")
+                + form + plan_warn + plan_only_warn + zero_plan_warn + realio_banner + body + "</body></html>")
     except Exception as ex:
         import traceback
         tb = traceback.format_exc()
@@ -5005,10 +5094,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             return _out
         _vdt_plan_kw = _slot_kwh_to_min_kw(_vdt_planned96, dview["time"])
         _vdt_real_kw = _slot_kwh_to_min_kw(_vdt_realized96, dview["time"])
-        # DAM + VDT (kombinovaná nominácia)
+        # Aktuálna nominácia voči trhu = DAM (záväzná D-1) + VDT realizované (uzavreté trades).
+        # VDT plán je IBA návrh z live_advisor — nie je commitment, takže sa NEPRIRÁTAVA
+        # (inak by sa rovnaký obchod počítal 2× a graf by ukázal 2-3× vyšší výkon než batéria
+        # vie poskytnúť).
         _dam_plus_vdt_kw = [
-            (_nz(pg) + _nz(vp) + _nz(vr))
-            for pg, vp, vr in zip(_pg_kw, _vdt_plan_kw, _vdt_real_kw)
+            (_nz(pg) + _nz(vr))
+            for pg, vr in zip(_pg_kw, _vdt_real_kw)
         ]
         # _actv = plán+RT pre celý deň (pre budúce minúty rt=0 → len plán). Predtým tu bolo
         # `if lv else NaN` čo orezávalo THR/DEV pri "teraz" — teraz to ide 0-24h.
@@ -10654,6 +10746,42 @@ def vdt_page(request: Request):
     else:
         sec_market = sec_orderbook = sec_orders = sec_trades = sec_eval_d = sec_eval_dd = sec_eval_m = sec_h2h = ""
 
+    # ── Backfill card — od-do stiahnutie historických dát ──────────────────
+    _today_iso = dt.date.today().isoformat()
+    _week_ago = (dt.date.today() - dt.timedelta(days=7)).isoformat()
+    backfill_card = (
+        f"<div style='background:#eef7ee;border:1px solid #87c79d;border-radius:10px;"
+        f"padding:14px 18px;margin:14px 0'>"
+        f"<div style='font-size:16px;font-weight:600;color:#1B5E20;margin-bottom:8px'>"
+        f"📥 Stiahnuť historické dáta (od-do)</div>"
+        f"<form method='post' action='/vdt/backfill_range' "
+        f"style='display:flex;gap:10px;align-items:end;flex-wrap:wrap'>"
+        f"<label style='font-size:13px'>Od<br>"
+        f"<input type='date' name='date_from' value='{_week_ago}' required "
+        f"style='padding:5px;border:1px solid #ccc;border-radius:5px'></label>"
+        f"<label style='font-size:13px'>Do<br>"
+        f"<input type='date' name='date_to' value='{_today_iso}' required "
+        f"style='padding:5px;border:1px solid #ccc;border-radius:5px'></label>"
+        f"<div style='display:flex;flex-direction:column;gap:4px;font-size:13px'>"
+        f"<label><input type='checkbox' name='kind_trades' checked> "
+        f"💱 Trades (vlastné, REST)</label>"
+        f"<label><input type='checkbox' name='kind_eval_daily' checked> "
+        f"📈 Eval daily-detail (REST)</label>"
+        f"</div>"
+        f"<div style='display:flex;flex-direction:column;gap:4px;font-size:13px'>"
+        f"<label><input type='checkbox' name='kind_dam' checked> "
+        f"📊 DAM clearing (OKTE public)</label>"
+        f"<label><input type='checkbox' name='kind_vdt_15min' checked> "
+        f"⚡ VDT 15-min (OKTE public)</label>"
+        f"</div>"
+        f"<button type='submit' style='background:#2E7D32;color:#fff;border:0;"
+        f"padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600'>"
+        f"▶ Stiahnuť</button>"
+        f"</form>"
+        f"<div style='font-size:11px;color:#555;margin-top:6px'>"
+        f"Trades/Eval potrebujú mTLS cert (REST). DAM/VDT 15-min sú verejné OKTE dáta. "
+        f"CSV výstupy: <code>out/sk/vdt_history/&lt;kind&gt;.csv</code></div>"
+        f"</div>")
     body = (
         f"{nav}"
         f"<div style='max-width:1200px;margin:14px auto;padding:0 16px;"
@@ -10664,6 +10792,7 @@ def vdt_page(request: Request):
         f"<b>Read-only</b> pohľad na účet účastníka OKTE intraday trhu. "
         f"Modul iba číta dáta — žiadne podávanie ani úprava príkazov.</p>"
         f"{setup_html}"
+        f"{backfill_card}"
         f"{sec_market}"
         f"{sec_orderbook}"
         f"{sec_orders}"
@@ -10676,6 +10805,90 @@ def vdt_page(request: Request):
     )
     from ui.templates import render_legacy_body
     return render_legacy_body(request, "OKTE VDT", body)
+
+
+@app.post("/vdt/backfill_range", response_class=HTMLResponse)
+def vdt_backfill_range_endpoint(
+        date_from: str = Form(...),
+        date_to: str = Form(...),
+        kind_trades: str = Form(""),
+        kind_eval_daily: str = Form(""),
+        kind_dam: str = Form(""),
+        kind_vdt_15min: str = Form(""),
+        ):
+    """VDT od-do backfill — stiahne zvolené kindy pre daný rozsah a uloží do CSV.
+
+    Form fields (checkboxy posielajú "on" keď zaškrtnuté, "" keď nie):
+        date_from, date_to: ISO YYYY-MM-DD
+        kind_trades, kind_eval_daily, kind_dam, kind_vdt_15min: "on" alebo ""
+    """
+    import html as _html
+    try:
+        import okte_vdt_backfill as _vbf
+    except ImportError as e:
+        return HTMLResponse(f"<p style='color:#C0392B'>Modul okte_vdt_backfill nedostupný: {e}</p>",
+                              status_code=500)
+    kinds = []
+    if kind_trades:     kinds.append("trades")
+    if kind_eval_daily: kinds.append("eval_daily")
+    if kind_dam:        kinds.append("dam")
+    if kind_vdt_15min:  kinds.append("vdt_15min")
+    if not kinds:
+        kinds = ["trades", "eval_daily", "dam", "vdt_15min"]   # default = všetko
+    log_lines: list[str] = []
+    def _log(s: str):
+        log_lines.append(s)
+    res = _vbf.backfill_range(date_from, date_to, kinds, log=_log)
+    cov = _vbf.coverage_summary()
+    # Render log + summary
+    log_html = "<pre style='background:#f8f9fa;padding:12px;border-radius:8px;font-size:12px;" \
+                "max-height:400px;overflow-y:auto'>" + _html.escape("\n".join(log_lines)) + "</pre>"
+    if not res.get("ok"):
+        summary_html = (f"<div style='background:#ffeaea;padding:12px;border-radius:8px;color:#C0392B'>"
+                          f"⚠ {_html.escape(str(res.get('error', '?')))}</div>")
+    else:
+        rows = []
+        for k, s in (res.get("summary") or {}).items():
+            rows.append(f"<tr><td>{k}</td><td>✓ {s['ok']}</td><td>✗ {s['fail']}</td>"
+                          f"<td>{s['rows']}</td></tr>")
+        summary_html = (
+            f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;color:#1B5E20'>"
+            f"<b>✓ Backfill dokončený</b> — {res.get('days_total')} dní × "
+            f"{res.get('kinds_total')} kindov</div>"
+            f"<table style='width:100%;border-collapse:collapse;margin:10px 0;font-size:13px' "
+            f"class='tbl-compact'>"
+            f"<tr style='background:#eef3f9'><th>Kind</th><th>OK dní</th><th>FAIL</th>"
+            f"<th>Total rows</th></tr>"
+            f"{''.join(rows)}</table>")
+    cov_rows = []
+    for k, c in cov.items():
+        if c.get("exists"):
+            cov_rows.append(f"<tr><td>{k}</td><td>{c.get('rows', 0)}</td>"
+                              f"<td>{c.get('days', '—')}</td>"
+                              f"<td>{c.get('first', '—')}</td>"
+                              f"<td>{c.get('last', '—')}</td></tr>")
+        else:
+            cov_rows.append(f"<tr><td>{k}</td><td colspan='4' style='color:#999'>(CSV neexistuje)</td></tr>")
+    cov_html = (
+        f"<h3>Pokrytie CSV po backfille</h3>"
+        f"<table style='width:100%;border-collapse:collapse;font-size:13px' class='tbl-compact'>"
+        f"<tr style='background:#eef3f9'><th>Kind</th><th>Rows</th><th>Days</th>"
+        f"<th>First</th><th>Last</th></tr>{''.join(cov_rows)}</table>")
+    nav = _nav("/vdt")
+    body = (
+        f"{nav}"
+        f"<div style='max-width:1100px;margin:14px auto;padding:0 16px;"
+        f"font-family:-apple-system,Segoe UI,Arial'>"
+        f"<h1>📥 VDT Backfill — výsledok</h1>"
+        f"<p><b>Rozsah:</b> {_html.escape(date_from)} → {_html.escape(date_to)} · "
+        f"<b>Kindy:</b> {', '.join(kinds)}</p>"
+        f"{summary_html}{cov_html}"
+        f"<h3>Detail logu</h3>{log_html}"
+        f"<p><a href='/vdt' style='background:#1F4E78;color:#fff;padding:8px 16px;"
+        f"border-radius:6px;text-decoration:none'>← Späť na /vdt</a></p>"
+        f"</div>")
+    from ui.templates import render_legacy_body
+    return render_legacy_body(None, "VDT Backfill", body)
 
 
 @app.post("/vdt/inspect_cert", response_class=HTMLResponse)
@@ -12100,6 +12313,21 @@ a{{color:#1F4E78}}</style></head><body>
         _tou_row = (_row(("TOU + TPS + SS + OZE (distribúcia)" if _jflags.get("optimize_distribution")
                           else "TOU (distribúcia vypnutá)"), _tou, "cost")
                      if _tou > 0.001 or _jflags.get("optimize_distribution") else "")
+        # Distribučná úspora — koľko sme ušetrili oproti baseline (load bez batt arbitráže)
+        _tou_base = float(_econ.get("tou_baseline_eur", 0))
+        _tou_sav = float(_econ.get("tou_savings_eur", 0))
+        _tou_savings_row = ""
+        if _jflags.get("optimize_distribution") and (_tou_base > 0.001 or abs(_tou_sav) > 0.001):
+            _sav_color = "#2E7D32" if _tou_sav >= 0 else "#C0392B"
+            _sav_sign = "+" if _tou_sav >= 0 else "−"
+            _tou_savings_row = (
+                f"<tr><td style='padding:4px 10px;color:#555'>"
+                f"<span title='Baseline = TOU × load (bez batt arbitráže). "
+                f"Úspora = baseline − aktuálne. Vyšší export/lepšie načasovanie spotreby zvyšuje úsporu.'>"
+                f"Úspora distribúcie (baseline {_tou_base:.2f} €)</span></td>"
+                f"<td style='padding:4px 10px;text-align:right;color:{_sav_color};font-weight:600;"
+                f"font-variant-numeric:tabular-nums'>{_sav_sign}{abs(_tou_sav):.2f} €</td></tr>"
+            )
         _vdt_rows = ""
         if _jflags.get("use_vdt"):
             _vdt_rows = (_row("VDT predaj (export)", _vdt_rev, "rev")
@@ -12117,6 +12345,7 @@ a{{color:#1F4E78}}</style></head><body>
             f"{_row('Poplatok prenos (grid_fee × import)', _fee, 'cost')}"
             f"{_row('Náklad cyklov batérie', _cyc, 'cost')}"
             f"{_tou_row}"
+            f"{_tou_savings_row}"
             f"<tr><td colspan='2' style='border-top:2px solid #1F4E78;padding:6px 10px;"
             f"text-align:right;font-size:11px;color:#666'>"
             f"Σ príjmy {_rev_total:+.2f} € • Σ náklady {_cost_total:.2f} €</td></tr>"
