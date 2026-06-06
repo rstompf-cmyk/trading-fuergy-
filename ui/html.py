@@ -102,26 +102,137 @@ def _market_badge() -> str:
         return ""
 
 
-def _nav(active: str = "") -> str:
-    """Hlavná navigácia (rovnaká na všetkých stránkach). `active` = href aktuálnej stránky.
+def _profile_tabs(current_active: str = "") -> str:
+    """Bug R1: Profile chip tabs — každý profil ako vlastná karta.
 
-    Všetky linky majú `target="_top"` — keď je nejaká stránka embedovaná v iframe
-    (napr. /livesim v /realio?tab=riadenie), kliknutie v navigácii vyskočí do
-    top window namiesto vnorenia ďalšieho iframu (zabráni nested iframe rekurzii).
+    Vizuál:
+        🟢🔵 VW_simulacia   (zelená karta, modrý indicator = bg ON, výrazne ak active)
+        🔴🔵 Trakany_real   (červená karta — real mode)
+        🟢⚪ Bat_D-1_bat_2   (sivý indicator = bg OFF — wake-on-click)
+
+    Klik na neaktívny chip → POST /profiles/apply (set_active + redirect na pôvodu stránku).
+    Klik na aktívny chip → bez akcie (alebo /dashboard ?profile=X).
     """
-    items = [("/", "🗓 Plán D-1"), ("/dentrh", "⚡ Denný trh 15-min"), ("/rt", "🔴 RT poradca"),
-             ("/plan_batch", "📦 Batch plán"), ("/plans", "📋 Plány"),
-             ("/profiles", "⚙ Profily"),
-             ("/livesim", "🟢 Živá simulácia"),
-             ("/load_import", "🏠 Spotreba"),
-             ("/realio", "🔌 Reálne meranie"),
-             ("/auto_control", "🤖 Paper trading"),
-             ("/vdt", "💹 OKTE VDT"),
-             ("/kalibracia", "📈 Kalibrácia"), ("/data", "💾 Dáta")]
-    links = "".join(
-        f'<a href="{href}" target="_top" style="padding:8px 12px;border-radius:8px;text-decoration:none;font-size:14px;'
+    try:
+        import profiles as _pr
+        all_profs = _pr.list_profiles()
+    except Exception:
+        all_profs = []
+    # bg-enabled set
+    bg_enabled = set()
+    try:
+        import auto_control as _ac
+        bg_enabled = _ac.get_enabled_profiles()
+    except Exception:
+        pass
+    # Order: real first, sim second, alphabetic in each group
+    def _mode(name):
+        try:
+            return _pr.get_mode(name) if all_profs else "unknown"
+        except Exception:
+            return "unknown"
+    profs_sorted = sorted(all_profs, key=lambda n: (0 if _mode(n) == "real" else 1, n.lower()))
+    if not profs_sorted:
+        return ""
+    chips = []
+    for name in profs_sorted:
+        m = _mode(name)
+        is_active = (name == current_active)
+        bg_on = (name in bg_enabled)
+        # Color: real = červená, sim = zelená; saturácia: active=full, inactive=light
+        if m == "real":
+            bg_col = "#C62828" if is_active else "#fff"
+            fg_col = "#fff" if is_active else "#C62828"
+            border = "#C62828"
+            mode_icon = "🔴"
+        else:
+            bg_col = "#2E7D32" if is_active else "#fff"
+            fg_col = "#fff" if is_active else "#2E7D32"
+            border = "#2E7D32"
+            mode_icon = "🟢"
+        bg_icon = "🔵" if bg_on else "⚪"
+        # Active = priamy link na dashboard tohto profilu (R2 pridáva /dashboard?profile=X)
+        # Inactive = POST /profiles/apply form so set_active
+        if is_active:
+            chips.append(
+                f'<a href="/?profile={name}" target="_top" '
+                f'style="display:inline-flex;align-items:center;gap:4px;'
+                f'padding:7px 12px;border:2px solid {border};border-radius:9px;'
+                f'background:{bg_col};color:{fg_col};font-weight:700;font-size:13px;'
+                f'text-decoration:none;box-shadow:0 2px 4px rgba(0,0,0,0.1)" '
+                f'title="Aktívny profil — klikni pre dashboard {name}">'
+                f'{mode_icon}{bg_icon} {name}</a>'
+            )
+        else:
+            chips.append(
+                f'<form method="post" action="/profiles/apply" target="_top" '
+                f'style="display:inline-block;margin:0">'
+                f'<input type="hidden" name="name" value="{name}">'
+                f'<input type="hidden" name="redirect_to" value="/?profile={name}">'
+                f'<button type="submit" '
+                f'style="display:inline-flex;align-items:center;gap:4px;'
+                f'padding:6px 11px;border:1px solid {border};border-radius:9px;'
+                f'background:{bg_col};color:{fg_col};font-weight:600;font-size:13px;'
+                f'cursor:pointer;font-family:inherit" '
+                f'title="Klikni pre prepnutie na profil {name}">'
+                f'{mode_icon}{bg_icon} {name}</button></form>'
+            )
+    return (f'<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;'
+              f'margin:8px 0;padding:8px;background:#f0f4f8;border-radius:10px;'
+              f'border-left:3px solid #1F4E78">'
+              f'<span style="font-size:12px;color:#666;font-weight:600;margin-right:4px">PROFIL:</span>'
+              f'{"".join(chips)}'
+              f'</div>')
+
+
+def _nav(active: str = "") -> str:
+    """Hlavná navigácia (Bug R1 — 3-pásmový layout).
+
+    Pásmo 1 (vrch): globálne pages (RT poradca, Profily, Nástroje)
+    Pásmo 2 (stred): profile chip tabs (každý profil ako vlastná karta)
+    Pásmo 3 (spodok): per-profile sub-nav (Plán D-1, Denný trh, ..., podľa mode)
+
+    Všetky linky majú `target="_top"` (žiadna iframe rekurzia).
+    """
+    # Pásmo 1: GLOBÁLNE pages (mimo profilu)
+    global_items = [
+        ("/rt", "🔴 RT poradca"),
+        ("/profiles", "⚙ Profily"),
+        ("/kalibracia", "📈 Kalibrácia"),
+        ("/data", "💾 Dáta"),
+    ]
+    global_links = "".join(
+        f'<a href="{href}" target="_top" style="padding:7px 11px;border-radius:7px;'
+        f'text-decoration:none;font-size:13px;'
         f'{"background:#1F4E78;color:#fff;font-weight:600" if href==active else "color:#1F4E78"}">{lab}</a>'
-        for href, lab in items)
+        for href, lab in global_items)
+    # Pásmo 3: per-profile pages (depends on active profile mode)
+    try:
+        import profiles as _pr
+        from core.profile_resolver import get_active as _ga
+        cur_prof = _ga()
+        cur_mode = _pr.get_mode(cur_prof) if cur_prof else "unknown"
+    except Exception:
+        cur_prof = ""
+        cur_mode = "unknown"
+    profile_items = [
+        ("/", "🗓 Plán D-1"),
+        ("/dentrh", "⚡ Denný trh 15-min"),
+        ("/plan_batch", "📦 Batch plán"),
+        ("/plans", "📋 Plány"),
+        ("/livesim", "🟢 Živá simulácia"),
+        ("/load_import", "🏠 Spotreba"),
+        ("/auto_control", "🤖 Paper trading"),
+        ("/vdt", "💹 OKTE VDT"),
+    ]
+    # Reálne meranie iba pre real profile
+    if cur_mode == "real":
+        profile_items.insert(5, ("/realio", "🔌 Reálne meranie"))
+    profile_links = "".join(
+        f'<a href="{href}" target="_top" style="padding:7px 11px;border-radius:7px;'
+        f'text-decoration:none;font-size:13px;'
+        f'{"background:#1F4E78;color:#fff;font-weight:600" if href==active else "color:#1F4E78"}">{lab}</a>'
+        for href, lab in profile_items)
     # User chip + Odhlásiť — JS naplní z /me. Bez auth ostane skrytý (display:none).
     user_chip = (
         '<span id="navUserChip" style="display:none;align-items:center;gap:8px;'
@@ -159,7 +270,15 @@ def _nav(active: str = "") -> str:
           '}catch(e){}'
         '})();</script>'
     )
-    return (f'<nav style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 18px;'
-            f'padding:8px;background:#eef3f9;border-radius:10px">{links}'
-            f'<span style="margin-left:auto;display:inline-flex;gap:6px;align-items:center">'
-            f'{_active_profile_badge()}{_market_badge()}{user_chip}</span></nav>')
+    # 3-pásmový layout (Bug R1)
+    pasmo1 = (f'<nav style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 6px;'
+                  f'padding:7px;background:#eef3f9;border-radius:10px">{global_links}'
+                  f'<span style="margin-left:auto;display:inline-flex;gap:6px;align-items:center">'
+                  f'{_market_badge()}{user_chip}</span></nav>')
+    pasmo2 = _profile_tabs(cur_prof)
+    pasmo3 = (f'<nav style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 18px;'
+                  f'padding:7px;background:#f7faff;border-radius:10px;border-left:3px solid #2E7D32" '
+                  f'aria-label="Stránky aktívneho profilu">'
+                  f'<span style="font-size:12px;color:#666;font-weight:600;margin-right:4px">PAGES:</span>'
+                  f'{profile_links}</nav>')
+    return pasmo1 + pasmo2 + pasmo3
