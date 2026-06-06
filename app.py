@@ -2081,37 +2081,23 @@ def manager_dashboard():
     now_hh = _dt.datetime.now().hour + _dt.datetime.now().minute / 60.0
 
     # === 1. Zdieľané dáta hore: DT ceny + MT signál ===
-    # DT ceny — z OTE cache (CZ + SK ak dostupné)
-    dt_cz_labels: list = []
+    # DT ceny CZ — z OTE cache (DataFrame s columns date/interval/cena_EUR)
+    dt_labels: list = []
     dt_cz_vals: list = []
-    dt_sk_vals: list = []
     try:
         from core.caches import _fetch_ote_cached
-        dt_cz = _fetch_ote_cached(today, "CZ") or {}
-        for hh, eur in sorted(dt_cz.items()):
-            try:
-                dt_cz_labels.append(f"{int(hh):02d}:00")
-                dt_cz_vals.append(float(eur))
-            except Exception:
-                pass
-    except Exception:
-        pass
-    try:
-        from core.caches import _fetch_ote_cached
-        dt_sk = _fetch_ote_cached(today, "SK") or {}
-        if dt_sk and not dt_cz_labels:
-            for hh, eur in sorted(dt_sk.items()):
+        dt_df = _fetch_ote_cached(today)
+        if dt_df is not None and not dt_df.empty:
+            for _, row in dt_df.iterrows():
                 try:
-                    dt_cz_labels.append(f"{int(hh):02d}:00")
-                    dt_sk_vals.append(float(eur))
+                    iv = str(row.get("interval", ""))
+                    eur = float(row.get("cena_EUR", 0.0))
+                    # interval typu "00:00-00:15" — vezmi začiatok
+                    start = iv.split("-")[0].strip() if "-" in iv else iv
+                    dt_labels.append(start)
+                    dt_cz_vals.append(eur)
                 except Exception:
                     pass
-        elif dt_sk:
-            for hh in sorted(dt_sk.keys()):
-                try:
-                    dt_sk_vals.append(float(dt_sk[hh]))
-                except Exception:
-                    dt_sk_vals.append(None)
     except Exception:
         pass
 
@@ -2121,29 +2107,34 @@ def manager_dashboard():
     try:
         from seps_sk import load_seps_mw_for_day as _seps
         mt_df = _seps(today_iso)
-        if mt_df is not None and not mt_df.empty and "sys" in mt_df.columns:
+        if mt_df is not None and not mt_df.empty and "mw" in mt_df.columns:
             # decimácia: každá 5. minúta (288 bodov / deň)
             step = max(1, len(mt_df) // 288)
             sample = mt_df.iloc[::step]
-            for ts, row in sample.iterrows():
+            for _, row in sample.iterrows():
                 try:
-                    t = ts.strftime("%H:%M") if hasattr(ts, "strftime") else str(ts)[:5]
-                    mt_labels.append(t)
-                    v = float(row.get("sys", 0.0))
-                    mt_vals_sys.append(v)
+                    ts = row.get("ts_local")
+                    if hasattr(ts, "strftime"):
+                        mt_labels.append(ts.strftime("%H:%M"))
+                    else:
+                        mt_labels.append(str(ts)[11:16])
+                    mw = row.get("mw")
+                    if mw is None or (isinstance(mw, float) and (mw != mw)):  # NaN
+                        mt_vals_sys.append(None)
+                    else:
+                        mt_vals_sys.append(float(mw))
                 except Exception:
                     pass
     except Exception:
         pass
 
-    # === 2. Per-profil dáta ===
+    # === 2. Per-profil dáta — IBA BG ON (live) ===
     profile_cards = []
-    bg_count = 0
+    bg_count = len(bg_enabled)
     total_vdt_eur = 0.0
-    sim_profs = [n for n in sorted(all_profs) if n in bg_enabled]
-    rest_profs = [n for n in sorted(all_profs) if n not in bg_enabled]
+    live_profs = sorted([n for n in all_profs if n in bg_enabled])
 
-    for name in sim_profs + rest_profs:
+    for name in live_profs:
         try:
             p_data = _pr.load_profile(name) or {}
         except Exception:
@@ -2281,7 +2272,7 @@ def manager_dashboard():
         )
 
     n_total = len(all_profs)
-    n_active = len(sim_profs)
+    n_active = len(live_profs)
 
     # === 3. HTML body ===
     body = (
@@ -2300,9 +2291,10 @@ def manager_dashboard():
         f'<div class="container">'
         f'<h1 style="margin:0 0 6px;color:#1F4E78">🛰 Manager — fleet command center</h1>'
         f'<p style="color:#666;margin:0 0 18px;font-size:13px">'
-        f'{n_total} profilov · {n_active} BG ON · '
+        f'{n_active} BG ON (z {n_total} celkom) · '
         f'<span style="color:{"#2E7D32" if total_vdt_eur >= 0 else "#C62828"};font-weight:700">{total_vdt_eur:+.0f} € VDT dnes spolu</span> · '
-        f'auto-refresh 60 s</p>'
+        f'auto-refresh 60 s · '
+        f'<a href="/profiles" style="color:#1F4E78">⚙ Spravovať profily</a></p>'
 
         # Zdieľané grafy hore
         f'<div class="shared-charts">'
@@ -2317,9 +2309,9 @@ def manager_dashboard():
         f'</div>'
 
         # Per-profil karty
-        f'<h2 style="color:#1F4E78;font-size:18px;margin:14px 0 10px">Profily</h2>'
+        f'<h2 style="color:#1F4E78;font-size:18px;margin:14px 0 10px">Bežiace profily ({n_active})</h2>'
         f'<div class="profile-grid">'
-        f'{"".join(profile_cards) if profile_cards else "<div style=padding:20px;text-align:center;color:#888>Žiadne profile — vytvor cez /profiles/edit</div>"}'
+        f'{"".join(profile_cards) if profile_cards else f"<div style=padding:20px;text-align:center;color:#888;background:#fff;border-radius:10px;grid-column:1/-1>Žiadny profil nebeží na pozadí. Zapni cez <a href=/profiles style=color:#1F4E78>⚙ Profily</a> (toggle Bg ON)</div>"}'
         f'</div>'
 
         f'<p style="color:#888;font-size:12px;margin:18px 0 0;font-style:italic">'
