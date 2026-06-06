@@ -1003,10 +1003,13 @@ def profiles_save(name: str = Form(...), note: str = Form(default=""),
 
 
 @app.post("/profiles/apply", response_class=HTMLResponse)
-def profiles_apply(name: str = Form(...)):
+def profiles_apply(name: str = Form(...), redirect_to: str = Form(default="")):
     """Aplikuje profile: prepíše ui_settings.plan/dentrh/rt + plan_overrides template.
     Plus auto-detect: ak profil má v plan_store iný kind (15-min vs hodinový),
-    automaticky nastaví ui_settings.livesim.case aby livesim STRICT nepadal."""
+    automaticky nastaví ui_settings.livesim.case aby livesim STRICT nepadal.
+
+    Bug Q: `redirect_to` param pre návrat na pôvodnú stránku (napr. /realio?tab=riadenie)
+    po zmene profilu cez quick switcher dropdown. Default = /profiles."""
     if pr is None:
         return "<p>profiles modul nedostupný.</p>"
     try:
@@ -1059,10 +1062,17 @@ def profiles_apply(name: str = Form(...)):
 
     _clear_livesim_logs()           # iný profil = iné nastavenia + iná šablóna → fresh log
     upd = ", ".join(summary.get("updated", []))
+    # Bug Q1: redirect_to podporuje návrat na pôvodnú stránku (napr. /realio?tab=riadenie)
+    # po quick switcheri profilu. Validácia: musí začínať /, žiadne URL injekcie.
+    _target = "/profiles"
+    if redirect_to and redirect_to.startswith("/") and not redirect_to.startswith("//"):
+        _target = redirect_to
+    # HTML escape pre meta refresh attribute (URL query string môže obsahovať & / =)
+    _target_esc = _target.replace('"', "&quot;").replace("'", "&#39;")
     return (f"<!doctype html><html><head><meta charset='utf-8'>"
-             f"<meta http-equiv='refresh' content='1;url=/profiles'></head><body>"
+             f"<meta http-equiv='refresh' content='1;url={_target_esc}'></head><body>"
              f"<p>✓ Profile <b>{name}</b> aplikovaný. Aktualizované: <code>{upd}</code>{livesim_case_changed}. "
-             f"Livesim log vyresetovaný. Redirect na /profiles…</p></body></html>")
+             f"Livesim log vyresetovaný. Redirect na <code>{_target_esc}</code>…</p></body></html>")
 
 
 @app.post("/market/set", response_class=HTMLResponse)
@@ -6401,18 +6411,10 @@ def _realio_riadenie_page(msg: str = "", msg_kind: str = "info",
     except Exception:
         global_active = "default"
 
-    # Realio pinned profil — persistovaný cez _ui_save('realio_profile').
-    # Priorita: explicit ?profile= → uložený pinned → globálny active (fallback).
-    pinned = _ui_load("realio_profile", {}).get("name", "") if profile is not None else ""
-    if profile:
-        # User vybral cez dropdown — uložiť ako pinned
-        _ui_save("realio_profile", {"name": profile})
-        selected_profile = profile
-    elif pinned:
-        selected_profile = pinned
-    else:
-        # Prvé otvorenie — fallback na globálny active
-        selected_profile = global_active
+    # Bug Q (2026-06-06): realio-pinned mechanizmus zrušený. Realio teraz používa
+    # rovnaký active profile ako celá aplikácia (single source of truth). Dropdown
+    # tu submituje cez /profiles/apply (= globálny set_active).
+    selected_profile = profile if profile else global_active
 
     # Mode vybraného profilu
     try:
@@ -6445,17 +6447,19 @@ def _realio_riadenie_page(msg: str = "", msg_kind: str = "info",
         # Žiadne real profily — pridať vysvetľujúci option na vrch
         prof_opts = ('<option value="" disabled>⚠ Žiadny Real profil — vytvor v /profiles</option>'
                       + prof_opts)
+    # Bug Q: form submituje cez POST /profiles/apply — prepne GLOBÁLNY active profil.
+    # Po POST nás server presmeruje späť na /realio?tab=riadenie (cez redirect logiku
+    # ktorá zachováva referer alebo defaultne ide na /profiles).
     profile_picker = (
-        f'<form method="get" action="/realio" style="display:inline-flex;align-items:center;gap:6px;margin-left:18px">'
-        f'<input type="hidden" name="tab" value="riadenie">'
-        f'<input type="hidden" name="cust" value="{cust}">'
-        f'<span style="color:#666;font-size:13px">Realio profil:</span>'
-        f'<select name="profile" onchange="this.form.submit()" '
+        f'<form method="post" action="/profiles/apply" style="display:inline-flex;align-items:center;gap:6px;margin-left:18px">'
+        f'<input type="hidden" name="redirect_to" value="/realio?tab=riadenie&cust={cust}">'
+        f'<span style="color:#666;font-size:13px">Aktívny profil:</span>'
+        f'<select name="name" onchange="this.form.submit()" '
         f'style="padding:5px 10px;border:1px solid #ccc;border-radius:6px;font-size:13px;font-weight:600;background:#fff;min-width:280px">'
         f'{prof_opts}</select>'
         f'<span style="color:#666;font-size:11px;margin-left:6px" '
-        f'title="Realio profil je nezávislý od globálneho — môžeš mať sim aktívny pre /plan a real pinned tu">'
-        f'<i>(nezávislý od globálneho)</i></span></form>')
+        f'title="Prepne aktívny profil pre celú aplikáciu (single source of truth)">'
+        f'<i>(globálny — zmena ovplyvní všetky stránky)</i></span></form>')
 
     # Realio CSV presence — banner ak ešte nemáme dáta
     has_realio = False
