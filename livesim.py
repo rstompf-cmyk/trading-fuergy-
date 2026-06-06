@@ -641,10 +641,14 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             mn_day = mn_day_full[mn_day_full["time"] <= now]  # fyzika len po „teraz“
         if mn_day.empty:
             day += pd.Timedelta(days=1); continue
-        # Pre HISTORICKÉ dni ZCO povinný (settlement). Pre TODAY (in-progress)
-        # nie — SK trh publikuje ZCO až D-1, takže dnes ide bez ZCO; reálny
-        # zisk sa prepočíta keď ZCO príde. CZ má ZCO odhad z CEPS aj pre dnes.
-        if d < today.date() and mn_day["zco_eur"].notna().sum() == 0:
+        # Pre HISTORICKÉ dni ZCO ideálne dostupný (RT settlement). Ak chýba (SK trh
+        # publikuje ZCO až D+1 ~11:30, alebo OKTE backend zlyhal), nech sa deň
+        # PREDSA spracuje s DT-only zúčtovaním: CSV bude obsahovať sys_MW, plánový
+        # DT zisk a RT akciu z rt_controller (ten už akceptuje ZCO=NaN). Reálny RT
+        # settlement sa dopočíta keď ZCO príde (zatiaľ rt_rev_min ≈ 0).
+        # Skip IBA ak nemáme NIČ (ani sys_MW) — vtedy fyzika nebeží.
+        _has_sys_mw = mn_day.get("sys_MW")
+        if d < today.date() and (_has_sys_mw is None or _has_sys_mw.notna().sum() == 0):
             day += pd.Timedelta(days=1); continue
         try:
             try:

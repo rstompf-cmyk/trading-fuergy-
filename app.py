@@ -10743,6 +10743,42 @@ def vdt_page(request: Request):
     else:
         sec_market = sec_orderbook = sec_orders = sec_trades = sec_eval_d = sec_eval_dd = sec_eval_m = sec_h2h = ""
 
+    # ── Backfill card — od-do stiahnutie historických dát ──────────────────
+    _today_iso = dt.date.today().isoformat()
+    _week_ago = (dt.date.today() - dt.timedelta(days=7)).isoformat()
+    backfill_card = (
+        f"<div style='background:#eef7ee;border:1px solid #87c79d;border-radius:10px;"
+        f"padding:14px 18px;margin:14px 0'>"
+        f"<div style='font-size:16px;font-weight:600;color:#1B5E20;margin-bottom:8px'>"
+        f"📥 Stiahnuť historické dáta (od-do)</div>"
+        f"<form method='post' action='/vdt/backfill_range' "
+        f"style='display:flex;gap:10px;align-items:end;flex-wrap:wrap'>"
+        f"<label style='font-size:13px'>Od<br>"
+        f"<input type='date' name='date_from' value='{_week_ago}' required "
+        f"style='padding:5px;border:1px solid #ccc;border-radius:5px'></label>"
+        f"<label style='font-size:13px'>Do<br>"
+        f"<input type='date' name='date_to' value='{_today_iso}' required "
+        f"style='padding:5px;border:1px solid #ccc;border-radius:5px'></label>"
+        f"<div style='display:flex;flex-direction:column;gap:4px;font-size:13px'>"
+        f"<label><input type='checkbox' name='kind_trades' checked> "
+        f"💱 Trades (vlastné, REST)</label>"
+        f"<label><input type='checkbox' name='kind_eval_daily' checked> "
+        f"📈 Eval daily-detail (REST)</label>"
+        f"</div>"
+        f"<div style='display:flex;flex-direction:column;gap:4px;font-size:13px'>"
+        f"<label><input type='checkbox' name='kind_dam' checked> "
+        f"📊 DAM clearing (OKTE public)</label>"
+        f"<label><input type='checkbox' name='kind_vdt_15min' checked> "
+        f"⚡ VDT 15-min (OKTE public)</label>"
+        f"</div>"
+        f"<button type='submit' style='background:#2E7D32;color:#fff;border:0;"
+        f"padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600'>"
+        f"▶ Stiahnuť</button>"
+        f"</form>"
+        f"<div style='font-size:11px;color:#555;margin-top:6px'>"
+        f"Trades/Eval potrebujú mTLS cert (REST). DAM/VDT 15-min sú verejné OKTE dáta. "
+        f"CSV výstupy: <code>out/sk/vdt_history/&lt;kind&gt;.csv</code></div>"
+        f"</div>")
     body = (
         f"{nav}"
         f"<div style='max-width:1200px;margin:14px auto;padding:0 16px;"
@@ -10753,6 +10789,7 @@ def vdt_page(request: Request):
         f"<b>Read-only</b> pohľad na účet účastníka OKTE intraday trhu. "
         f"Modul iba číta dáta — žiadne podávanie ani úprava príkazov.</p>"
         f"{setup_html}"
+        f"{backfill_card}"
         f"{sec_market}"
         f"{sec_orderbook}"
         f"{sec_orders}"
@@ -10765,6 +10802,90 @@ def vdt_page(request: Request):
     )
     from ui.templates import render_legacy_body
     return render_legacy_body(request, "OKTE VDT", body)
+
+
+@app.post("/vdt/backfill_range", response_class=HTMLResponse)
+def vdt_backfill_range_endpoint(
+        date_from: str = Form(...),
+        date_to: str = Form(...),
+        kind_trades: str = Form(""),
+        kind_eval_daily: str = Form(""),
+        kind_dam: str = Form(""),
+        kind_vdt_15min: str = Form(""),
+        ):
+    """VDT od-do backfill — stiahne zvolené kindy pre daný rozsah a uloží do CSV.
+
+    Form fields (checkboxy posielajú "on" keď zaškrtnuté, "" keď nie):
+        date_from, date_to: ISO YYYY-MM-DD
+        kind_trades, kind_eval_daily, kind_dam, kind_vdt_15min: "on" alebo ""
+    """
+    import html as _html
+    try:
+        import okte_vdt_backfill as _vbf
+    except ImportError as e:
+        return HTMLResponse(f"<p style='color:#C0392B'>Modul okte_vdt_backfill nedostupný: {e}</p>",
+                              status_code=500)
+    kinds = []
+    if kind_trades:     kinds.append("trades")
+    if kind_eval_daily: kinds.append("eval_daily")
+    if kind_dam:        kinds.append("dam")
+    if kind_vdt_15min:  kinds.append("vdt_15min")
+    if not kinds:
+        kinds = ["trades", "eval_daily", "dam", "vdt_15min"]   # default = všetko
+    log_lines: list[str] = []
+    def _log(s: str):
+        log_lines.append(s)
+    res = _vbf.backfill_range(date_from, date_to, kinds, log=_log)
+    cov = _vbf.coverage_summary()
+    # Render log + summary
+    log_html = "<pre style='background:#f8f9fa;padding:12px;border-radius:8px;font-size:12px;" \
+                "max-height:400px;overflow-y:auto'>" + _html.escape("\n".join(log_lines)) + "</pre>"
+    if not res.get("ok"):
+        summary_html = (f"<div style='background:#ffeaea;padding:12px;border-radius:8px;color:#C0392B'>"
+                          f"⚠ {_html.escape(str(res.get('error', '?')))}</div>")
+    else:
+        rows = []
+        for k, s in (res.get("summary") or {}).items():
+            rows.append(f"<tr><td>{k}</td><td>✓ {s['ok']}</td><td>✗ {s['fail']}</td>"
+                          f"<td>{s['rows']}</td></tr>")
+        summary_html = (
+            f"<div style='background:#e8f5e9;padding:12px;border-radius:8px;color:#1B5E20'>"
+            f"<b>✓ Backfill dokončený</b> — {res.get('days_total')} dní × "
+            f"{res.get('kinds_total')} kindov</div>"
+            f"<table style='width:100%;border-collapse:collapse;margin:10px 0;font-size:13px' "
+            f"class='tbl-compact'>"
+            f"<tr style='background:#eef3f9'><th>Kind</th><th>OK dní</th><th>FAIL</th>"
+            f"<th>Total rows</th></tr>"
+            f"{''.join(rows)}</table>")
+    cov_rows = []
+    for k, c in cov.items():
+        if c.get("exists"):
+            cov_rows.append(f"<tr><td>{k}</td><td>{c.get('rows', 0)}</td>"
+                              f"<td>{c.get('days', '—')}</td>"
+                              f"<td>{c.get('first', '—')}</td>"
+                              f"<td>{c.get('last', '—')}</td></tr>")
+        else:
+            cov_rows.append(f"<tr><td>{k}</td><td colspan='4' style='color:#999'>(CSV neexistuje)</td></tr>")
+    cov_html = (
+        f"<h3>Pokrytie CSV po backfille</h3>"
+        f"<table style='width:100%;border-collapse:collapse;font-size:13px' class='tbl-compact'>"
+        f"<tr style='background:#eef3f9'><th>Kind</th><th>Rows</th><th>Days</th>"
+        f"<th>First</th><th>Last</th></tr>{''.join(cov_rows)}</table>")
+    nav = _nav("/vdt")
+    body = (
+        f"{nav}"
+        f"<div style='max-width:1100px;margin:14px auto;padding:0 16px;"
+        f"font-family:-apple-system,Segoe UI,Arial'>"
+        f"<h1>📥 VDT Backfill — výsledok</h1>"
+        f"<p><b>Rozsah:</b> {_html.escape(date_from)} → {_html.escape(date_to)} · "
+        f"<b>Kindy:</b> {', '.join(kinds)}</p>"
+        f"{summary_html}{cov_html}"
+        f"<h3>Detail logu</h3>{log_html}"
+        f"<p><a href='/vdt' style='background:#1F4E78;color:#fff;padding:8px 16px;"
+        f"border-radius:6px;text-decoration:none'>← Späť na /vdt</a></p>"
+        f"</div>")
+    from ui.templates import render_legacy_body
+    return render_legacy_body(None, "VDT Backfill", body)
 
 
 @app.post("/vdt/inspect_cert", response_class=HTMLResponse)
