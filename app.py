@@ -3996,9 +3996,15 @@ def livesim_get(case: str = None, start: str = None, view: str = None, curtail: 
         „Reálne riadenie" v /realio.
       • profile=<name>   — vynúti konkrétny profil (rovnako ako env FTV_PROFILE).
     """
-    # Profile override — nastav cez env aby plan_store.resolve_profile() ho použil
+    # Profile override — nastav cez env aby plan_store.resolve_profile() ho použil.
+    # CRITICAL: env var je process-wide — ak nereset-ujeme keď profile=None, predošlé
+    # nastavenie (napr. z /realio iframe /livesim?profile=Trakany_real) pretrváva NAVŽDY
+    # a všetky ďalšie /livesim requesty vidia ten profil namiesto globálneho active.
+    # → Bug G: po /profiles/apply nový profile chip OK, ale /livesim ukazuje stary.
     if profile:
         os.environ["FTV_PROFILE"] = profile
+    else:
+        os.environ.pop("FTV_PROFILE", None)
     # Realio overlay flag — explicitne cez query alebo automaticky ak je aktívny profile typu 'real'
     realio_on = (str(realio_overlay or "") == "1")
     if not realio_on:
