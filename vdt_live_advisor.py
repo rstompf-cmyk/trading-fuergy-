@@ -297,12 +297,40 @@ def get_live_recommendation(*,
     except Exception:
         active_profile = profile or "default"
 
-    # 1. SOC — z DB podľa profilu alebo manuálny override
+    # 0b. SINGLE SOURCE OF TRUTH (Bug O fix) — vždy pred LP zavolaj vdt_state
+    # ktorý dá kompletný kontext: kumulatívny SOC od 00:00, DAM nominácia z D-1 plánu,
+    # všetky realizované VDT trades z paper_trades CSV. Ak chýba čokoľvek z toho,
+    # VDT NESMIE obchodovať — vrátime error result s warnings + missing_items.
+    state = None
+    try:
+        import vdt_state as _vs
+        state = _vs.compute_current_state(profile=active_profile,
+                                              batt_kwh=batt_kwh)
+        if not state.get("data_completeness"):
+            return {"ok": False,
+                    "error": ("VDT NEMÔŽE OBCHODOVAŤ — chýba kontext: "
+                              + ", ".join(state.get("missing_items", []))),
+                    "data_completeness": False,
+                    "missing_items": state.get("missing_items", []),
+                    "warnings": state.get("warnings", []),
+                    "state": state,
+                    "profile": active_profile}
+    except Exception as e:
+        return {"ok": False,
+                "error": f"vdt_state.compute_current_state zlyhal: {e}",
+                "data_completeness": False,
+                "missing_items": ["state_module_error"],
+                "warnings": [f"Modul vdt_state nedostupný alebo chyba: {e}"],
+                "profile": active_profile}
+
+    # 1. SOC — z state (kumulatívny výpočet) alebo manuálny override
     if soc_start_pct is None:
-        soc_info = get_current_soc_pct(batt_kwh=batt_kwh, fallback_soc_pct=50.0,
-                                         profile=active_profile)
-        soc_pct = float(soc_info.get("soc_pct", 50.0))
-        soc_source = soc_info
+        soc_pct = float(state["current_soc_pct"])
+        soc_source = {"ok": True, "soc_pct": soc_pct,
+                      "source": (f"vdt_state kumulatívny (start={state['start_soc_pct']:.1f}%, "
+                                    f"VDT trades={state['vdt_realized_count']}, slot={state['current_slot_idx']})"),
+                      "ts": state["now"], "age_minutes": 0.0, "error": "",
+                      "start_soc_source": state["start_soc_source"]}
     else:
         soc_pct = float(soc_start_pct)
         soc_source = {"ok": True, "soc_pct": soc_pct, "source": "manual",
@@ -580,6 +608,10 @@ def get_live_recommendation(*,
         "current": current,
         "preview": preview,
         "full_plan": full_plan,
+        # Bug O: single source of truth state diagnostika pre UI
+        "state": state if state is not None else {"data_completeness": False,
+                                                          "missing_items": ["state_not_computed"]},
+        "data_completeness": (state.get("data_completeness", False) if state else False),
         "summary": result["summary"],
         "profit_eur": result["profit_eur"],
         "n_slots": result["n_slots"],
