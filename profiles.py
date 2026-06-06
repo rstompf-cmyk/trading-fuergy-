@@ -431,7 +431,13 @@ def apply_to_ui_and_overrides(name: str, ui_save_fn, po_module) -> Dict[str, Any
     # po.save_template() volá _resolve_profile() ktorý vracia aktívny profil.
     # Keby sme zavolali save_template PRED set_active, mult96 nového profilu by sa zapísalo
     # do priečinka STARÉHO aktívneho profilu → strata dát.
-    set_active(name)
+    # Bug Q: cez core.profile_resolver — aby sa zároveň cleanupol env var FTV_PROFILE
+    # a legacy ui_settings.realio_profile (single source of truth).
+    try:
+        from core.profile_resolver import set_active as _resolver_set
+        _resolver_set(name)
+    except Exception:
+        set_active(name)                          # fallback na lokálnu funkciu
     if p.get("plan"):
         ui_save_fn("plan", p["plan"])
         summary["updated"].append("ui.plan")
