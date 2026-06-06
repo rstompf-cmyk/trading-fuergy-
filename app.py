@@ -4216,11 +4216,32 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
             )
             return HTMLResponse(_page)
         days = lsim.available_days(case, port=_PORT)
+        # Rozšíriť dropdown o dni so saved plánmi pre aktívny profil (minulé aj budúce),
+        # aby sa dali pozrieť aj dni, na ktoré livesim ešte nedobehol. plan_store iteruje
+        # iba aktívny profil/market, takže nevidíš plány z iného profilu.
+        # Step_min sa odvodí z plan_kind (60 pre 'plan', 15 pre 'dentrh').
+        try:
+            if ps is not None:
+                _live_step = 15 if plan_kind == "dentrh" else 60
+                _plan_items = ps.list_plans(kind=plan_kind) or []
+                _plan_days = set()
+                for _pi in _plan_items:
+                    if int(_pi.get("step_min", 60)) != _live_step:
+                        continue
+                    try:
+                        _plan_days.add(dt.date.fromisoformat(_pi["date"]))
+                    except Exception:
+                        pass
+                if _plan_days:
+                    days = sorted(set(days) | _plan_days)
+        except Exception as _e_pl:
+            print(f"[/livesim] list_plans pre dropdown zlyhal: {_e_pl}")
         prov = r.get("prov_date")
         if prov:
             pdate = dt.date.fromisoformat(prov)
             if pdate not in days:
                 days = days + [pdate]
+                days = sorted(set(days))
         view_day = view or (prov if prov else (days[-1].isoformat() if days else None))
         dfull = lsim.load_series(case, port=_PORT)
         # `trace_full` drží plnú minútovú resolution (predtým decimovanú do dview),
@@ -4241,6 +4262,34 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
             dview = tdf
         else:
             dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=600) if view_day else dfull
+        # Banner ak vybraný deň má saved plán ale livesim CSV pre neho nemá záznamy
+        # (typicky: budúci deň, alebo minulý deň pre ktorý sa livesim neobehol).
+        plan_only_warn = ""
+        try:
+            if view_day and (dview is None or dview.empty):
+                _has_plan = ps.has_plan(view_day, _st, plan_kind) if ps is not None else False
+                _is_future = dt.date.fromisoformat(view_day) > dt.date.today()
+                if _has_plan:
+                    _label = "budúci" if _is_future else "minulý"
+                    plan_only_warn = (
+                        f"<div style='background:#fff3cd;border-left:4px solid #f0b80f;border-radius:6px;"
+                        f"padding:10px 14px;margin:10px 0;font-size:13px;color:#7a5c00'>"
+                        f"📅 <b>Pre {_label} deň {view_day} existuje uložený plán</b>, ale živá simulácia "
+                        f"pre tento deň ešte nemá žiadne minútové záznamy. Grafy preto nezobrazia reálne "
+                        f"hodnoty (FTV, batéria, SOC, RT) — uvidíš len holý plán.<br>"
+                        f"<b>Pre minulé dni:</b> klikni <b>Spustiť/Obnoviť simuláciu</b> nižšie (livesim "
+                        f"dobehne história od najstaršej minúty). <b>Pre budúce dni:</b> reálne dáta "
+                        f"pribudnú postupne ako deň prebehne.</div>")
+                elif _is_future:
+                    plan_only_warn = (
+                        f"<div style='background:#eef3fb;border-left:4px solid #1F4E78;border-radius:6px;"
+                        f"padding:10px 14px;margin:10px 0;font-size:13px;color:#33506e'>"
+                        f"📆 <b>Vybraný deň {view_day} je v budúcnosti</b> a ešte nemá vygenerovaný plán "
+                        f"ani simuláciu. <a href='/' style='color:#1F4E78;font-weight:600'>/plan</a> alebo "
+                        f"<a href='/plan_batch' style='color:#1F4E78;font-weight:600'>batch generátor</a> "
+                        f"pre vytvorenie plánu.</div>")
+        except Exception:
+            pass
         # ── all-zero plán detekcia: ak má aktuálne zobrazený deň rt_mask aj mults samé 0,
         #     RT engine sa nikdy nestrelí a batéria nereaguje. Tipická chyba: rt_freedom=False
         #     + mults=0 v šablóne. Banner ponúkne 1-klik re-generáciu s rt_freedom=on.
@@ -4402,7 +4451,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     f"margin:10px 0;font-size:13px'><b>⚠ Realio overlay zlyhal:</b> {_ovl_err}</div>")
         body = _livesim_body(r, dfull, dview, view_day, days, realio_overlay=realio_on, trace_full=trace_full)
         return (head.replace("</head>", '<meta http-equiv="refresh" content="60">' + "</head>")
-                + form + plan_warn + zero_plan_warn + realio_banner + body + "</body></html>")
+                + form + plan_warn + plan_only_warn + zero_plan_warn + realio_banner + body + "</body></html>")
     except Exception as ex:
         import traceback
         tb = traceback.format_exc()
