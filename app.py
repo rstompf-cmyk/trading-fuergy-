@@ -1060,8 +1060,38 @@ def profiles_apply(name: str = Form(...), redirect_to: str = Form(default="")):
     except Exception as _ae:
         print(f"[profiles_apply] auto-detect livesim case zlyhal: {_ae}")
 
+    # Bug R3: Auto-enable bg + spusti tick ak bol bg-OFF
+    # Princíp: klik na chip = profil je aktívny a bežiaci hneď. User nemusí manual
+    # zapnúť toggle "Beží na pozadí" v /profiles/edit.
+    auto_started_msg = ""
+    try:
+        import auto_control as _ac
+        was_off = name not in _ac.get_enabled_profiles()
+        if was_off:
+            _ac.set_profile_enabled(name, True)
+            auto_started_msg = " · bg auto-zapnutý"
+            print(f"[/profiles/apply] {name}: bg-OFF → auto-enabled (klik na chip)")
+            # Spusti VDT advisor cache refresh + autoplan_d1 ak chýba dnešný plán
+            try:
+                import vdt_live_advisor as _adv
+                import threading as _th
+                # Async tick aby nezablokoval response (advisor LP môže trvať pár sekúnd)
+                def _tick():
+                    try:
+                        _adv.get_live_recommendation(profile=name)
+                        print(f"[/profiles/apply] {name}: VDT advisor tick OK")
+                    except Exception as _te:
+                        print(f"[/profiles/apply] {name}: VDT tick zlyhal: {_te}")
+                _th.Thread(target=_tick, daemon=True).start()
+                auto_started_msg += " + VDT tick"
+            except Exception as _ve:
+                print(f"[/profiles/apply] {name}: VDT tick init zlyhal: {_ve}")
+    except Exception as _ae:
+        print(f"[/profiles/apply] {name}: auto-enable bg zlyhal: {_ae}")
+
     _clear_livesim_logs()           # iný profil = iné nastavenia + iná šablóna → fresh log
     upd = ", ".join(summary.get("updated", []))
+    livesim_case_changed = livesim_case_changed + auto_started_msg
     # Bug Q1: redirect_to podporuje návrat na pôvodnú stránku (napr. /realio?tab=riadenie)
     # po quick switcheri profilu. Validácia: musí začínať /, žiadne URL injekcie.
     _target = "/profiles"
