@@ -2450,14 +2450,19 @@ a{{color:#1F4E78}}</style></head><body>
     try:
         ote = _fetch_ote_cached(d)                        # reálne 15-min DT ceny (známe vopred)
         price15 = _dt15_from_ote(ote)
-        wx = _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start=d, end=d)
-        wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].sort_values("time")
-        if wx.empty:
-            return _dentrh_form(f"Pre {d} nie sú dostupné dáta výroby FTV.")
-        cal = _cal_for(d)
-        pv_h = wx.kw.values * cal                              # hodinová výroba (kalibrovaná)
-        if len(pv_h) < 24:
-            pv_h = np.concatenate([pv_h, np.zeros(24 - len(pv_h))])
+        # Pre batt-only profily (kwp=0, napr. Trakany_real) PVF fetch nedáva zmysel.
+        # Vytvoríme prázdny pv_h aby plan bežal s 0 FTV (čistá batt arbitráž).
+        if float(kwp or 0) > 0.01:
+            wx = _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start=d, end=d)
+            wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].sort_values("time")
+            if wx.empty:
+                return _dentrh_form(f"Pre {d} nie sú dostupné dáta výroby FTV.")
+            cal = _cal_for(d)
+            pv_h = wx.kw.values * cal                          # hodinová výroba (kalibrovaná)
+            if len(pv_h) < 24:
+                pv_h = np.concatenate([pv_h, np.zeros(24 - len(pv_h))])
+        else:
+            pv_h = np.zeros(24)                                # batt-only: žiadny FTV
         pv15 = np.repeat(pv_h[:24], 4) / 4.0                  # → 96 × 15-min slotov
         n = min(len(pv15), len(price15))
         mult96_use = np.asarray(mult96, dtype=float)[:n]
@@ -2713,10 +2718,18 @@ def _livesim_pred_dt(today):
     try:
         f = _ui_load("plan", DEF)
         d = pd.Timestamp(today).date()
-        wx = _fetch_pv_cached(f["lat"], f["lon"], f["kwp"], f["tilt"], f["azimuth"], f["eff"], start=d, end=d)
-        wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].copy()
-        if wx.empty:
-            return None
+        # Pre batt-only profily (kwp=0) syntetický wx grid (nula FTV, neutrálne počasie pre ISOT model)
+        if float(f.get("kwp") or 0) > 0.01:
+            wx = _fetch_pv_cached(f["lat"], f["lon"], f["kwp"], f["tilt"], f["azimuth"], f["eff"], start=d, end=d)
+            wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].copy()
+            if wx.empty:
+                return None
+        else:
+            wx = pd.DataFrame({
+                "time": pd.date_range(pd.Timestamp(d), periods=24, freq="h"),
+                "kw": np.zeros(24), "gti": np.zeros(24),
+                "temp": np.full(24, 15.0), "cloud": np.full(24, 50.0),
+            })
         hist = _isot_history(d, days=8)
         wx2 = wx[["time", "gti", "temp", "cloud"]].copy(); wx2["isot_eur"] = np.nan
         h2 = hist.copy()
@@ -12103,10 +12116,19 @@ a{{color:#1F4E78}}</style></head><body>
 <p style="color:#666;font-size:13px">(Auto-redirect za 2 s na /plan…)</p>
 </body></html>"""
     try:
-        wx = _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start=d, end=d)
-        wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].copy()
-        if wx.empty:
-            return form_page(f"Pre {d} nie sú dostupné dáta predpovede.")
+        # Pre batt-only profily (kwp=0, napr. Trakany_real) PVF fetch nedáva zmysel —
+        # vytvoríme syntetický wx grid s 0 kW + neutrálne počasie pre ISOT predikciu.
+        if float(kwp or 0) > 0.01:
+            wx = _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start=d, end=d)
+            wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].copy()
+            if wx.empty:
+                return form_page(f"Pre {d} nie sú dostupné dáta predpovede.")
+        else:
+            wx = pd.DataFrame({
+                "time": pd.date_range(pd.Timestamp(d), periods=24, freq="h"),
+                "kw": np.zeros(24), "gti": np.zeros(24),
+                "temp": np.full(24, 15.0), "cloud": np.full(24, 50.0),
+            })
         hist = _isot_history(d, days=8)                       # história cien pre lagy
         wx2 = wx[["time", "gti", "temp", "cloud"]].copy(); wx2["isot_eur"] = np.nan
         h2 = hist.copy()
