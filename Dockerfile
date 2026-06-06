@@ -79,6 +79,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
+# Bug S2 (2026-06-06): TZ Europe/Bratislava — symlink /etc/localtime + /etc/timezone
+# Predtým bol len ENV TZ + tzdata package, ale Python datetime.now() vracal UTC
+# lebo OS timezone nebol nastavený (žiadny symlink). Teraz Python a všetky systémové
+# tools (datetime, log timestampy, cron) konečne pracujú s Europe/Bratislava.
+ENV TZ=Europe/Bratislava
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone
+
 # Skopíruj nainštalované Python balíky z builder stage
 COPY --from=builder /root/.local /root/.local
 
