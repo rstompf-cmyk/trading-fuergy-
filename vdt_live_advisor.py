@@ -66,6 +66,47 @@ def _get_active_profile_mode(profile: Optional[str] = None) -> str:
     return "unknown"
 
 
+def _soc_from_d1_plan(profile: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Interpolácia SOC predikcie z D-1 plánu pre aktuálny moment.
+
+    Pre simulation profile keď livesim CSV neexistuje, čítame D-1 plán
+    (out/{market}/plans/{profile}/{today}_*.json) a vyberáme SOC slot
+    podľa aktuálneho času. Tým VDT advisor dostane reálnu SOC predikciu
+    miesto fallback 50% (čo ho zavádza pri obchodovaní).
+
+    Vracia None ak nie je dostupný D-1 plán pre dnes alebo nemá soc_pct array.
+    """
+    try:
+        import plan_store as _ps
+        import datetime as _dt
+        today_iso = _dt.date.today().isoformat()
+        now = _dt.datetime.now()
+        # Skúsime obidva kindy: dentrh (15-min, 96 slotov) preferovaný, plan (60-min, 24 slotov)
+        for step_min, kind in ((15, "dentrh"), (60, "plan")):
+            sch = _ps.load_plan_safe(today_iso, step_min, kind, profile=profile)
+            if sch is None:
+                continue
+            schedule = sch.get("schedule") or {}
+            soc_arr = schedule.get("soc_pct") or []
+            if not soc_arr:
+                continue
+            # Index slotu v poliach plánu (00:00 = slot 0)
+            slot_idx = (now.hour * 60 + now.minute) // step_min
+            slot_idx = max(0, min(slot_idx, len(soc_arr) - 1))
+            soc = float(soc_arr[slot_idx])
+            if soc <= 0:
+                continue                       # 0% pravdepodobne znamená že LP nevypočítal SOC
+            slot_start = (slot_idx * step_min)
+            slot_h, slot_m = slot_start // 60, slot_start % 60
+            return {"ok": True, "soc_pct": soc,
+                    "source": (f"D-1 plán (kind={kind}, step={step_min}min, "
+                                  f"slot {slot_h:02d}:{slot_m:02d}, profile={profile or 'default'})"),
+                    "ts": today_iso, "age_minutes": 0.0, "error": ""}
+    except Exception as _e:
+        return None
+    return None
+
+
 def _soc_from_livesim_trace() -> Optional[Dict[str, Any]]:
     """Pre simulation profil načíta posledný `soc_pct` zo dnešného livesim CSV
     (živá simulácia).
@@ -131,12 +172,19 @@ def get_current_soc_pct(batt_kwh: float = 800.0,
 
     # SIMULATION profile — čítaj zo simulácie, NIE z realio_db
     if mode == "simulation":
+        # 1. Priorita: živá simulácia (livesim CSV) — najčerstvejší stav
         sim = _soc_from_livesim_trace()
         if sim is not None:
             return sim
+        # 2. Fallback: SOC predikcia z D-1 plánu pre aktuálny slot
+        # Bug N fix (2026-06-06): VDT advisor predtým padal na fallback 50% keď livesim
+        # CSV bol prázdny, čo viedlo k zlým trades (napr. NABÍJAŤ pri SOC 95%).
+        d1 = _soc_from_d1_plan(profile=profile)
+        if d1 is not None:
+            return d1
         return {"ok": True, "soc_pct": float(fallback_soc_pct),
                 "source": f"fallback {fallback_soc_pct:.0f}% (simulation, žiadny "
-                          f"livesim trace pre dnes)",
+                          f"livesim trace ani D-1 plán pre dnes — VDT trades NEDÔVERYHODNÉ)",
                 "ts": "", "age_minutes": -1, "error": ""}
 
     # REAL profile — z realio_db (SQLite)
@@ -170,9 +218,12 @@ def get_current_soc_pct(batt_kwh: float = 800.0,
                 "ts": "", "age_minutes": -1,
                 "error": f"realio chyba: {e}"}
 
-    # Real profile bez realio dát → fallback
+    # Real profile bez realio dát → skús D-1 plán pred konečným fallback
+    d1 = _soc_from_d1_plan(profile=profile)
+    if d1 is not None:
+        return d1
     return {"ok": True, "soc_pct": float(fallback_soc_pct),
-            "source": f"fallback {fallback_soc_pct:.0f}% (žiadne čerstvé realio dáta, profile: {mode})",
+            "source": f"fallback {fallback_soc_pct:.0f}% (žiadne čerstvé realio dáta ani D-1 plán, profile: {mode})",
             "ts": "", "age_minutes": -1, "error": ""}
 
 
