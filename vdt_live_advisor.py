@@ -108,8 +108,8 @@ def _soc_from_livesim_trace() -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_current_soc_pct(batt_kwh: float = 800.0,
-                          fallback_soc_pct: float = 50.0,
+def get_current_soc_pct(batt_kwh: Optional[float] = None,
+                          fallback_soc_pct: Optional[float] = None,
                           max_age_minutes: int = 1440,
                           profile: Optional[str] = None) -> Dict[str, Any]:
     """Načíta aktuálny SOC podľa profile.mode:
@@ -127,6 +127,20 @@ def get_current_soc_pct(batt_kwh: float = 800.0,
         {"ok": bool, "soc_pct": float, "source": str, "ts": str,
          "age_minutes": float, "error": str}
     """
+    # Bug P: žiadne hard-coded defaults — resolve z profile.plan ak chýba arg
+    if batt_kwh is None or fallback_soc_pct is None:
+        try:
+            import profiles as _pr
+            _p = _pr.load_profile(profile) if profile else {}
+            _pl = (_p or {}).get("plan") or {}
+            if batt_kwh is None:
+                batt_kwh = float(_pl.get("batt_kwh") or 800.0)
+            if fallback_soc_pct is None:
+                fallback_soc_pct = float(_pl.get("fallback_soc_pct") or 50.0)
+        except Exception:
+            if batt_kwh is None: batt_kwh = 800.0
+            if fallback_soc_pct is None: fallback_soc_pct = 50.0
+
     mode = _get_active_profile_mode(profile=profile)
 
     # SIMULATION profile — čítaj zo simulácie, NIE z realio_db
@@ -244,18 +258,18 @@ def _load_dam_commitments_for_snapshot(snapshot, today_date,
 
 
 def get_live_recommendation(*,
-                              batt_kw: float = 500.0,
-                              batt_kwh: float = 800.0,
-                              eff_c: float = 0.95,
-                              eff_d: float = 0.95,
-                              grid_fee: float = 22.0,
-                              cycle_cost: float = 2.0,
-                              min_spread: float = 5.0,
-                              soc_min_pct: float = 5.0,
-                              soc_max_pct: float = 95.0,
+                              batt_kw: Optional[float] = None,
+                              batt_kwh: Optional[float] = None,
+                              eff_c: Optional[float] = None,
+                              eff_d: Optional[float] = None,
+                              grid_fee: Optional[float] = None,
+                              cycle_cost: Optional[float] = None,
+                              min_spread: Optional[float] = None,
+                              soc_min_pct: Optional[float] = None,
+                              soc_max_pct: Optional[float] = None,
                               soc_start_pct: Optional[float] = None,
-                              soc_end_min_pct: Optional[float] = 20.0,
-                              max_cycles_per_day: Optional[float] = 3.0,
+                              soc_end_min_pct: Optional[float] = None,
+                              max_cycles_per_day: Optional[float] = None,
                               use_orderbook: bool = True,
                               use_dam_commitments: bool = True,
                               profile: Optional[str] = None,
@@ -296,6 +310,39 @@ def get_live_recommendation(*,
         active_profile = _ps.resolve_profile(profile)
     except Exception:
         active_profile = profile or "default"
+
+    # 0a. PROFILE PARAMS — Bug P: žiadne hard-coded defaults. Všetky chýbajúce args
+    # sa naplnia z profile.plan (ktorý profiles.load_profile auto-doplnil VDT defaults
+    # cez _ensure_plan_vdt_defaults). Volajúci môže override-nuť ktorýkoľvek arg.
+    try:
+        import profiles as _pr
+        _prof_data = _pr.load_profile(active_profile) or {}
+        _pl = _prof_data.get("plan") or {}
+    except Exception:
+        _pl = {}
+    if batt_kw is None:
+        batt_kw = float(_pl.get("batt_kw") or 500.0)
+    if batt_kwh is None:
+        batt_kwh = float(_pl.get("batt_kwh") or 800.0)
+    if eff_c is None:
+        eff_c = float(_pl.get("eff_c") or 0.95)
+    if eff_d is None:
+        eff_d = float(_pl.get("eff_d") or 0.95)
+    if grid_fee is None:
+        grid_fee = float(_pl.get("grid_fee_vdt") or _pl.get("grid_fee") or 22.0)
+    if cycle_cost is None:
+        cycle_cost = float(_pl.get("cycle_cost_vdt") or _pl.get("cycle_cost") or 2.0)
+    if min_spread is None:
+        min_spread = float(_pl.get("min_spread_eur") or 5.0)
+    if soc_min_pct is None:
+        soc_min_pct = float(_pl.get("soc_min_pct") or 5.0)
+    if soc_max_pct is None:
+        # VDT advisor používa OPERAČNÝ strop (95%), nie fyzikálny (100%) zo plan.soc_max_pct
+        soc_max_pct = float(_pl.get("soc_max_pct_operational") or 95.0)
+    if soc_end_min_pct is None:
+        soc_end_min_pct = float(_pl.get("soc_end_min_pct") or 20.0)
+    if max_cycles_per_day is None:
+        max_cycles_per_day = float(_pl.get("max_cycles_per_day") or 3.0)
 
     # 0b. SINGLE SOURCE OF TRUTH (Bug O fix) — vždy pred LP zavolaj vdt_state
     # ktorý dá kompletný kontext: kumulatívny SOC od 00:00, DAM nominácia z D-1 plánu,

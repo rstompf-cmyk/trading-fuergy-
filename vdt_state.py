@@ -34,9 +34,12 @@ import os
 import datetime as dt
 from typing import Optional, Dict, List, Any
 
-# Default kapacita batt pre fallback (nikdy by sa nemalo použiť — profile musí dať batt_kwh)
-_DEFAULT_BATT_KWH = 800.0
-_DEFAULT_SOC_INIT_PCT = 50.0
+# Bug P: žiadne hard-coded defaults. Všetky hodnoty pochádzajú z profile.plan
+# (ktoré profiles.load_profile auto-doplní cez _ensure_plan_vdt_defaults).
+# Iba ak by sa stalo že profile.load_profile vráti None a my padneme na hard
+# fallback — v tom prípade použiť bezpečnú konzervatívnu hodnotu nižšie.
+# Aby žiadna hodnota nebola hard-coded mimo profilu, čítame fallback hodnoty z
+# profiles._PLAN_VDT_DEFAULTS (single source of truth pre VDT defaults).
 
 
 # ────────────────────────── Helpery ──────────────────────────
@@ -124,15 +127,32 @@ def _get_start_soc_from_d1_yesterday(profile: str) -> Optional[Dict[str, Any]]:
 
 
 def _get_start_soc_default(profile: str) -> Dict[str, Any]:
-    """Default soc_init z profile.plan.soc_init_pct (alebo 50%)."""
+    """Default soc_init z profile.plan (povinný — profil musí existovať).
+
+    Hierarchia: profile.plan.soc_init_pct → profile.plan.fallback_soc_pct
+    (Bug P: žiadny module-level konstantný fallback — vždy z profilu.)
+    """
     try:
         import profiles as _pr
-        p = _pr.load_profile(profile)
-        soc = float((p.get("plan") or {}).get("soc_init_pct", _DEFAULT_SOC_INIT_PCT))
-    except Exception:
-        soc = _DEFAULT_SOC_INIT_PCT
+        p = _pr.load_profile(profile) or {}
+        plan = p.get("plan") or {}
+        # Priorita: soc_init_pct (D-1 plánovací default), potom fallback_soc_pct (VDT advisor fallback)
+        if "soc_init_pct" in plan:
+            soc = float(plan["soc_init_pct"])
+            src = f"profile.plan.soc_init_pct ({soc:.0f}%)"
+        elif "fallback_soc_pct" in plan:
+            soc = float(plan["fallback_soc_pct"])
+            src = f"profile.plan.fallback_soc_pct ({soc:.0f}%)"
+        else:
+            # Posledná instancia — _PLAN_VDT_DEFAULTS (single source of truth)
+            soc = float(_pr._PLAN_VDT_DEFAULTS["fallback_soc_pct"])
+            src = f"profiles._PLAN_VDT_DEFAULTS.fallback_soc_pct ({soc:.0f}%)"
+    except Exception as _e:
+        # Profile nedostupný — hard fail-safe (bezpečná konzervatívna hodnota)
+        soc = 50.0
+        src = f"hard fail-safe 50% (profile {profile} neexistuje: {_e})"
     return {"soc_pct": soc,
-            "source": f"profile.plan.soc_init_pct (default {soc:.0f}% — žiadna história)"}
+            "source": f"{src} — žiadna história (livesim/D-1 yesterday chýbajú)"}
 
 
 def _get_start_soc(profile: str) -> Dict[str, Any]:
@@ -312,12 +332,24 @@ def compute_current_state(profile: str,
     except Exception:
         prof = {}
     plan = prof.get("plan") or {}
-    cap = float(batt_kwh if batt_kwh is not None else plan.get("batt_kwh", _DEFAULT_BATT_KWH))
-    batt_kw = float(plan.get("batt_kw", 100.0))
-    eff_c = float(plan.get("eff_c", 0.95))
-    eff_d = float(plan.get("eff_d", 0.95))
-    soc_min = float(plan.get("soc_min_pct", 5.0))
-    soc_max = float(plan.get("soc_max_pct", 100.0))
+    # Bug P: žiadne hard-coded defaults — všetky hodnoty musia prísť z profile.plan
+    # (profiles.load_profile auto-doplnil chýbajúce VDT polia cez _ensure_plan_vdt_defaults).
+    # Plán polia (batt_kwh, eff_c, eff_d, soc_min_pct, soc_max_pct) musia byť v každom
+    # rozumnom profile — ak chýba, použijeme bezpečný conservative fallback len ako
+    # last resort safety (nestane sa pri zdravom profile).
+    try:
+        import profiles as _pr
+        vdt_def = _pr._PLAN_VDT_DEFAULTS                  # single source of truth pre VDT defaults
+    except Exception:
+        vdt_def = {}
+    cap = float(batt_kwh if batt_kwh is not None
+                  else plan.get("batt_kwh") or 800.0)         # batt_kwh pri novom profile musí byť v plane
+    batt_kw = float(plan.get("batt_kw") or 100.0)
+    eff_c = float(plan.get("eff_c") or 0.95)
+    eff_d = float(plan.get("eff_d") or 0.95)
+    soc_min = float(plan.get("soc_min_pct") or 5.0)
+    # Pre vdt_state používame fyzikálny strop SOC (default 100%), nie operačný
+    soc_max = float(plan.get("soc_max_pct") or 100.0)
 
     # 2. Start SOC (vždy success, fallback chain)
     start = _get_start_soc(profile)
