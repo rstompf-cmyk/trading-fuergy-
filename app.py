@@ -5094,10 +5094,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             return _out
         _vdt_plan_kw = _slot_kwh_to_min_kw(_vdt_planned96, dview["time"])
         _vdt_real_kw = _slot_kwh_to_min_kw(_vdt_realized96, dview["time"])
-        # DAM + VDT (kombinovaná nominácia)
+        # Aktuálna nominácia voči trhu = DAM (záväzná D-1) + VDT realizované (uzavreté trades).
+        # VDT plán je IBA návrh z live_advisor — nie je commitment, takže sa NEPRIRÁTAVA
+        # (inak by sa rovnaký obchod počítal 2× a graf by ukázal 2-3× vyšší výkon než batéria
+        # vie poskytnúť).
         _dam_plus_vdt_kw = [
-            (_nz(pg) + _nz(vp) + _nz(vr))
-            for pg, vp, vr in zip(_pg_kw, _vdt_plan_kw, _vdt_real_kw)
+            (_nz(pg) + _nz(vr))
+            for pg, vr in zip(_pg_kw, _vdt_real_kw)
         ]
         # _actv = plán+RT pre celý deň (pre budúce minúty rt=0 → len plán). Predtým tu bolo
         # `if lv else NaN` čo orezávalo THR/DEV pri "teraz" — teraz to ide 0-24h.
