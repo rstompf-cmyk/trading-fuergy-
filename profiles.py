@@ -323,7 +323,20 @@ def get_active() -> Optional[str]:
 
 
 def set_active(name: Optional[str]) -> None:
-    """Označí profile ako aktívny (alebo None = žiadny aktívny)."""
+    """Označí profile ako aktívny (alebo None = žiadny aktívny).
+
+    DIAG: vypíše krátky stack pre audit Bug G (per-port inconsistency).
+    """
+    try:
+        import traceback as _tb
+        _stack = _tb.extract_stack(limit=8)[:-1]
+        _caller = " <- ".join(
+            f"{os.path.basename(f.filename)}:{f.lineno}:{f.name}"
+            for f in _stack[-4:]
+        )
+        print(f"[profiles.set_active] name={name!r} | caller: {_caller}")
+    except Exception:
+        pass
     _ensure_dir()
     # JSON write (vždy back-compat)
     if name is None:
