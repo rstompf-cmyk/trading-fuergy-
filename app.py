@@ -2037,6 +2037,24 @@ def home():
 
 @app.get("/manager", response_class=HTMLResponse)
 def manager_dashboard():
+    try:
+        return _manager_dashboard_impl()
+    except Exception as ex:
+        import traceback as _tb
+        err = _tb.format_exc()
+        body = (
+            f'<div style="max-width:900px;margin:24px auto;padding:20px;background:#fff3e0;'
+            f'border-left:4px solid #C62828;border-radius:8px;font-family:monospace">'
+            f'<h2 style="color:#C62828">Manager dashboard chyba</h2>'
+            f'<p>Render zlyhal s výnimkou. Stack trace nižšie môžeš poslať developerovi.</p>'
+            f'<pre style="background:#fff;padding:12px;overflow:auto;font-size:11px">{err}</pre>'
+            f'<p><a href="/manager">↻ Skús znova</a> · <a href="/profiles">⚙ Profily</a></p>'
+            f'</div>'
+        )
+        return render_legacy_body(None, "Manager — chyba", body)
+
+
+def _manager_dashboard_impl():
     """Bug T1: Manager dashboard — fleet command center.
 
     Layout:
@@ -2072,9 +2090,16 @@ def manager_dashboard():
     except Exception:
         _ps = None
     try:
-        import realio_db as _rdb
+        import realio as _rio
     except Exception:
-        _rdb = None
+        _rio = None
+    # Cache realio latest values pre celu fleet (1 call namiesto N — realio nema per-profile rozlisenie)
+    realio_latest = None
+    if _rio:
+        try:
+            realio_latest = _rio.fetch_latest_all() or {}
+        except Exception:
+            realio_latest = None
 
     today = _dt.date.today()
     today_iso = today.isoformat()
@@ -2163,16 +2188,15 @@ def manager_dashboard():
                 pass
         total_vdt_eur += vdt_eur
 
-        # Realio meranie pre real profile
+        # Realio meranie pre real profile (zdielany cache pre vsetky)
         ftv_now_kw = None
         batt_real_kw = None
-        if mode == "real" and _rdb:
+        if mode == "real" and realio_latest:
             try:
-                latest = _rdb.fetch_latest_all(profile=name) or {}
-                ftv_now_kw = latest.get("FTV_kW") or latest.get("FVE1_C_Power")
-                batt_real_kw = latest.get("ESS1_C_Power") or latest.get("BAT_kW")
+                ftv_now_kw = realio_latest.get("FTV_kW") or realio_latest.get("FVE1_C_Power")
+                batt_real_kw = realio_latest.get("ESS1_C_Power") or realio_latest.get("BAT_kW")
                 if soc_now is None:
-                    soc_now = latest.get("SOC_pct") or latest.get("ESS1_C_SOC")
+                    soc_now = realio_latest.get("SOC_pct") or realio_latest.get("ESS1_C_SOC")
             except Exception:
                 pass
 
