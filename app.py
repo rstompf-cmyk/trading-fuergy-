@@ -2349,15 +2349,14 @@ def _manager_dashboard_impl():
         f'document.addEventListener("DOMContentLoaded", () => {{'
 
         # Zdieľaný DT graf
-        f'const dt_labels = {_json.dumps(dt_cz_labels)};'
+        f'const dt_labels = {_json.dumps(dt_labels)};'
         f'const dt_cz = {_json.dumps(dt_cz_vals)};'
-        f'const dt_sk = {_json.dumps(dt_sk_vals)};'
         f'if (dt_labels.length > 0) {{'
         f'  new Chart(document.getElementById("ch_dt"), {{type:"line",'
         f'    data:{{labels:dt_labels,datasets:['
-        f'      {{label:"DT CZ €/MWh",data:dt_cz,borderColor:"#1F4E78",backgroundColor:"rgba(31,78,120,.1)",fill:true,tension:0.2}},'
-        f'      {{label:"DT SK €/MWh",data:dt_sk,borderColor:"#C62828",borderDash:[5,3],fill:false,tension:0.2}}'
-        f'    ]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{labels:{{font:{{size:11}}}}}}}}}}}});'
+        f'      {{label:"DT €/MWh",data:dt_cz,borderColor:"#1F4E78",backgroundColor:"rgba(31,78,120,.1)",fill:true,tension:0.2,pointRadius:0}}'
+        f'    ]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{labels:{{font:{{size:11}}}}}}}},'
+        f'      scales:{{x:{{ticks:{{font:{{size:9}},maxRotation:0,autoSkip:true,maxTicksLimit:12}}}},y:{{ticks:{{font:{{size:10}}}}}}}}}}}});'
         f'}}'
 
         # Zdieľaný MT graf
