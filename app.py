@@ -7409,6 +7409,61 @@ def vdt_live_advisor_page(
         body += f"<p style='color:#C0392B'>Advisor zlyhal: {_html.escape(str(e))}</p></div>"
         return render_legacy_body(None, "VDT Live Advisor", body)
 
+    # Bug O3: Banner pre INSUFFICIENT DATA — VDT nemôže obchodovať bez kompletného kontextu
+    if not res.get("ok") and res.get("data_completeness") is False:
+        _missing = res.get("missing_items", []) or []
+        _warnings = res.get("warnings", []) or []
+        _state = res.get("state") or {}
+        _missing_human = {
+            "dam_today": "D-1 plán pre dnes (treba vygenerovať cez /plan alebo /dentrh)",
+            "state_module_error": "vdt_state modul (interná chyba — pozri logy)",
+            "state_not_computed": "vdt_state nevypočítané (interná chyba)",
+        }
+        _missing_html = "<ul style='margin:8px 0 4px 24px;padding:0'>" + "".join(
+            f"<li><b>{_html.escape(m)}</b>{(' — ' + _missing_human[m]) if m in _missing_human else ''}</li>"
+            for m in _missing) + "</ul>"
+        _warn_html = ""
+        if _warnings:
+            _warn_html = ("<div style='margin-top:8px;padding:8px;background:#fff3cd;"
+                           "border-radius:4px;font-size:12px;color:#856404'>"
+                           "<b>Upozornenia:</b><ul style='margin:4px 0 0 20px;padding:0'>"
+                           + "".join(f"<li>{_html.escape(w)}</li>" for w in _warnings)
+                           + "</ul></div>")
+        body += (
+            f"<div style='background:#fee;border:2px solid #C0392B;border-radius:10px;"
+            f"padding:18px;margin:12px 0;color:#7d1010'>"
+            f"<h2 style='margin:0 0 8px;color:#C0392B'>❌ VDT NEMÔŽE OBCHODOVAŤ</h2>"
+            f"<p style='margin:0 0 8px;font-size:14px'>Pre validný VDT trade potrebujem "
+            f"<b>kompletný kontext</b> — aktuálny SOC, DAM nomináciu z D-1 plánu a všetky "
+            f"realizované VDT trades. Niečo z toho chýba:</p>"
+            f"{_missing_html}"
+            f"<p style='margin:8px 0 0;font-size:13px;color:#444'>"
+            f"<b>Profil:</b> {_html.escape(active_profile)} · "
+            f"<b>Start SOC (odhad):</b> {_state.get('start_soc_pct', '—'):.1f}% "
+            f"({_html.escape(str(_state.get('start_soc_source', '?')))})</p>"
+            f"{_warn_html}"
+            f"<p style='margin:14px 0 0;font-size:12px;color:#888;font-style:italic'>"
+            f"VDT trades sa nevykonali. Auto_control scheduler tento profil preskočí. "
+            f"Vyrieš chýbajúce dáta a obnov stránku.</p>"
+            f"</div>"
+        )
+        # Pokračuj na cache fallback (zobrazí poslednú úspešnú rec ak existuje)
+        _cached = None
+        try:
+            _cached = _adv.load_cache(profile=active_profile)
+        except Exception:
+            _cached = None
+        if _cached and _cached.get("full_plan"):
+            body += (f"<div style='background:#fff3cd;border-left:4px solid #FFA000;"
+                       f"padding:10px 14px;border-radius:6px;margin:8px 0;font-size:12px'>"
+                       f"📋 Zobrazujem dáta z <b>poslednej úspešnej cache</b> "
+                       f"(ts: {_html.escape(str(_cached.get('ts','?'))[:19])}). "
+                       f"<b>POZOR:</b> tieto čísla sú stale a NEDÔVERYHODNÉ pre aktuálne rozhodnutia.</div>")
+            res = _cached
+        else:
+            body += "</div></body></html>"
+            return render_legacy_body(None, "VDT Live Advisor", body)
+
     if not res.get("ok"):
         soc = res.get("soc", {})
         _err_msg = str(res.get("error", "?"))
@@ -7467,6 +7522,31 @@ def vdt_live_advisor_page(
                 pass
             body += "</div></body></html>"
             return render_legacy_body(None, "VDT Live Advisor", body)
+
+    # Bug O3: State diagnostic card — kompletný kontext pred VDT rozhodnutím
+    _st = res.get("state") or {}
+    if _st.get("data_completeness"):
+        _dam_kind = _st.get("dam_kind", "?")
+        _start_soc = _st.get("start_soc_pct", 0.0)
+        _start_src = _st.get("start_soc_source", "?")
+        _cur_soc = _st.get("current_soc_pct", 0.0)
+        _vdt_n = _st.get("vdt_realized_count", 0)
+        _vdt_eur = _st.get("vdt_realized_eur", 0.0)
+        _slot_idx = _st.get("current_slot_idx", 0)
+        _slot_h, _slot_m = _slot_idx * 15 // 60, (_slot_idx * 15) % 60
+        body += (
+            f"<div style='background:#e8f5e9;border-left:4px solid #2E7D32;border-radius:6px;"
+            f"padding:10px 14px;margin:10px 0;font-size:12px;color:#1B5E20'>"
+            f"<b>✓ Kompletný kontext (single source of truth)</b><br>"
+            f"<b>Start SOC</b> {_start_soc:.1f}% <span style='color:#666'>"
+            f"({_html.escape(_start_src)})</span> · "
+            f"<b>SOC teraz</b> (slot {_slot_h:02d}:{_slot_m:02d}) "
+            f"<span style='font-size:14px;font-weight:700'>{_cur_soc:.1f}%</span> · "
+            f"<b>DAM</b> kind={_dam_kind} · "
+            f"<b>VDT realized</b> {_vdt_n} trades ({_vdt_eur:+.2f} €) "
+            f"= kumulatívna integrácia od 00:00 dnes."
+            f"</div>"
+        )
 
     # Hlavná karta — ČO TERAZ
     cur = res["current"]
