@@ -2022,6 +2022,162 @@ def home():
     return form_page()
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(profile: str = ""):
+    """Bug R2: Per-profile landing page.
+
+    KPI dlaždice: SOC teraz, dnes zisk, FTV výroba, plán status.
+    State diagnostic z vdt_state.compute_current_state.
+    Bg toggle + last activity timestamp.
+    Sub-nav linky na ďalšie pages.
+
+    `?profile=X` = read-only override (nezmení active). Bez profile = aktívny.
+    """
+    import html as _html
+    # Resolve profile (URL override → active)
+    try:
+        from core.profile_resolver import get_active as _ga, get_mode as _gm
+        prof = _ga(profile)
+        prof_mode = _gm(profile) if profile else _gm()
+    except Exception:
+        prof = profile or "default"
+        prof_mode = "unknown"
+
+    # Bg enabled status
+    try:
+        import auto_control as _ac
+        bg_enabled = prof in _ac.get_enabled_profiles()
+    except Exception:
+        bg_enabled = False
+
+    # Profile detail (kwp, batt, atď.)
+    try:
+        import profiles as _pr
+        p_data = _pr.load_profile(prof) or {}
+    except Exception:
+        p_data = {}
+    plan = p_data.get("plan") or {}
+    kwp = float(plan.get("kwp", 0) or 0)
+    batt_kw = float(plan.get("batt_kw", 0) or 0)
+    batt_kwh = float(plan.get("batt_kwh", 0) or 0)
+
+    # VDT state (kumulatívny SOC + DAM)
+    try:
+        import vdt_state as _vs
+        state = _vs.compute_current_state(prof)
+    except Exception as _e:
+        state = {"data_completeness": False, "missing_items": ["state_module_error"],
+                 "current_soc_pct": 0.0, "vdt_realized_count": 0, "vdt_realized_eur": 0.0,
+                 "start_soc_pct": 0.0, "start_soc_source": str(_e)}
+
+    cur_soc = float(state.get("current_soc_pct", 0.0))
+    vdt_n = int(state.get("vdt_realized_count", 0))
+    vdt_eur = float(state.get("vdt_realized_eur", 0.0))
+    data_ok = bool(state.get("data_completeness", False))
+
+    # Mode color
+    if prof_mode == "real":
+        chip_bg = "#C62828"
+        chip_icon = "🔴"
+    else:
+        chip_bg = "#2E7D32"
+        chip_icon = "🟢"
+    bg_chip = "🔵 bg ON" if bg_enabled else "⚪ bg OFF"
+
+    # KPI dlaždice
+    soc_color = ("#2E7D32" if 20 <= cur_soc <= 80 else
+                 "#C62828" if cur_soc <= 5 or cur_soc >= 95 else "#F57F17")
+    profit_color = "#2E7D32" if vdt_eur >= 0 else "#C62828"
+    data_chip = ("<span style='background:#2E7D32;color:#fff;padding:4px 10px;border-radius:6px;"
+                 "font-size:12px;font-weight:600'>✓ Kompletný kontext</span>" if data_ok else
+                 "<span style='background:#C62828;color:#fff;padding:4px 10px;border-radius:6px;"
+                 "font-size:12px;font-weight:600'>⚠ Insufficient data</span>")
+
+    # Sub-nav pages (rovnaké ako v _nav() pásme 3)
+    pages = [("/", "🗓 Plán D-1"), ("/dentrh", "⚡ Denný trh 15-min"),
+             ("/plan_batch", "📦 Batch plán"), ("/plans", "📋 Plány"),
+             ("/livesim", "🟢 Živá simulácia"), ("/load_import", "🏠 Spotreba"),
+             ("/auto_control", "🤖 Paper trading"), ("/vdt/live_advisor", "💹 OKTE VDT")]
+    if prof_mode == "real":
+        pages.insert(5, ("/realio", "🔌 Reálne meranie"))
+    page_links = "".join(
+        f'<a href="{href}?profile={_html.escape(prof)}" target="_top" '
+        f'style="display:inline-flex;flex-direction:column;align-items:center;justify-content:center;'
+        f'min-width:140px;padding:18px 12px;background:#fff;border:1px solid #d8e0eb;'
+        f'border-radius:10px;text-decoration:none;color:#1F4E78;font-weight:600;'
+        f'transition:transform .12s,box-shadow .12s" '
+        f'onmouseover="this.style.transform=\'translateY(-2px)\';this.style.boxShadow=\'0 4px 12px rgba(31,78,120,.15)\'" '
+        f'onmouseout="this.style.transform=\'\';this.style.boxShadow=\'\'">'
+        f'<span style="font-size:24px;line-height:1">{lab.split()[0]}</span>'
+        f'<span style="font-size:12px;margin-top:6px">{lab.split(maxsplit=1)[1] if len(lab.split())>1 else lab}</span>'
+        f'</a>'
+        for href, lab in pages)
+
+    body = (
+        f'<div style="max-width:1280px;margin:18px auto;padding:0 16px">'
+        f'<h1 style="margin:0 0 14px;display:flex;align-items:center;gap:12px;color:#1F4E78">'
+        f'<span style="background:{chip_bg};color:#fff;padding:6px 18px;border-radius:10px;font-size:20px">'
+        f'{chip_icon} {_html.escape(prof)}</span>'
+        f'<span style="font-size:14px;color:#666;font-weight:400">{bg_chip} · {prof_mode}</span>'
+        f'</h1>'
+        f'<p style="color:#666;margin:0 0 16px;font-size:13px">'
+        f'Dashboard tohto profilu — KPI súhrn + rýchly prístup ku všetkým stránkam profilu.</p>'
+
+        # KPI dlaždice (4 v rade)
+        f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:0 0 18px">'
+        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid {soc_color}">'
+        f'<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px">SOC teraz</div>'
+        f'<div style="font-size:28px;font-weight:700;color:{soc_color};margin:4px 0">{cur_soc:.1f}%</div>'
+        f'<div style="font-size:11px;color:#999">kumulatívny výpočet od 00:00</div>'
+        f'</div>'
+        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid {profit_color}">'
+        f'<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px">VDT zisk dnes</div>'
+        f'<div style="font-size:28px;font-weight:700;color:{profit_color};margin:4px 0">{vdt_eur:+.2f} €</div>'
+        f'<div style="font-size:11px;color:#999">{vdt_n} paper trades</div>'
+        f'</div>'
+        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid #1F4E78">'
+        f'<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px">Batéria</div>'
+        f'<div style="font-size:28px;font-weight:700;color:#1F4E78;margin:4px 0">{batt_kw:.0f} kW</div>'
+        f'<div style="font-size:11px;color:#999">{batt_kwh:.0f} kWh kapacita</div>'
+        f'</div>'
+        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid #1F4E78">'
+        f'<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px">FTV inštalácia</div>'
+        f'<div style="font-size:28px;font-weight:700;color:#1F4E78;margin:4px 0">{kwp:.0f} kWp</div>'
+        f'<div style="font-size:11px;color:#999">{"FTV inštalovaná" if kwp > 0 else "batt-only profil"}</div>'
+        f'</div>'
+        f'</div>'
+
+        # State diagnostic banner
+        f'<div style="background:#fff;border-radius:10px;padding:14px 16px;margin:0 0 18px;'
+        f'border-left:4px solid {"#2E7D32" if data_ok else "#C62828"}">'
+        f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">'
+        f'<b style="font-size:14px">Stav dát</b> {data_chip}</div>'
+        f'<div style="font-size:12px;color:#555;line-height:1.6">'
+        f'<b>Start SOC:</b> {state.get("start_soc_pct", 0):.1f}% '
+        f'<span style="color:#888">({_html.escape(str(state.get("start_soc_source", "?")))})</span><br>'
+        f'<b>DAM kind:</b> {_html.escape(str(state.get("dam_kind", "?")))} · '
+        f'<b>VDT realized:</b> {vdt_n} trades<br>'
+        f'{("<b>Missing:</b> " + ", ".join(state.get("missing_items", []))) if not data_ok else ""}'
+        f'</div></div>'
+
+        # Sub-nav dlaždice (pages profilu)
+        f'<h2 style="margin:18px 0 12px;color:#1F4E78;font-size:18px">Stránky profilu</h2>'
+        f'<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px">'
+        f'{page_links}'
+        f'</div>'
+
+        f'<p style="color:#888;font-size:12px;margin-top:24px">'
+        f'<i>Auto-refresh každých 60 s.</i> · '
+        f'<a href="/profiles" style="color:#1F4E78">⚙ Správa profilov</a> · '
+        f'<a href="/rt" style="color:#1F4E78">🔴 RT poradca (market-wide)</a>'
+        f'</p>'
+        f'</div>'
+        # Auto-refresh meta
+        f'<script>setTimeout(()=>location.reload(),60000);</script>'
+    )
+    return render_legacy_body(None, f"Dashboard — {prof}", body)
+
+
 # ───────────────────────── DENNÝ TRH 15-min (čistá cenová arbitráž) ─────────────────────────
 def _slot_of(iv):
     """index 15-min slotu (0..95) zo začiatku intervalu 'H:MM-H:MM'."""

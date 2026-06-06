@@ -155,7 +155,7 @@ def _profile_tabs(current_active: str = "") -> str:
         # Inactive = POST /profiles/apply form so set_active
         if is_active:
             chips.append(
-                f'<a href="/?profile={name}" target="_top" '
+                f'<a href="/dashboard?profile={name}" target="_top" '
                 f'style="display:inline-flex;align-items:center;gap:4px;'
                 f'padding:7px 12px;border:2px solid {border};border-radius:9px;'
                 f'background:{bg_col};color:{fg_col};font-weight:700;font-size:13px;'
@@ -168,7 +168,7 @@ def _profile_tabs(current_active: str = "") -> str:
                 f'<form method="post" action="/profiles/apply" target="_top" '
                 f'style="display:inline-block;margin:0">'
                 f'<input type="hidden" name="name" value="{name}">'
-                f'<input type="hidden" name="redirect_to" value="/?profile={name}">'
+                f'<input type="hidden" name="redirect_to" value="/dashboard?profile={name}">'
                 f'<button type="submit" '
                 f'style="display:inline-flex;align-items:center;gap:4px;'
                 f'padding:6px 11px;border:1px solid {border};border-radius:9px;'
