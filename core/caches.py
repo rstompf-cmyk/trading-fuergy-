@@ -183,7 +183,15 @@ def _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start, end) -> pd.DataFr
         ts, df = cached
         # in-memory cache hit: future (zajtra) má 10-min TTL; dnes/minulé sú permanent
         if not is_future or (now - ts) < _PVF_TTL_FUTURE:
-            return df
+            # Sanity check: ak je kwp>0 ale všetky kw=0, je to stale cache zo zlého plánu — invalidate
+            try:
+                if float(kwp or 0) > 0.01 and len(df) > 0 and float(df["kw"].max()) < 0.005 * float(kwp):
+                    print(f"[_fetch_pv_cached] in-memory cache má max kw={df['kw'].max():.2f} pri kwp={kwp} → INVALIDATE")
+                    _PVF_CACHE.pop(key, None)
+                else:
+                    return df
+            except Exception:
+                return df
 
     # ───────────────── DNES: skús plan_store CACHE prvé ─────────────────
     # D-1 plán pre dnešok bol pravdepodobne vygenerovaný včera v noci (scheduler) — netreba
@@ -194,6 +202,11 @@ def _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start, end) -> pd.DataFr
             sched = _ps_t.load_plan_safe(today.isoformat(), 60, "plan")
             if sched is not None:
                 pv_kwh = sched.get("schedule", {}).get("pv_kwh", [])
+                # Sanity check: keď kwp>0 ale uložený plán má všetky pv_kwh=0 (legacy stale plán
+                # z čias batt-only profilu), neprijať — pokračovať na live forecast
+                if pv_kwh and len(pv_kwh) == 24 and float(kwp or 0) > 0.01 and max(pv_kwh) < 0.005 * float(kwp):
+                    print(f"[_fetch_pv_cached] plan_store hit ale max pv_kwh={max(pv_kwh):.2f} pri kwp={kwp} → REJECT (stale plán)")
+                    pv_kwh = []  # → fallthrough na Open-Meteo
                 if pv_kwh and len(pv_kwh) == 24:
                     base = pd.Timestamp(today.isoformat())
                     times = pd.date_range(base, periods=24, freq="1h")
@@ -230,6 +243,10 @@ def _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start, end) -> pd.DataFr
                 sched = sch_disk.get("schedule", {})
                 pv_kwh = sched.get("pv_kwh", [])
                 if not pv_kwh or len(pv_kwh) != 24:
+                    continue
+                # Sanity: stale plán (kwp>0, ale pv_kwh=0) preskočiť → fallback na PVGIS TMY
+                if float(kwp or 0) > 0.01 and max(pv_kwh) < 0.005 * float(kwp):
+                    print(f"[_fetch_pv_cached] past day {diso} plan_store stale (max pv_kwh={max(pv_kwh):.2f}) → fallback")
                     continue
                 base = pd.Timestamp(diso)
                 times = pd.date_range(base, periods=24, freq="1h")
