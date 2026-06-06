@@ -169,22 +169,37 @@ def _get_start_soc(profile: str) -> Dict[str, Any]:
 def _load_dam_nomination(profile: str, today_iso: str) -> Optional[Dict[str, Any]]:
     """Načíta DAM nomináciu z D-1 plánu pre dnes.
 
-    Vráti 96-slot array s batt-pohľad kWh (di_kwh - ch_kwh, + = vybíjať, - = nabíjať).
-    Pre 60-min plan re-expanduje na 96 slotov (každá hodina = 4 sloty, kWh/4 každý).
-    Vracia None ak D-1 plán pre dnes neexistuje.
+    Vráti 96-slot array s batt-pohľad kWh (+ = vybíjať, - = nabíjať).
+    Schedule v plan_store používa tieto kľúče (priorita):
+      1. batt_kw (signed kW): + = discharge, - = charge → kWh = batt_kw × dt
+      2. _discharge_kw / _charge_kw (separated, vždy non-neg): kWh = (di - ch) × dt
+    Pre 60-min plan re-expanduje na 96 slotov.
+    Vracia None ak D-1 plán pre dnes neexistuje alebo má prázdne polia.
     """
     plan = _safe_load_plan(profile, today_iso)
     if plan is None:
         return None
     schedule = plan.get("schedule") or {}
-    di = schedule.get("di_kwh") or []
-    ch = schedule.get("ch_kwh") or []
-    if not di or not ch or len(di) != len(ch):
-        return None
     kind = plan.get("_meta_kind", "?")
     step_min = plan.get("_meta_step_min", 15)
-    # Spočítaj batt-pohľad nomináciu: + = vybíjať (di), - = nabíjať (ch)
-    batt_kwh_per_slot = [float(di[i]) - float(ch[i]) for i in range(len(di))]
+    dt_h = step_min / 60.0                            # dĺžka slotu v hodinách
+
+    # Priorita 1: batt_kw (signed kW) — najčastejšie pole z optimizer.optimize_day
+    batt_kw_arr = schedule.get("batt_kw") or []
+    if batt_kw_arr:
+        batt_kwh_per_slot = [float(v) * dt_h for v in batt_kw_arr]
+    else:
+        # Priorita 2: _discharge_kw - _charge_kw (separated streams)
+        di = schedule.get("_discharge_kw") or []
+        ch = schedule.get("_charge_kw") or []
+        if not di and not ch:
+            return None                                 # žiadne použiteľné pole
+        n = max(len(di), len(ch))
+        di = list(di) + [0.0] * (n - len(di))
+        ch = list(ch) + [0.0] * (n - len(ch))
+        batt_kwh_per_slot = [(float(di[i]) - float(ch[i])) * dt_h for i in range(n)]
+    if not batt_kwh_per_slot:
+        return None
     # Ak je 60-min plán (24 slotov), expanduj na 96 (každý hodinový slot = 4 × 15-min so štvrtinou kWh)
     if step_min == 60 and len(batt_kwh_per_slot) == 24:
         expanded = []
