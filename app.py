@@ -2037,21 +2037,22 @@ def home():
 
 @app.get("/manager", response_class=HTMLResponse)
 def manager_dashboard():
-    """Bug T1: Manager dashboard — cross-profile fleet view.
+    """Bug T1: Manager dashboard — fleet command center.
 
-    Tabuľka všetkých profilov s key metrikami:
-      - Mode (sim/real)
-      - BG status (ON/OFF)
-      - SOC teraz (z VDT cache)
-      - VDT zisk dnes
-      - Plán status (D-1 existuje pre dnes?)
-      - Last advisor ts
+    Layout:
+      - HORE: 2 zdieľané grafy (MT signál + DT ceny — raz pre celý fleet)
+      - PER BG-ON PROFIL: card s
+          * Header (názov + mode + bg + link "Detail →")
+          * KPI tile riadok (Zisk SPOLU, FTV teraz, Batt reálna, SOC, Zisk dnes)
+          * Mini-graf "Riadenie batérie" (plán + realita + SOC)
 
-    Klik na riadok → /dashboard?profile=X.
-    Auto-refresh 60s.
+    Mobile responsive: CSS grid auto-fit minmax(460px, 1fr).
+    Klik na kartu (header) → /dashboard?profile=X.
+    Auto-refresh 60 s.
     """
     import html as _html
     import datetime as _dt
+    import json as _json
     try:
         import profiles as _pr
         all_profs = _pr.list_profiles() or []
@@ -2070,25 +2071,95 @@ def manager_dashboard():
         import plan_store as _ps
     except Exception:
         _ps = None
-    today_iso = _dt.date.today().isoformat()
+    try:
+        import realio_db as _rdb
+    except Exception:
+        _rdb = None
 
-    rows = []
+    today = _dt.date.today()
+    today_iso = today.isoformat()
+    now_hh = _dt.datetime.now().hour + _dt.datetime.now().minute / 60.0
+
+    # === 1. Zdieľané dáta hore: DT ceny + MT signál ===
+    # DT ceny — z OTE cache (CZ + SK ak dostupné)
+    dt_cz_labels: list = []
+    dt_cz_vals: list = []
+    dt_sk_vals: list = []
+    try:
+        from core.caches import _fetch_ote_cached
+        dt_cz = _fetch_ote_cached(today, "CZ") or {}
+        for hh, eur in sorted(dt_cz.items()):
+            try:
+                dt_cz_labels.append(f"{int(hh):02d}:00")
+                dt_cz_vals.append(float(eur))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        from core.caches import _fetch_ote_cached
+        dt_sk = _fetch_ote_cached(today, "SK") or {}
+        if dt_sk and not dt_cz_labels:
+            for hh, eur in sorted(dt_sk.items()):
+                try:
+                    dt_cz_labels.append(f"{int(hh):02d}:00")
+                    dt_sk_vals.append(float(eur))
+                except Exception:
+                    pass
+        elif dt_sk:
+            for hh in sorted(dt_sk.keys()):
+                try:
+                    dt_sk_vals.append(float(dt_sk[hh]))
+                except Exception:
+                    dt_sk_vals.append(None)
+    except Exception:
+        pass
+
+    # MT signál — SEPS (SK) recent reg.výkon
+    mt_labels: list = []
+    mt_vals_sys: list = []
+    try:
+        from seps_sk import load_seps_mw_for_day as _seps
+        mt_df = _seps(today_iso)
+        if mt_df is not None and not mt_df.empty and "sys" in mt_df.columns:
+            # decimácia: každá 5. minúta (288 bodov / deň)
+            step = max(1, len(mt_df) // 288)
+            sample = mt_df.iloc[::step]
+            for ts, row in sample.iterrows():
+                try:
+                    t = ts.strftime("%H:%M") if hasattr(ts, "strftime") else str(ts)[:5]
+                    mt_labels.append(t)
+                    v = float(row.get("sys", 0.0))
+                    mt_vals_sys.append(v)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # === 2. Per-profil dáta ===
+    profile_cards = []
     bg_count = 0
     total_vdt_eur = 0.0
-    for name in sorted(all_profs):
+    sim_profs = [n for n in sorted(all_profs) if n in bg_enabled]
+    rest_profs = [n for n in sorted(all_profs) if n not in bg_enabled]
+
+    for name in sim_profs + rest_profs:
         try:
             p_data = _pr.load_profile(name) or {}
         except Exception:
             p_data = {}
         mode = (p_data.get("mode") or "simulation").lower()
-        plan = p_data.get("plan") or {}
+        plan_params = p_data.get("plan") or {}
+        batt_kwh = float(plan_params.get("batt_kwh", 800.0))
         bg_on = (name in bg_enabled)
         if bg_on:
             bg_count += 1
-        # VDT cache pre rýchly SOC + zisk (bez volania compute_current_state, ktorá je drahá)
+
+        # VDT cache
         soc_now = None
         vdt_eur = 0.0
         adv_ts = ""
+        full_plan = []
         if _adv:
             try:
                 cache = _adv.load_cache(profile=name) or {}
@@ -2096,10 +2167,47 @@ def manager_dashboard():
                 soc_now = state.get("current_soc_pct")
                 vdt_eur = float(state.get("vdt_realized_eur", 0.0) or 0.0)
                 adv_ts = str(cache.get("ts", ""))[:16]
+                full_plan = cache.get("full_plan") or []
             except Exception:
                 pass
         total_vdt_eur += vdt_eur
-        # Plán pre dnes existuje?
+
+        # Realio meranie pre real profile
+        ftv_now_kw = None
+        batt_real_kw = None
+        if mode == "real" and _rdb:
+            try:
+                latest = _rdb.fetch_latest_all(profile=name) or {}
+                ftv_now_kw = latest.get("FTV_kW") or latest.get("FVE1_C_Power")
+                batt_real_kw = latest.get("ESS1_C_Power") or latest.get("BAT_kW")
+                if soc_now is None:
+                    soc_now = latest.get("SOC_pct") or latest.get("ESS1_C_SOC")
+            except Exception:
+                pass
+
+        # Mini-graf data: SOC trajectory + batt action
+        soc_path = []
+        batt_path = []
+        slot_labels = []
+        for p_slot in (full_plan[:96] if full_plan else []):
+            try:
+                slot_labels.append(str(p_slot.get("slot", ""))[:5])
+                soc_path.append(float(p_slot.get("soc_after_pct", 0) or 0))
+                kwh = float(p_slot.get("kwh", 0) or 0)
+                act = str(p_slot.get("action", "idle"))
+                # convert kWh / 0.25 h = kW; charge = negative (input), discharge = positive
+                kw = (kwh / 0.25)
+                if act == "charge":
+                    batt_path.append(-kw)
+                elif act == "discharge":
+                    batt_path.append(kw)
+                else:
+                    batt_path.append(0.0)
+            except Exception:
+                batt_path.append(0.0)
+                soc_path.append(0.0)
+
+        # Plán pre dnes?
         has_plan_today = False
         if _ps:
             try:
@@ -2110,86 +2218,168 @@ def manager_dashboard():
             except Exception:
                 pass
 
-        # Render row
-        mode_chip = (f'<span style="background:#C62828;color:#fff;padding:2px 8px;'
-                     f'border-radius:5px;font-size:11px;font-weight:600">🔴 real</span>'
+        # === Render card ===
+        canvas_id = f"chart_{name.replace('-', '_').replace(' ', '_')}"
+        mode_chip = ('<span style="background:#C62828;color:#fff;padding:3px 9px;'
+                     'border-radius:6px;font-size:11px;font-weight:600">🔴 real</span>'
                      if mode == "real" else
-                     f'<span style="background:#2E7D32;color:#fff;padding:2px 8px;'
-                     f'border-radius:5px;font-size:11px;font-weight:600">🟢 sim</span>')
-        bg_chip = (f'<span style="color:#1F88E5;font-weight:600">🔵 ON</span>'
+                     '<span style="background:#2E7D32;color:#fff;padding:3px 9px;'
+                     'border-radius:6px;font-size:11px;font-weight:600">🟢 sim</span>')
+        bg_chip = ('<span style="background:#1F88E5;color:#fff;padding:3px 9px;border-radius:6px;'
+                   'font-size:11px;font-weight:600">🔵 BG ON</span>'
                    if bg_on else
-                   f'<span style="color:#999">⚪ OFF</span>')
-        soc_html = (f'<span style="color:{"#2E7D32" if 20<=soc_now<=80 else "#C62828" if soc_now<=5 or soc_now>=95 else "#F57F17"};'
-                     f'font-weight:700">{soc_now:.1f}%</span>'
-                     if soc_now is not None else
-                     '<span style="color:#999">—</span>')
-        eur_html = (f'<span style="color:{"#2E7D32" if vdt_eur>=0 else "#C62828"};'
-                     f'font-weight:700">{vdt_eur:+.2f} €</span>')
-        plan_html = ('<span style="color:#2E7D32">✓</span>' if has_plan_today else
-                     '<span style="color:#C62828">✗</span>')
-        ts_html = (f'<span style="color:#666;font-size:11px;font-family:monospace">{_html.escape(adv_ts)}</span>'
-                   if adv_ts else '<span style="color:#999">—</span>')
-        rows.append(
-            f'<tr style="cursor:pointer" onclick="location.href=\'/dashboard?profile={name}\'" '
-            f'onmouseover="this.style.background=\'#f0f7ff\'" '
-            f'onmouseout="this.style.background=\'\'">'
-            f'<td style="padding:8px 12px;font-weight:600">{_html.escape(name)}</td>'
-            f'<td style="padding:8px 12px">{mode_chip}</td>'
-            f'<td style="padding:8px 12px">{bg_chip}</td>'
-            f'<td style="padding:8px 12px;text-align:right">{soc_html}</td>'
-            f'<td style="padding:8px 12px;text-align:right">{eur_html}</td>'
-            f'<td style="padding:8px 12px;text-align:center">{plan_html}</td>'
-            f'<td style="padding:8px 12px">{ts_html}</td>'
-            f'</tr>'
+                   '<span style="background:#bbb;color:#fff;padding:3px 9px;border-radius:6px;'
+                   'font-size:11px;font-weight:600">⚪ BG OFF</span>')
+        plan_dot = ('<span style="color:#2E7D32" title="Plán pre dnes existuje">●</span>'
+                    if has_plan_today else
+                    '<span style="color:#C62828" title="Plán chýba">●</span>')
+
+        def _fmt(v, suffix="", decimals=1):
+            if v is None:
+                return '<span style="color:#999">—</span>'
+            try:
+                return f'{float(v):.{decimals}f}{suffix}'
+            except Exception:
+                return '<span style="color:#999">—</span>'
+
+        soc_color = ("#2E7D32" if (soc_now is not None and 20 <= soc_now <= 80)
+                     else "#C62828" if (soc_now is not None and (soc_now <= 5 or soc_now >= 95))
+                     else "#F57F17")
+        eur_color = "#2E7D32" if vdt_eur >= 0 else "#C62828"
+
+        profile_cards.append(
+            f'<div class="profile-card" style="background:#fff;border-radius:12px;padding:14px 16px;'
+            f'box-shadow:0 2px 6px rgba(0,0,0,.07);border-top:3px solid {"#C62828" if mode == "real" else "#2E7D32"}">'
+            # Header
+            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap">'
+            f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+            f'<a href="/dashboard?profile={name}" style="font-size:16px;font-weight:700;color:#1F4E78;text-decoration:none">{_html.escape(name)} →</a>'
+            f'{mode_chip}{bg_chip}{plan_dot}'
+            f'</div>'
+            f'<span style="font-size:10px;color:#999;font-family:monospace">{_html.escape(adv_ts) if adv_ts else "—"}</span>'
+            f'</div>'
+            # KPI tiles
+            f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(85px,1fr));gap:6px;margin-bottom:10px">'
+            f'<div style="background:#f5f7fb;padding:6px 8px;border-radius:6px"><div style="font-size:10px;color:#777">SOC</div>'
+            f'<div style="font-size:18px;font-weight:700;color:{soc_color}">{_fmt(soc_now, "%", 1)}</div></div>'
+            f'<div style="background:#f5f7fb;padding:6px 8px;border-radius:6px"><div style="font-size:10px;color:#777">Zisk dnes</div>'
+            f'<div style="font-size:18px;font-weight:700;color:{eur_color}">{vdt_eur:+.1f} €</div></div>'
+            f'<div style="background:#f5f7fb;padding:6px 8px;border-radius:6px"><div style="font-size:10px;color:#777">FTV teraz</div>'
+            f'<div style="font-size:18px;font-weight:700;color:#1F4E78">{_fmt(ftv_now_kw, " kW", 0)}</div></div>'
+            f'<div style="background:#f5f7fb;padding:6px 8px;border-radius:6px"><div style="font-size:10px;color:#777">Batt reálna</div>'
+            f'<div style="font-size:18px;font-weight:700;color:#1F4E78">{_fmt(batt_real_kw, " kW", 0)}</div></div>'
+            f'<div style="background:#f5f7fb;padding:6px 8px;border-radius:6px"><div style="font-size:10px;color:#777">Kapacita</div>'
+            f'<div style="font-size:18px;font-weight:700;color:#666">{batt_kwh:.0f} kWh</div></div>'
+            f'</div>'
+            # Mini chart canvas
+            f'<div style="height:160px;position:relative"><canvas id="{canvas_id}"></canvas></div>'
+            # Data inline (skript ich vyzbiera nižšie)
+            f'<script type="application/json" id="data_{canvas_id}">'
+            f'{_json.dumps({"labels": slot_labels, "batt": batt_path, "soc": soc_path, "now_hh": now_hh})}'
+            f'</script>'
+            f'</div>'
         )
 
     n_total = len(all_profs)
+    n_active = len(sim_profs)
+
+    # === 3. HTML body ===
     body = (
-        f'<div style="max-width:1200px;margin:18px auto;padding:0 16px">'
-        f'<h1 style="margin:0 0 6px;color:#1F4E78">🛰 Manager dashboard</h1>'
-        f'<p style="color:#666;margin:0 0 16px;font-size:13px">'
-        f'Fleet view cez všetky profile. Klikni na riadok pre detail dashboard profilu.</p>'
+        f'<style>'
+        f'.container{{max-width:100%;margin:0 auto;padding:16px 20px}}'
+        f'.shared-charts{{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}}'
+        f'.shared-chart-card{{background:#fff;border-radius:12px;padding:14px;box-shadow:0 2px 6px rgba(0,0,0,.07);height:240px;position:relative}}'
+        f'.kpi-row{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:18px}}'
+        f'.kpi-card{{background:#fff;border-radius:10px;padding:12px 14px;border-left:4px solid #1F4E78}}'
+        f'.kpi-card .label{{font-size:11px;color:#888;text-transform:uppercase}}'
+        f'.kpi-card .value{{font-size:26px;font-weight:700;color:#1F4E78;margin:3px 0}}'
+        f'.profile-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:14px}}'
+        f'@media(max-width:768px){{.shared-charts{{grid-template-columns:1fr}}.profile-grid{{grid-template-columns:1fr}}.container{{padding:10px}}}}'
+        f'</style>'
 
-        # Summary KPI
-        f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:0 0 18px">'
-        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid #1F4E78">'
-        f'<div style="font-size:11px;color:#888;text-transform:uppercase">Profilov spolu</div>'
-        f'<div style="font-size:28px;font-weight:700;color:#1F4E78;margin:4px 0">{n_total}</div>'
+        f'<div class="container">'
+        f'<h1 style="margin:0 0 6px;color:#1F4E78">🛰 Manager — fleet command center</h1>'
+        f'<p style="color:#666;margin:0 0 18px;font-size:13px">'
+        f'{n_total} profilov · {n_active} BG ON · '
+        f'<span style="color:{"#2E7D32" if total_vdt_eur >= 0 else "#C62828"};font-weight:700">{total_vdt_eur:+.0f} € VDT dnes spolu</span> · '
+        f'auto-refresh 60 s</p>'
+
+        # Zdieľané grafy hore
+        f'<div class="shared-charts">'
+        f'<div class="shared-chart-card">'
+        f'<div style="font-size:13px;color:#1F4E78;font-weight:600;margin-bottom:4px">DT ceny dnes ({today_iso})</div>'
+        f'<canvas id="ch_dt"></canvas>'
         f'</div>'
-        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid #1F88E5">'
-        f'<div style="font-size:11px;color:#888;text-transform:uppercase">Bg ON (aktívne)</div>'
-        f'<div style="font-size:28px;font-weight:700;color:#1F88E5;margin:4px 0">{bg_count}</div>'
-        f'<div style="font-size:11px;color:#999">{n_total - bg_count} OFF (klik na chip ich zapne)</div>'
-        f'</div>'
-        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid {"#2E7D32" if total_vdt_eur >= 0 else "#C62828"}">'
-        f'<div style="font-size:11px;color:#888;text-transform:uppercase">VDT zisk dnes (suma)</div>'
-        f'<div style="font-size:28px;font-weight:700;color:{"#2E7D32" if total_vdt_eur >= 0 else "#C62828"};margin:4px 0">{total_vdt_eur:+.0f} €</div>'
-        f'<div style="font-size:11px;color:#999">cez všetky profily</div>'
+        f'<div class="shared-chart-card">'
+        f'<div style="font-size:13px;color:#1F4E78;font-weight:600;margin-bottom:4px">MT signál (SEPS reg. výkon, MW)</div>'
+        f'<canvas id="ch_mt"></canvas>'
         f'</div>'
         f'</div>'
 
-        # Tabuľka
-        f'<table style="width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;'
-        f'box-shadow:0 1px 3px rgba(0,0,0,.06)">'
-        f'<thead><tr style="background:#1F4E78;color:#fff">'
-        f'<th style="padding:10px 12px;text-align:left;font-size:13px">Profil</th>'
-        f'<th style="padding:10px 12px;text-align:left;font-size:13px">Mode</th>'
-        f'<th style="padding:10px 12px;text-align:left;font-size:13px">BG</th>'
-        f'<th style="padding:10px 12px;text-align:right;font-size:13px">SOC teraz</th>'
-        f'<th style="padding:10px 12px;text-align:right;font-size:13px">VDT zisk dnes</th>'
-        f'<th style="padding:10px 12px;text-align:center;font-size:13px" title="D-1 plán pre dnes existuje">Plán</th>'
-        f'<th style="padding:10px 12px;text-align:left;font-size:13px">Last advisor</th>'
-        f'</tr></thead>'
-        f'<tbody>{"".join(rows) if rows else "<tr><td colspan=7 style=padding:20px;text-align:center;color:#888>Žiadne profile — vytvor cez /profiles/edit</td></tr>"}</tbody>'
-        f'</table>'
+        # Per-profil karty
+        f'<h2 style="color:#1F4E78;font-size:18px;margin:14px 0 10px">Profily</h2>'
+        f'<div class="profile-grid">'
+        f'{"".join(profile_cards) if profile_cards else "<div style=padding:20px;text-align:center;color:#888>Žiadne profile — vytvor cez /profiles/edit</div>"}'
+        f'</div>'
 
-        f'<p style="color:#888;font-size:12px;margin-top:18px;font-style:italic">'
-        f'Auto-refresh 60 s. SOC/zisk z posledného VDT advisor cache. Plán ✓ ak D-1 (60-min) alebo dentrh (15-min) pre dnes existuje v plan_store.'
+        f'<p style="color:#888;font-size:12px;margin:18px 0 0;font-style:italic">'
+        f'Dáta z VDT advisor cache (state) + Realio DB (real profile) + OTE/SEPS (zdieľané grafy). Klik na názov profilu → detail dashboard.'
         f'</p>'
         f'</div>'
-        f'<script>setTimeout(()=>location.reload(),60000);</script>'
+
+        # === Chart.js render ===
+        f'<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>'
+        f'<script>'
+        f'document.addEventListener("DOMContentLoaded", () => {{'
+
+        # Zdieľaný DT graf
+        f'const dt_labels = {_json.dumps(dt_cz_labels)};'
+        f'const dt_cz = {_json.dumps(dt_cz_vals)};'
+        f'const dt_sk = {_json.dumps(dt_sk_vals)};'
+        f'if (dt_labels.length > 0) {{'
+        f'  new Chart(document.getElementById("ch_dt"), {{type:"line",'
+        f'    data:{{labels:dt_labels,datasets:['
+        f'      {{label:"DT CZ €/MWh",data:dt_cz,borderColor:"#1F4E78",backgroundColor:"rgba(31,78,120,.1)",fill:true,tension:0.2}},'
+        f'      {{label:"DT SK €/MWh",data:dt_sk,borderColor:"#C62828",borderDash:[5,3],fill:false,tension:0.2}}'
+        f'    ]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{labels:{{font:{{size:11}}}}}}}}}}}});'
+        f'}}'
+
+        # Zdieľaný MT graf
+        f'const mt_labels = {_json.dumps(mt_labels)};'
+        f'const mt_sys = {_json.dumps(mt_vals_sys)};'
+        f'if (mt_labels.length > 0) {{'
+        f'  new Chart(document.getElementById("ch_mt"), {{type:"line",'
+        f'    data:{{labels:mt_labels,datasets:['
+        f'      {{label:"SEPS sys MW",data:mt_sys,borderColor:"#F57F17",backgroundColor:"rgba(245,127,23,.1)",fill:true,tension:0.1,pointRadius:0}}'
+        f'    ]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{labels:{{font:{{size:11}}}}}}}}}}}});'
+        f'}}'
+
+        # Per-profil mini grafy — collect všetky canvas a vyrenderuj
+        f'document.querySelectorAll(\'script[type="application/json"][id^="data_chart_"]\').forEach(scriptEl => {{'
+        f'  const data = JSON.parse(scriptEl.textContent);'
+        f'  const canvasId = scriptEl.id.replace("data_", "");'
+        f'  const canvas = document.getElementById(canvasId);'
+        f'  if (!canvas || !data.labels || data.labels.length === 0) return;'
+        f'  new Chart(canvas, {{type:"line",'
+        f'    data:{{labels:data.labels,datasets:['
+        f'      {{label:"Batt kW",data:data.batt,borderColor:"#2E7D32",backgroundColor:"rgba(46,125,50,.15)",fill:true,tension:0.0,pointRadius:0,yAxisID:"y"}},'
+        f'      {{label:"SOC %",data:data.soc,borderColor:"#F57F17",borderDash:[4,2],fill:false,tension:0.0,pointRadius:0,yAxisID:"y1"}}'
+        f'    ]}},'
+        f'    options:{{responsive:true,maintainAspectRatio:false,'
+        f'      scales:{{'
+        f'        y:{{position:"left",ticks:{{font:{{size:9}}}}}},'
+        f'        y1:{{position:"right",ticks:{{font:{{size:9}}}},grid:{{drawOnChartArea:false}},min:0,max:100}},'
+        f'        x:{{ticks:{{font:{{size:9}},maxRotation:0,autoSkip:true,maxTicksLimit:8}}}}'
+        f'      }},'
+        f'      plugins:{{legend:{{labels:{{font:{{size:10}},boxWidth:10}}}}}}'
+        f'    }}'
+        f'  }});'
+        f'}});'
+        f'setTimeout(() => location.reload(), 60000);'
+        f'}});'
+        f'</script>'
     )
-    return render_legacy_body(None, "Manager dashboard", body)
+    return render_legacy_body(None, "Manager", body)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
