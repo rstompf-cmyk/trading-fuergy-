@@ -588,8 +588,12 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             if _user_start < _meta_start:
                 _need_reset = True
                 _reset_reason = f"start posunutý dozadu ({_meta_start.date()} → {_user_start.date()})"
-            else:
-                # Skontroluj CSV — či prvý logovaný deň zodpovedá user_start
+            elif _user_start > _meta_start:
+                # Druhá kontrola: CSV začína neskôr ako user deklaroval — IBA ak meta.start_date
+                # bol iný (stale stav z minulého behu). Ak meta.start_date == user_start (po reset
+                # alebo prvý beh), CSV začiatok > user_start znamená iba že staré dni nemali dáta
+                # (sys_MW chýba pre dávnu históriu) → NIE je to dôvod resetovať, lebo nový reset
+                # by viedol k tomu istému výsledku (loop).
                 try:
                     _head = pd.read_csv(csv_path, nrows=1, usecols=["time"])
                     if not _head.empty:
@@ -597,7 +601,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         if _csv_first > _user_start:
                             _need_reset = True
                             _reset_reason = (f"CSV začína {_csv_first.date()} ale user_start={_user_start.date()} "
-                                              f"(pravdepodobne stale stav z predošlého behu)")
+                                              f"a meta.start_date={_meta_start.date()} (stale stav)")
                 except (FileNotFoundError, ValueError, KeyError, pd.errors.EmptyDataError):
                     pass
         except Exception:
