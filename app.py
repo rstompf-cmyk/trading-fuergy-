@@ -1399,7 +1399,11 @@ def _render_mult_warnings(summ) -> str:
             f"prejaví ako RT odchýlka):</b><ul style='margin:6px 0 0 20px'>{items}{more}</ul></div>")
 
 
-# ─── Spinner overlay (injektovaný cez middleware do každej HTML response) ──
+# Bug R5 (2026-06-06): Spinner overlay ZRUŠENÝ podľa žiadosti používateľa.
+# Modul ostáva ako placeholder pre prípadný comeback — _OVERLAY_HTML konstanta
+# zostáva (nevyužitá), ale @app.middleware NIE JE registrované.
+# Pre dlhé operácie (Excel export, plan_batch) sú streaming responses a inline
+# progress bars (napríklad /plan_batch streaming progress).
 _OVERLAY_HTML = """
 <style>
 #_busy_ov{position:fixed;inset:0;background:rgba(255,255,255,.85);display:none;z-index:99999;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
@@ -1466,32 +1470,11 @@ _OVERLAY_HTML = """
 """
 
 
-@app.middleware("http")
-async def _inject_overlay(request: Request, call_next):
-    """Injektuje spinner overlay HTML pred </body> do každej text/html response (okrem chunked streamingu)."""
-    # Stream endpointy nech idú priamo — buffering by zničil progresívne zobrazenie
-    if request.url.path == "/plan_batch" and request.method == "POST":
-        return await call_next(request)
-    response = await call_next(request)
-    ctype = response.headers.get("content-type", "")
-    if "text/html" not in ctype:
-        return response
-    # FastAPI HTMLResponse má body_iterator; načítame ho do pamäte (pre tieto HTML stránky je to OK)
-    try:
-        body = b""
-        async for chunk in response.body_iterator:
-            body += chunk
-    except Exception:
-        return response
-    needle = b"</body>"
-    if needle in body:
-        new_body = body.replace(needle, _OVERLAY_HTML.encode("utf-8") + needle, 1)
-    else:
-        new_body = body + _OVERLAY_HTML.encode("utf-8")
-    headers = dict(response.headers)
-    headers.pop("content-length", None)                       # prepočíta sa
-    return Response(content=new_body, status_code=response.status_code,
-                    headers=headers, media_type=ctype)
+# Bug R5: _inject_overlay middleware ZRUŠENÝ. Spinner sa už nezobrazuje.
+# Pôvodný middleware injektoval _OVERLAY_HTML pred </body> každej HTML response.
+# Užívateľ pripomenul že popup vyrušuje — pre dlhé operácie sú stačí streaming
+# responses (/plan_batch) a inline progress bars (Excel export).
+# Ak by sa middleware mal vrátit, pridať @app.middleware("http") nad funkciu.
 
                                           # (DEF, cache dicty, _model, _ote_cache_csv,
                                           #  _fetch_ote_cached, _isot_history, _fetch_pv_cached
