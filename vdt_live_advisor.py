@@ -108,8 +108,8 @@ def _soc_from_livesim_trace() -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_current_soc_pct(batt_kwh: float = 800.0,
-                          fallback_soc_pct: float = 50.0,
+def get_current_soc_pct(batt_kwh: Optional[float] = None,
+                          fallback_soc_pct: Optional[float] = None,
                           max_age_minutes: int = 1440,
                           profile: Optional[str] = None) -> Dict[str, Any]:
     """Načíta aktuálny SOC podľa profile.mode:
@@ -127,6 +127,20 @@ def get_current_soc_pct(batt_kwh: float = 800.0,
         {"ok": bool, "soc_pct": float, "source": str, "ts": str,
          "age_minutes": float, "error": str}
     """
+    # Bug P: žiadne hard-coded defaults — resolve z profile.plan ak chýba arg
+    if batt_kwh is None or fallback_soc_pct is None:
+        try:
+            import profiles as _pr
+            _p = _pr.load_profile(profile) if profile else {}
+            _pl = (_p or {}).get("plan") or {}
+            if batt_kwh is None:
+                batt_kwh = float(_pl.get("batt_kwh") or 800.0)
+            if fallback_soc_pct is None:
+                fallback_soc_pct = float(_pl.get("fallback_soc_pct") or 50.0)
+        except Exception:
+            if batt_kwh is None: batt_kwh = 800.0
+            if fallback_soc_pct is None: fallback_soc_pct = 50.0
+
     mode = _get_active_profile_mode(profile=profile)
 
     # SIMULATION profile — čítaj zo simulácie, NIE z realio_db
@@ -170,9 +184,12 @@ def get_current_soc_pct(batt_kwh: float = 800.0,
                 "ts": "", "age_minutes": -1,
                 "error": f"realio chyba: {e}"}
 
-    # Real profile bez realio dát → fallback
+    # Real profile bez realio dát → skús D-1 plán pred konečným fallback
+    d1 = _soc_from_d1_plan(profile=profile)
+    if d1 is not None:
+        return d1
     return {"ok": True, "soc_pct": float(fallback_soc_pct),
-            "source": f"fallback {fallback_soc_pct:.0f}% (žiadne čerstvé realio dáta, profile: {mode})",
+            "source": f"fallback {fallback_soc_pct:.0f}% (žiadne čerstvé realio dáta ani D-1 plán, profile: {mode})",
             "ts": "", "age_minutes": -1, "error": ""}
 
 
@@ -241,18 +258,18 @@ def _load_dam_commitments_for_snapshot(snapshot, today_date,
 
 
 def get_live_recommendation(*,
-                              batt_kw: float = 500.0,
-                              batt_kwh: float = 800.0,
-                              eff_c: float = 0.95,
-                              eff_d: float = 0.95,
-                              grid_fee: float = 22.0,
-                              cycle_cost: float = 2.0,
-                              min_spread: float = 5.0,
-                              soc_min_pct: float = 5.0,
-                              soc_max_pct: float = 95.0,
+                              batt_kw: Optional[float] = None,
+                              batt_kwh: Optional[float] = None,
+                              eff_c: Optional[float] = None,
+                              eff_d: Optional[float] = None,
+                              grid_fee: Optional[float] = None,
+                              cycle_cost: Optional[float] = None,
+                              min_spread: Optional[float] = None,
+                              soc_min_pct: Optional[float] = None,
+                              soc_max_pct: Optional[float] = None,
                               soc_start_pct: Optional[float] = None,
-                              soc_end_min_pct: Optional[float] = 20.0,
-                              max_cycles_per_day: Optional[float] = 3.0,
+                              soc_end_min_pct: Optional[float] = None,
+                              max_cycles_per_day: Optional[float] = None,
                               use_orderbook: bool = True,
                               use_dam_commitments: bool = True,
                               profile: Optional[str] = None,
@@ -294,12 +311,73 @@ def get_live_recommendation(*,
     except Exception:
         active_profile = profile or "default"
 
-    # 1. SOC — z DB podľa profilu alebo manuálny override
+    # 0a. PROFILE PARAMS — Bug P: žiadne hard-coded defaults. Všetky chýbajúce args
+    # sa naplnia z profile.plan (ktorý profiles.load_profile auto-doplnil VDT defaults
+    # cez _ensure_plan_vdt_defaults). Volajúci môže override-nuť ktorýkoľvek arg.
+    try:
+        import profiles as _pr
+        _prof_data = _pr.load_profile(active_profile) or {}
+        _pl = _prof_data.get("plan") or {}
+    except Exception:
+        _pl = {}
+    if batt_kw is None:
+        batt_kw = float(_pl.get("batt_kw") or 500.0)
+    if batt_kwh is None:
+        batt_kwh = float(_pl.get("batt_kwh") or 800.0)
+    if eff_c is None:
+        eff_c = float(_pl.get("eff_c") or 0.95)
+    if eff_d is None:
+        eff_d = float(_pl.get("eff_d") or 0.95)
+    if grid_fee is None:
+        grid_fee = float(_pl.get("grid_fee_vdt") or _pl.get("grid_fee") or 22.0)
+    if cycle_cost is None:
+        cycle_cost = float(_pl.get("cycle_cost_vdt") or _pl.get("cycle_cost") or 2.0)
+    if min_spread is None:
+        min_spread = float(_pl.get("min_spread_eur") or 5.0)
+    if soc_min_pct is None:
+        soc_min_pct = float(_pl.get("soc_min_pct") or 5.0)
+    if soc_max_pct is None:
+        # VDT advisor používa OPERAČNÝ strop (95%), nie fyzikálny (100%) zo plan.soc_max_pct
+        soc_max_pct = float(_pl.get("soc_max_pct_operational") or 95.0)
+    if soc_end_min_pct is None:
+        soc_end_min_pct = float(_pl.get("soc_end_min_pct") or 20.0)
+    if max_cycles_per_day is None:
+        max_cycles_per_day = float(_pl.get("max_cycles_per_day") or 3.0)
+
+    # 0b. SINGLE SOURCE OF TRUTH (Bug O fix) — vždy pred LP zavolaj vdt_state
+    # ktorý dá kompletný kontext: kumulatívny SOC od 00:00, DAM nominácia z D-1 plánu,
+    # všetky realizované VDT trades z paper_trades CSV. Ak chýba čokoľvek z toho,
+    # VDT NESMIE obchodovať — vrátime error result s warnings + missing_items.
+    state = None
+    try:
+        import vdt_state as _vs
+        state = _vs.compute_current_state(profile=active_profile,
+                                              batt_kwh=batt_kwh)
+        if not state.get("data_completeness"):
+            return {"ok": False,
+                    "error": ("VDT NEMÔŽE OBCHODOVAŤ — chýba kontext: "
+                              + ", ".join(state.get("missing_items", []))),
+                    "data_completeness": False,
+                    "missing_items": state.get("missing_items", []),
+                    "warnings": state.get("warnings", []),
+                    "state": state,
+                    "profile": active_profile}
+    except Exception as e:
+        return {"ok": False,
+                "error": f"vdt_state.compute_current_state zlyhal: {e}",
+                "data_completeness": False,
+                "missing_items": ["state_module_error"],
+                "warnings": [f"Modul vdt_state nedostupný alebo chyba: {e}"],
+                "profile": active_profile}
+
+    # 1. SOC — z state (kumulatívny výpočet) alebo manuálny override
     if soc_start_pct is None:
-        soc_info = get_current_soc_pct(batt_kwh=batt_kwh, fallback_soc_pct=50.0,
-                                         profile=active_profile)
-        soc_pct = float(soc_info.get("soc_pct", 50.0))
-        soc_source = soc_info
+        soc_pct = float(state["current_soc_pct"])
+        soc_source = {"ok": True, "soc_pct": soc_pct,
+                      "source": (f"vdt_state kumulatívny (start={state['start_soc_pct']:.1f}%, "
+                                    f"VDT trades={state['vdt_realized_count']}, slot={state['current_slot_idx']})"),
+                      "ts": state["now"], "age_minutes": 0.0, "error": "",
+                      "start_soc_source": state["start_soc_source"]}
     else:
         soc_pct = float(soc_start_pct)
         soc_source = {"ok": True, "soc_pct": soc_pct, "source": "manual",
@@ -577,6 +655,10 @@ def get_live_recommendation(*,
         "current": current,
         "preview": preview,
         "full_plan": full_plan,
+        # Bug O: single source of truth state diagnostika pre UI
+        "state": state if state is not None else {"data_completeness": False,
+                                                          "missing_items": ["state_not_computed"]},
+        "data_completeness": (state.get("data_completeness", False) if state else False),
         "summary": result["summary"],
         "profit_eur": result["profit_eur"],
         "n_slots": result["n_slots"],

@@ -42,6 +42,42 @@ def _root() -> str:
 
 DIR = _root()        # back-compat const
 
+
+# ── VDT advisor + state defaults (Bug P) ────────────────────────────────────
+# Tieto polia sú per-profile. Default hodnoty platia LEN pre nový/legacy profile
+# kde polia chýbajú. Pri load_profile() sa chýbajúce polia auto-doplnia (lazy migration).
+# Žiadny VDT modul nesmie mať tieto hodnoty hard-coded — vždy musia prísť z profile.plan.
+_PLAN_VDT_DEFAULTS: Dict[str, Any] = {
+    # VDT economics (€/MWh)
+    "grid_fee_vdt": 22.0,                   # distribučný poplatok pre VDT advisor (môže byť iný ako plan.grid_fee)
+    "cycle_cost_vdt": 2.0,                  # cena cyklu pre VDT advisor
+    "min_spread_eur": 5.0,                  # minimálna marža LP pre obchod
+    # VDT trading limits
+    "soc_end_min_pct": 20.0,                # terminálny SOC v 23:59
+    "max_cycles_per_day": 3.0,              # LP cap počet cyklov denne
+    "soc_max_pct_operational": 95.0,        # operačný strop pre LP (5% safety rezerva)
+    # Fallback (worst case keď livesim aj D-1 yesterday chýbajú)
+    "fallback_soc_pct": 50.0,               # default SOC ak žiadny zdroj nie je
+    # State integrácia (presný = profile.plan kópia, ale auto-fallback ak chýbajú)
+    "vdt_eff_c": None,                      # None = použiť plan.eff_c (single source)
+    "vdt_eff_d": None,                      # None = použiť plan.eff_d
+}
+
+
+def _ensure_plan_vdt_defaults(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """Doplní VDT-specific polia s defaults ak v `plan` chýbajú. Returns same dict (in-place).
+
+    Bug P: žiadna konstanta v kóde — VDT advisor musí čítať z profile.plan. Tento helper
+    zabezpečí že každý profil má kompletný plan dict pri loade.
+    """
+    if not isinstance(plan, dict):
+        return plan
+    for k, v in _PLAN_VDT_DEFAULTS.items():
+        if k not in plan:
+            plan[k] = v
+    return plan
+
+
 # ── Dual storage prepínač (Fáza 1.9 migrácie) ──────────────────────────────
 # USE_DB=1 v env → čítame z DB (zdroj pravdy), write je dual (DB + JSON).
 # USE_DB=0 (default) → pôvodný JSON-only režim. Toto umožňuje paralelný beh
@@ -236,7 +272,7 @@ def load_profile(name: str) -> Optional[Dict[str, Any]]:
                     return {
                         "name": p.name, "mode": p.mode, "note": p.note,
                         "created_at": p.created_at, "updated_at": p.updated_at,
-                        "plan": dict(p.plan or {}),
+                        "plan": _ensure_plan_vdt_defaults(dict(p.plan or {})),
                         "dentrh": dict(p.dentrh or {}),
                         "rt": dict(p.rt or {}),
                         "distribution": dict(p.distribution or {}),
@@ -251,7 +287,11 @@ def load_profile(name: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         with open(p) as f:
-            return json.load(f)
+            data = json.load(f)
+        # Bug P: auto-add VDT defaults do plan dict (lazy migration)
+        if isinstance(data, dict) and "plan" in data:
+            data["plan"] = _ensure_plan_vdt_defaults(data["plan"] or {})
+        return data
     except (OSError, json.JSONDecodeError):
         return None
 
