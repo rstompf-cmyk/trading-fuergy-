@@ -1,12 +1,16 @@
 {# Light wrapper pre legacy f-string stránky.
    Body je raw HTML (obvykle s vlastným <style>, <script>, Chart.js) — nech sa renderuje cez |safe.
-   Získa: base.html (nav, app.css, app_name v <title>, user chip, logout).
-   Hlavička `nav` block prichádza z components/nav.html. #}
+   Získa: base.html (app.css, app_name v <title>, user chip, logout).
+   POZOR: navbar block je VYPNUTÝ pre legacy stránky, lebo body_html obsahuje legacy _nav() z ui/html.py.
+   Ak by sme nechali Jinja2 nav include, renderovali by sa 2 navbary (Bug M fix). Plánuje sa
+   migrácia jednotlivých handlerov na Jinja2 vlastné templates — vtedy sa _nav() z body odstráni
+   a Jinja2 nav vráti. #}
 {% extends "base.html" %}
 {% block title %}{% if legacy_title %}{{ legacy_title }} — {% endif %}{{ app_name }}{% endblock %}
 {% block head_extra %}
   {% if legacy_head_extra %}{{ legacy_head_extra|safe }}{% endif %}
 {% endblock %}
+{% block nav %}{# Suppress base.html nav include — body_html prináša vlastný _nav() #}{% endblock %}
 {% block content %}
   {{ legacy_body|safe }}
 {% endblock %}
