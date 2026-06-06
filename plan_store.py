@@ -93,20 +93,26 @@ def _safe_profile_name(name: str) -> str:
 
 def resolve_profile(profile: Optional[str] = None) -> str:
     """Resolve aktívneho profilu (na riadenie kde plán načítať/uložiť).
-    Priorita: explicit param → env var FTV_PROFILE → profiles.get_active() → 'default'."""
-    if profile:
-        return _safe_profile_name(profile)
-    env = os.environ.get("FTV_PROFILE")
-    if env:
-        return _safe_profile_name(env)
+
+    Bug Q (2026-06-06): preexpúšťa cez core.profile_resolver — single source of truth.
+    Žiadny env var FTV_PROFILE (Bug Q ho úplne zrušil). Iba explicit param + per-port
+    profiles.get_active().
+    """
     try:
-        import profiles as _pr
-        a = _pr.get_active()
-        if a:
-            return _safe_profile_name(a)
+        from core.profile_resolver import get_active as _resolve_get
+        return _safe_profile_name(_resolve_get(profile))
     except Exception:
-        pass
-    return DEFAULT_PROFILE
+        # Hard fail-safe: priamy fallback na profiles.get_active
+        if profile:
+            return _safe_profile_name(profile)
+        try:
+            import profiles as _pr
+            a = _pr.get_active()
+            if a:
+                return _safe_profile_name(a)
+        except Exception:
+            pass
+        return DEFAULT_PROFILE
 
 
 def _dir_for(profile: Optional[str] = None) -> str:

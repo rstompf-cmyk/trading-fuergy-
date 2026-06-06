@@ -11449,12 +11449,14 @@ def realio_backfill(days: int = Form(7), count_per_tag: int = Form(10000)):
 
 
 def _resolve_realio_profile() -> str:
-    """Realio pinned profil — per-port persistovaný cez _ui_save('realio_profile').
-    Fallback chain: pinned → globálny active. Vracia názov profilu (alebo prázdny string)."""
+    """Bug Q (2026-06-06): Realio-pinned mechanizmus ZRUŠENÝ. Teraz vracia
+    iba globálny active profile cez unified resolver. Ak chceš real chod na
+    Trakany_real, aktivuj ho cez /profiles. Plus _ui_settings.realio_profile
+    sa ignoruje (a vyčistí pri ďalšom set_active).
+    """
     try:
-        pinned = _ui_load("realio_profile", {}).get("name", "")
-        if pinned:
-            return pinned
+        from core.profile_resolver import get_active as _ga
+        return _ga() or ""
     except Exception:
         pass
     try:
