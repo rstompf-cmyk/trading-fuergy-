@@ -311,6 +311,30 @@ def compute_setpoint_for_now(profile: Optional[str] = None,
     h, m = divmod(slot_idx * 15, 60)
     slot_label = f"{h:02d}:{m:02d}"
 
+    # Bug O4: SAFETY CHECK — VDT state musí byť kompletný pred akýmkoľvek setpointom.
+    # vdt_state.compute_current_state() vráti data_completeness=False ak chýba D-1 plán
+    # alebo iné kľúčové dáta. V tom prípade neexekvovať ani logovať setpoint.
+    try:
+        import vdt_state as _vs
+        _state = _vs.compute_current_state(profile=prof)
+        if not _state.get("data_completeness"):
+            print(f"[auto_control] {prof}: vdt_state insufficient — "
+                  f"missing={_state.get('missing_items', [])}, skipping setpoint")
+            return {
+                "ts": now.isoformat(timespec="seconds"),
+                "market": mk, "profile": prof, "profile_mode": _get_profile_mode(prof),
+                "slot_idx": slot_idx, "slot_label": slot_label,
+                "setpoint_kw": None,
+                "soc_pct": float(_state.get("current_soc_pct", 0.0)),
+                "soc_source": "vdt_state (insufficient)",
+                "reason": f"vdt_state_insufficient: {','.join(_state.get('missing_items', []))}",
+                "executed": False,
+                "data_completeness": False,
+                "missing_items": _state.get("missing_items", []),
+            }
+    except Exception as _se:
+        print(f"[auto_control] {prof}: vdt_state check zlyhal: {_se} — pokračujem cautiously")
+
     plan = _load_plan_for_today(prof)
     prof_mode = _get_profile_mode(prof)
     soc_source = "realio_db" if prof_mode == "real" else (
@@ -719,6 +743,18 @@ def log_vdt_extras_for_current_slot(profile: str) -> int:
     Vracia počet zaolgovaných záznamov.
     """
     n = 0
+    # Bug O4: SAFETY CHECK pred logovaním VDT extras trades — ak vdt_state hovorí
+    # že chýbajú dáta, VDT advisor cache je nedôveryhodná → preskočiť.
+    try:
+        import vdt_state as _vs
+        _state = _vs.compute_current_state(profile=profile)
+        if not _state.get("data_completeness"):
+            print(f"[auto_control.vdt_extras] {profile}: vdt_state insufficient — "
+                  f"missing={_state.get('missing_items', [])}, skipping VDT extras")
+            return 0
+    except Exception as _se:
+        print(f"[auto_control.vdt_extras] {profile}: vdt_state check zlyhal: {_se}")
+        # Pokračuj cautiously — necháme fallback handle aby cache scenár nebol blocked úplne
     try:
         import vdt_live_advisor as _adv
         cache = _adv.load_cache(profile=profile) or {}
