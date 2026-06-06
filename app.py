@@ -2035,6 +2035,163 @@ def home():
     return form_page()
 
 
+@app.get("/manager", response_class=HTMLResponse)
+def manager_dashboard():
+    """Bug T1: Manager dashboard — cross-profile fleet view.
+
+    Tabuľka všetkých profilov s key metrikami:
+      - Mode (sim/real)
+      - BG status (ON/OFF)
+      - SOC teraz (z VDT cache)
+      - VDT zisk dnes
+      - Plán status (D-1 existuje pre dnes?)
+      - Last advisor ts
+
+    Klik na riadok → /dashboard?profile=X.
+    Auto-refresh 60s.
+    """
+    import html as _html
+    import datetime as _dt
+    try:
+        import profiles as _pr
+        all_profs = _pr.list_profiles() or []
+    except Exception:
+        all_profs = []
+    try:
+        import auto_control as _ac
+        bg_enabled = _ac.get_enabled_profiles()
+    except Exception:
+        bg_enabled = set()
+    try:
+        import vdt_live_advisor as _adv
+    except Exception:
+        _adv = None
+    try:
+        import plan_store as _ps
+    except Exception:
+        _ps = None
+    today_iso = _dt.date.today().isoformat()
+
+    rows = []
+    bg_count = 0
+    total_vdt_eur = 0.0
+    for name in sorted(all_profs):
+        try:
+            p_data = _pr.load_profile(name) or {}
+        except Exception:
+            p_data = {}
+        mode = (p_data.get("mode") or "simulation").lower()
+        plan = p_data.get("plan") or {}
+        bg_on = (name in bg_enabled)
+        if bg_on:
+            bg_count += 1
+        # VDT cache pre rýchly SOC + zisk (bez volania compute_current_state, ktorá je drahá)
+        soc_now = None
+        vdt_eur = 0.0
+        adv_ts = ""
+        if _adv:
+            try:
+                cache = _adv.load_cache(profile=name) or {}
+                state = (cache.get("state") or {})
+                soc_now = state.get("current_soc_pct")
+                vdt_eur = float(state.get("vdt_realized_eur", 0.0) or 0.0)
+                adv_ts = str(cache.get("ts", ""))[:16]
+            except Exception:
+                pass
+        total_vdt_eur += vdt_eur
+        # Plán pre dnes existuje?
+        has_plan_today = False
+        if _ps:
+            try:
+                for step, kind in ((60, "plan"), (15, "dentrh")):
+                    if _ps.has_plan(today_iso, step, kind, profile=name):
+                        has_plan_today = True
+                        break
+            except Exception:
+                pass
+
+        # Render row
+        mode_chip = (f'<span style="background:#C62828;color:#fff;padding:2px 8px;'
+                     f'border-radius:5px;font-size:11px;font-weight:600">🔴 real</span>'
+                     if mode == "real" else
+                     f'<span style="background:#2E7D32;color:#fff;padding:2px 8px;'
+                     f'border-radius:5px;font-size:11px;font-weight:600">🟢 sim</span>')
+        bg_chip = (f'<span style="color:#1F88E5;font-weight:600">🔵 ON</span>'
+                   if bg_on else
+                   f'<span style="color:#999">⚪ OFF</span>')
+        soc_html = (f'<span style="color:{"#2E7D32" if 20<=soc_now<=80 else "#C62828" if soc_now<=5 or soc_now>=95 else "#F57F17"};'
+                     f'font-weight:700">{soc_now:.1f}%</span>'
+                     if soc_now is not None else
+                     '<span style="color:#999">—</span>')
+        eur_html = (f'<span style="color:{"#2E7D32" if vdt_eur>=0 else "#C62828"};'
+                     f'font-weight:700">{vdt_eur:+.2f} €</span>')
+        plan_html = ('<span style="color:#2E7D32">✓</span>' if has_plan_today else
+                     '<span style="color:#C62828">✗</span>')
+        ts_html = (f'<span style="color:#666;font-size:11px;font-family:monospace">{_html.escape(adv_ts)}</span>'
+                   if adv_ts else '<span style="color:#999">—</span>')
+        rows.append(
+            f'<tr style="cursor:pointer" onclick="location.href=\'/dashboard?profile={name}\'" '
+            f'onmouseover="this.style.background=\'#f0f7ff\'" '
+            f'onmouseout="this.style.background=\'\'">'
+            f'<td style="padding:8px 12px;font-weight:600">{_html.escape(name)}</td>'
+            f'<td style="padding:8px 12px">{mode_chip}</td>'
+            f'<td style="padding:8px 12px">{bg_chip}</td>'
+            f'<td style="padding:8px 12px;text-align:right">{soc_html}</td>'
+            f'<td style="padding:8px 12px;text-align:right">{eur_html}</td>'
+            f'<td style="padding:8px 12px;text-align:center">{plan_html}</td>'
+            f'<td style="padding:8px 12px">{ts_html}</td>'
+            f'</tr>'
+        )
+
+    n_total = len(all_profs)
+    body = (
+        f'<div style="max-width:1200px;margin:18px auto;padding:0 16px">'
+        f'<h1 style="margin:0 0 6px;color:#1F4E78">🛰 Manager dashboard</h1>'
+        f'<p style="color:#666;margin:0 0 16px;font-size:13px">'
+        f'Fleet view cez všetky profile. Klikni na riadok pre detail dashboard profilu.</p>'
+
+        # Summary KPI
+        f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:0 0 18px">'
+        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid #1F4E78">'
+        f'<div style="font-size:11px;color:#888;text-transform:uppercase">Profilov spolu</div>'
+        f'<div style="font-size:28px;font-weight:700;color:#1F4E78;margin:4px 0">{n_total}</div>'
+        f'</div>'
+        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid #1F88E5">'
+        f'<div style="font-size:11px;color:#888;text-transform:uppercase">Bg ON (aktívne)</div>'
+        f'<div style="font-size:28px;font-weight:700;color:#1F88E5;margin:4px 0">{bg_count}</div>'
+        f'<div style="font-size:11px;color:#999">{n_total - bg_count} OFF (klik na chip ich zapne)</div>'
+        f'</div>'
+        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid {"#2E7D32" if total_vdt_eur >= 0 else "#C62828"}">'
+        f'<div style="font-size:11px;color:#888;text-transform:uppercase">VDT zisk dnes (suma)</div>'
+        f'<div style="font-size:28px;font-weight:700;color:{"#2E7D32" if total_vdt_eur >= 0 else "#C62828"};margin:4px 0">{total_vdt_eur:+.0f} €</div>'
+        f'<div style="font-size:11px;color:#999">cez všetky profily</div>'
+        f'</div>'
+        f'</div>'
+
+        # Tabuľka
+        f'<table style="width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;'
+        f'box-shadow:0 1px 3px rgba(0,0,0,.06)">'
+        f'<thead><tr style="background:#1F4E78;color:#fff">'
+        f'<th style="padding:10px 12px;text-align:left;font-size:13px">Profil</th>'
+        f'<th style="padding:10px 12px;text-align:left;font-size:13px">Mode</th>'
+        f'<th style="padding:10px 12px;text-align:left;font-size:13px">BG</th>'
+        f'<th style="padding:10px 12px;text-align:right;font-size:13px">SOC teraz</th>'
+        f'<th style="padding:10px 12px;text-align:right;font-size:13px">VDT zisk dnes</th>'
+        f'<th style="padding:10px 12px;text-align:center;font-size:13px" title="D-1 plán pre dnes existuje">Plán</th>'
+        f'<th style="padding:10px 12px;text-align:left;font-size:13px">Last advisor</th>'
+        f'</tr></thead>'
+        f'<tbody>{"".join(rows) if rows else "<tr><td colspan=7 style=padding:20px;text-align:center;color:#888>Žiadne profile — vytvor cez /profiles/edit</td></tr>"}</tbody>'
+        f'</table>'
+
+        f'<p style="color:#888;font-size:12px;margin-top:18px;font-style:italic">'
+        f'Auto-refresh 60 s. SOC/zisk z posledného VDT advisor cache. Plán ✓ ak D-1 (60-min) alebo dentrh (15-min) pre dnes existuje v plan_store.'
+        f'</p>'
+        f'</div>'
+        f'<script>setTimeout(()=>location.reload(),60000);</script>'
+    )
+    return render_legacy_body(None, "Manager dashboard", body)
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(profile: str = ""):
     """Bug R2: Per-profile landing page.

@@ -196,6 +196,7 @@ def _nav(active: str = "") -> str:
     """
     # Pásmo 1: GLOBÁLNE pages (mimo profilu)
     global_items = [
+        ("/manager", "🛰 Manager"),
         ("/rt", "🔴 RT poradca"),
         ("/profiles", "⚙ Profily"),
         ("/kalibracia", "📈 Kalibrácia"),
