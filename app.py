@@ -490,7 +490,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             allow_curtail=bool(fp.get("allow_curtail", DEF["allow_curtail"])),
             min_spread_eur=float(fp.get("min_spread", DEF["min_spread"])),
             min_trade_mwh=float(fp.get("min_trade", DEF["min_trade"])),
-            block_neg_import=bool(fp.get("block_neg_import", True)),
+            block_neg_import=bool(fp.get("block_neg_import", False)),
             block_planned_discharge=npd,
             batt_kw_override=mult24,
             load_kwh=load24,
@@ -573,7 +573,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                                   allow_grid_charge=bool(fp.get("allow_grid_charge", True)),
                                   allow_curtail=bool(fp.get("allow_curtail", True)),
                                   min_spread_eur=float(fp.get("min_spread", DEF["min_spread"])),
-                                  block_neg_import=bool(fp.get("block_neg_import", True)),
+                                  block_neg_import=bool(fp.get("block_neg_import", False)),
                                   block_planned_discharge=npd,
                                   batt_kw_override=mult_use,
                                   load_kwh=load96,
@@ -1890,7 +1890,7 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
 <span>Nabíjať zo siete</span><input name="allow_grid_charge" type="checkbox" checked></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
-<span>Nenakupovať pri zápornej cene</span><input name="block_neg_import" type="checkbox" checked></label>
+<span title="VYPNUTÉ (default) = LP voľne arbitrážuje pri DT &lt; 0 (zarobí na odbere zo siete). ZAPNUTÉ = LP nikdy neimportuje pri DT &lt; 0 (môže nechať zisk na stole — odporúča sa nechať vypnuté)">Blokovať nákup pri zápornej cene <span style="color:#888">(odporúča sa vypnuté)</span></span><input name="block_neg_import" type="checkbox" {"checked" if f.get("block_neg_import", False) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
 <span>Orezať/vypnúť FTV pri nevýhodnej cene</span><input name="allow_curtail" type="checkbox" {"checked" if f.get("allow_curtail", True) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1F4E78;background:#eef5e0;padding:4px 8px;border-radius:6px" title="D-1 plán bude IBA nabíjať batériu. Vybíjanie ostáva otvorené pre RT odchýlku — batéria sa vybije len keď ČEPS signál vyhodnotí výhodný okamih.">
@@ -2350,7 +2350,7 @@ Ak zvolíš <b>dnešný deň</b>, dole uvidíš aj odporúčanie pre aktuálny 1
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
 <span>Nabíjať zo siete</span><input name="allow_grid_charge" type="checkbox" checked></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
-<span>Nenakupovať pri zápornej cene</span><input name="block_neg_import" type="checkbox" checked></label>
+<span title="VYPNUTÉ (default) = LP voľne arbitrážuje pri DT &lt; 0 (zarobí na odbere zo siete). ZAPNUTÉ = LP nikdy neimportuje pri DT &lt; 0 (môže nechať zisk na stole — odporúča sa nechať vypnuté)">Blokovať nákup pri zápornej cene <span style="color:#888">(odporúča sa vypnuté)</span></span><input name="block_neg_import" type="checkbox" {"checked" if f.get("block_neg_import", False) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
 <span>Orezať/vypnúť FTV pri nevýhodnej cene</span><input name="allow_curtail" type="checkbox" checked></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1F4E78;background:#eef5e0;padding:4px 8px;border-radius:6px" title="D-1 plán bude IBA nabíjať batériu. Vybíjanie cez RT odchýlku.">
