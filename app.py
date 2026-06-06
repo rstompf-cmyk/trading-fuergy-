@@ -1028,12 +1028,32 @@ def profiles_apply(name: str = Form(...)):
                 target_case = "dt_15min" if n_dentrh >= n_plan else "plan_d1"
                 cur_ls = _ui_load("livesim", {"case": "plan_d1", "start": "", "to": "",
                                                  "rt_kdis": 1.5, "rt_kchg": 2.5, "use_rt": True})
+                # Reset livesim UI parametre pre nový profil — predchádzajúci profil mohol mať
+                # úplne iné start/use_rt nastavenia (napr. start=2026-01-01 čo by trvalo prepočítať).
+                # User po prepnutí vie, s akým nastavením livesim beží na pozadí.
+                ls_changes = []
+                # 1. case (auto-detect z dostupných plánov)
                 if cur_ls.get("case") != target_case:
                     cur_ls["case"] = target_case
+                    ls_changes.append(f"case → <b>{target_case}</b>")
+                # 2. start = dátum najstaršieho plánu pre nový profil (alebo today-7d ak žiadne)
+                try:
+                    dates_sorted = sorted({p.get("date") for p in plans_all if p.get("date")})
+                    new_start = dates_sorted[0] if dates_sorted else (dt.date.today() - dt.timedelta(days=7)).isoformat()
+                except Exception:
+                    new_start = (dt.date.today() - dt.timedelta(days=7)).isoformat()
+                if cur_ls.get("start") != new_start:
+                    cur_ls["start"] = new_start
+                    ls_changes.append(f"start → <b>{new_start}</b>")
+                # 3. use_rt = default True (per memo #130 sa pre 15-min stejne force-uje False v dt_15min)
+                if cur_ls.get("use_rt") is not True:
+                    cur_ls["use_rt"] = True
+                    ls_changes.append("use_rt → <b>True</b>")
+                if ls_changes:
                     _ui_save("livesim", cur_ls)
                     livesim_case_changed = (
-                        f" · livesim case → <b>{target_case}</b> "
-                        f"(profil má {n_dentrh}× dentrh, {n_plan}× plan)")
+                        f" · livesim: " + ", ".join(ls_changes) +
+                        f" (profil má {n_dentrh}× dentrh, {n_plan}× plan)")
     except Exception as _ae:
         print(f"[profiles_apply] auto-detect livesim case zlyhal: {_ae}")
 
