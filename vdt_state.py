@@ -424,6 +424,36 @@ def compute_current_state(profile: str,
             "soc_max_pct": soc_max}
 
 
+# ────────────────────────── Bug V: efektívny batt setpoint ──────────────────────────
+
+def get_realized_batt_kw(profile: str, today_iso: Optional[str] = None,
+                          dt_h: float = 0.25) -> List[float]:
+    """Vráti 96-slot list signed kW pre VDT realized trades.
+
+    Konvencia (rovnaká ako plan_batt_kw v plan_store):
+      • + kW = discharge (predaj zo batt)
+      • − kW = charge (nákup do batt)
+
+    Vstup: dt_h (default 0.25 = 15-min slot). Pre 60-min plán treba 1.0.
+
+    Použitie:
+      • auto_control._extract_batt_kw_for_slot pripočíta toto k D-1 batt_kw
+      • livesim.advance píše plan_batt_kw = D-1 + VDT pre konzistenciu chartu
+      • dashboard zobrazí efektívny batt setpoint (D-1 + VDT) namiesto čistého D-1
+
+    Žiadny LP recalc — čisté čítanie z vdt_paper_trades.csv (persistované,
+    nezáleží na otvorení dashboardu).
+    """
+    today_iso = today_iso or dt.date.today().isoformat()
+    try:
+        vdt = _load_vdt_realized(profile, today_iso)
+        kwh_arr = vdt.get("kwh_batt_view") or [0.0] * 96
+    except Exception:
+        return [0.0] * 96
+    dt_h = max(0.001, float(dt_h))
+    return [float(k) / dt_h for k in kwh_arr]
+
+
 # ────────────────────────── CLI smoke test ──────────────────────────
 
 if __name__ == "__main__":

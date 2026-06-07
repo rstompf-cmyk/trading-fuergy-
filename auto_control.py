@@ -196,7 +196,8 @@ def _load_plan_for_today(profile: str) -> Optional[Dict[str, Any]]:
     return plan
 
 
-def _extract_batt_kw_for_slot(plan: Dict[str, Any], slot_idx: int) -> Optional[float]:
+def _extract_batt_kw_for_slot(plan: Dict[str, Any], slot_idx: int,
+                                profile: Optional[str] = None) -> Optional[float]:
     """Zo schedule plánu vyrátá net batt setpoint v kW pre 15-min slot.
 
     Konvencia: kladné = vybíjanie (export), záporné = nabíjanie (import).
@@ -206,33 +207,54 @@ def _extract_batt_kw_for_slot(plan: Dict[str, Any], slot_idx: int) -> Optional[f
       schedule["_discharge_kw"] − schedule["_charge_kw"] (fallback ekvivalent)
 
     Pre 60-min plán slot_idx//4 mapuje 15-min slot na hodinu.
+
+    Bug V (2026-06-07): ak `profile` je dané, pripočíta VDT realized z paper_trades.csv
+    pre 15-min slot_idx. Efektívny setpoint = D-1 + Σ VDT. Žiadny LP recalc — len
+    čítanie persistovaných paper trades. Konvencia VDT je rovnaká (+ discharge, − charge).
     """
     sched = plan.get("schedule")
     if not isinstance(sched, dict):
-        return None
-    step_min = int(plan.get("step_min", 15))
-    idx = (slot_idx // 4) if step_min == 60 else slot_idx
+        # Ani plán neexistuje — pozri či máme aspoň VDT trade
+        dam_v = None
+    else:
+        step_min = int(plan.get("step_min", 15))
+        idx = (slot_idx // 4) if step_min == 60 else slot_idx
 
-    def _arr_at(key):
-        arr = sched.get(key)
-        if arr is None or idx < 0 or idx >= len(arr):
-            return None
+        def _arr_at(key):
+            arr = sched.get(key)
+            if arr is None or idx < 0 or idx >= len(arr):
+                return None
+            try:
+                v = arr[idx]
+                return float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        # Priorita: batt_kw priamo
+        dam_v = _arr_at("batt_kw")
+        if dam_v is None:
+            # Fallback: _discharge_kw − _charge_kw
+            di = _arr_at("_discharge_kw") or 0.0
+            ch = _arr_at("_charge_kw") or 0.0
+            if di or ch:
+                dam_v = di - ch
+
+    # Bug V: pripočítaj VDT realized pre slot_idx (VDT je vždy 15-min)
+    vdt_kw = 0.0
+    if profile:
         try:
-            v = arr[idx]
-            return float(v) if v is not None else None
-        except (TypeError, ValueError):
-            return None
+            import vdt_state as _vs
+            vdt_arr = _vs.get_realized_batt_kw(profile, dt_h=0.25)
+            if isinstance(vdt_arr, list) and 0 <= slot_idx < len(vdt_arr):
+                vdt_kw = float(vdt_arr[slot_idx] or 0.0)
+        except Exception:
+            pass
 
-    # Priorita: batt_kw priamo
-    v = _arr_at("batt_kw")
-    if v is not None:
-        return v
-    # Fallback: _discharge_kw − _charge_kw
-    di = _arr_at("_discharge_kw") or 0.0
-    ch = _arr_at("_charge_kw") or 0.0
-    if di or ch:
-        return di - ch
-    return None
+    # Ak D-1 plán nedal nič a VDT nedal nič → None (no setpoint)
+    if dam_v is None and abs(vdt_kw) < 1e-9:
+        return None
+
+    return float(dam_v or 0.0) + vdt_kw
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +374,8 @@ def compute_setpoint_for_now(profile: Optional[str] = None,
             "executed": False,
         }
 
-    setpoint_kw = _extract_batt_kw_for_slot(plan, slot_idx)
+    # Bug V: pass profile aby setpoint zahŕňal aj VDT realized trades (D-1 + VDT)
+    setpoint_kw = _extract_batt_kw_for_slot(plan, slot_idx, profile=prof)
     soc_pct = _get_current_soc_pct(profile=prof, plan=plan, slot_idx=slot_idx)
     # Vyber DAM clearing cenu pre aktuálny slot zo schedule.price_eur
     dam_clearing_price = None

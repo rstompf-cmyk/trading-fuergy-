@@ -809,7 +809,28 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 tr["pidx"] = [min(len(dtprof)-1, max(0, _period_index(t, day, step))) for t in tr["ts15"]]
                 cnt = tr.groupby("pidx")["time"].transform("count")
                 tr["dt_rev_min"] = pd.Series([float(dtprof[i]) for i in tr["pidx"]], index=tr.index) / cnt
-                tr["plan_batt_kw"] = [float(sch["batt_kw"].values[i]) for i in tr["pidx"]]
+                # Bug V (2026-06-07): plan_batt_kw = D-1 schedule + VDT realized (paper trades dňa)
+                # — žiadny LP recalc, čisto agregát persistovaných zdrojov.
+                # Plus dva diagnostické stĺpce pre transparenciu v UI grafe.
+                dam_per_min = [float(sch["batt_kw"].values[i]) for i in tr["pidx"]]
+                vdt_per_min = [0.0] * len(dam_per_min)
+                try:
+                    import vdt_state as _vs
+                    from core.profile_resolver import get_active as _ga
+                    _profile = _ga()
+                    if _profile:
+                        # VDT je VŽDY 15-min granularita → pidx15 nezávislé od `step`.
+                        pidx15 = [min(95, max(0, _period_index(t, day, 15))) for t in tr["ts15"]]
+                        vdt_arr_kw = _vs.get_realized_batt_kw(_profile,
+                                                              today_iso=day.isoformat(),
+                                                              dt_h=0.25)
+                        if isinstance(vdt_arr_kw, list) and len(vdt_arr_kw) >= 96:
+                            vdt_per_min = [float(vdt_arr_kw[j] or 0.0) for j in pidx15]
+                except Exception:
+                    pass
+                tr["plan_batt_dam_kw"] = dam_per_min
+                tr["plan_batt_vdt_kw"] = vdt_per_min
+                tr["plan_batt_kw"] = [d + v for d, v in zip(dam_per_min, vdt_per_min)]
                 tr["plan_grid_kwh"] = [float(sch["grid_kwh"].values[i]) for i in tr["pidx"]]
                 tr["plan_curtail_kwh"] = [float(sch["curtail_kwh"].values[i]) for i in tr["pidx"]]
                 tr["dt_eur"] = [float(price[i]) for i in tr["pidx"]]
@@ -971,9 +992,29 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                 socs.append(soc_proj/bkwh*100.0); socs_kwh.append(soc_proj)
                             last_cum_dt = float(tr["cum_dt"].iloc[-1]) if not tr.empty else cum_dt_done
                             last_cum_rt = float(tr["cum_rt"].iloc[-1]) if not tr.empty else cum_rt_done
+                            # Bug V (2026-06-07): pripočítaj VDT realized aj k projekcii
+                            # (môže existovať VDT trade pre future slot ktorý už uzavrel).
+                            _fut_dam = [float(sch["batt_kw"].values[i]) for i in pj]
+                            _fut_vdt = [0.0] * len(_fut_dam)
+                            try:
+                                import vdt_state as _vs_fut
+                                from core.profile_resolver import get_active as _ga_fut
+                                _prof_fut = _ga_fut()
+                                if _prof_fut:
+                                    _vdt_kw_arr = _vs_fut.get_realized_batt_kw(_prof_fut,
+                                                                                today_iso=day.isoformat(),
+                                                                                dt_h=0.25)
+                                    if isinstance(_vdt_kw_arr, list) and len(_vdt_kw_arr) >= 96:
+                                        _pidx15_fut = [min(95, max(0, _period_index(t, day, 15)))
+                                                        for t in fut_idx]
+                                        _fut_vdt = [float(_vdt_kw_arr[j] or 0.0) for j in _pidx15_fut]
+                            except Exception:
+                                pass
                             fut = pd.DataFrame({
                                 "time": fut_idx, "ts15": fut_idx.floor("15min"),
-                                "plan_batt_kw": [float(sch["batt_kw"].values[i]) for i in pj],
+                                "plan_batt_dam_kw": _fut_dam,
+                                "plan_batt_vdt_kw": _fut_vdt,
+                                "plan_batt_kw": [d2 + v2 for d2, v2 in zip(_fut_dam, _fut_vdt)],
                                 "plan_grid_kwh": [float(sch["grid_kwh"].values[i]) for i in pj],
                                 "plan_curtail_kwh": [float(sch["curtail_kwh"].values[i]) for i in pj],
                                 "dt_eur": [float(price[i]) for i in pj],
