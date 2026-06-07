@@ -831,7 +831,31 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 tr["plan_batt_dam_kw"] = dam_per_min
                 tr["plan_batt_vdt_kw"] = vdt_per_min
                 tr["plan_batt_kw"] = [d + v for d, v in zip(dam_per_min, vdt_per_min)]
-                tr["plan_grid_kwh"] = [float(sch["grid_kwh"].values[i]) for i in tr["pidx"]]
+                # Bug V (2026-06-07): VDT trade ide cez sieť (predaj batt→grid = export +;
+                # nákup grid→batt = import −). Plus VDT kWh má rovnakú konvenciu ako plan_grid_kwh
+                # (+ export, − import). Pripočítame VDT kWh per 15-min slot ku každej minúte slotu.
+                vdt_kwh_per_min = [0.0] * len(dam_per_min)
+                try:
+                    import vdt_state as _vs2
+                    _ga2 = None
+                    try:
+                        from core.profile_resolver import get_active as _ga2
+                    except Exception:
+                        pass
+                    if _ga2 is not None:
+                        _prof2 = _ga2()
+                        if _prof2:
+                            _vdt_st = _vs2._load_vdt_realized(_prof2, day.isoformat())
+                            _vdt_kwh_arr = (_vdt_st or {}).get("kwh_batt_view") or [0.0] * 96
+                            pidx15_grid = [min(95, max(0, _period_index(t, day, 15)))
+                                            for t in tr["ts15"]]
+                            vdt_kwh_per_min = [float(_vdt_kwh_arr[j] or 0.0) for j in pidx15_grid]
+                except Exception:
+                    pass
+                _dam_grid = [float(sch["grid_kwh"].values[i]) for i in tr["pidx"]]
+                tr["plan_grid_dam_kwh"] = _dam_grid
+                tr["plan_grid_vdt_kwh"] = vdt_kwh_per_min
+                tr["plan_grid_kwh"] = [g + v for g, v in zip(_dam_grid, vdt_kwh_per_min)]
                 tr["plan_curtail_kwh"] = [float(sch["curtail_kwh"].values[i]) for i in tr["pidx"]]
                 tr["dt_eur"] = [float(price[i]) for i in tr["pidx"]]
                 tr["ftv_kw"] = [float(pvper[i]) for i in tr["pidx"]]
@@ -1010,12 +1034,27 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                         _fut_vdt = [float(_vdt_kw_arr[j] or 0.0) for j in _pidx15_fut]
                             except Exception:
                                 pass
+                            # Bug X: pripočítaj VDT realized aj k plan_grid_kwh (rovnaký pidx15)
+                            _fut_grid_dam = [float(sch["grid_kwh"].values[i]) for i in pj]
+                            _fut_grid_vdt = [0.0] * len(_fut_grid_dam)
+                            try:
+                                _prof_g = _ga_fut() if _ga_fut else None
+                                if _prof_g:
+                                    _vdt_st_fut = _vs_fut._load_vdt_realized(_prof_g, day.isoformat())
+                                    _vdt_kwh_fut = (_vdt_st_fut or {}).get("kwh_batt_view") or [0.0] * 96
+                                    _pidx15_grid = [min(95, max(0, _period_index(t, day, 15)))
+                                                    for t in fut_idx]
+                                    _fut_grid_vdt = [float(_vdt_kwh_fut[j] or 0.0) for j in _pidx15_grid]
+                            except Exception:
+                                pass
                             fut = pd.DataFrame({
                                 "time": fut_idx, "ts15": fut_idx.floor("15min"),
                                 "plan_batt_dam_kw": _fut_dam,
                                 "plan_batt_vdt_kw": _fut_vdt,
                                 "plan_batt_kw": [d2 + v2 for d2, v2 in zip(_fut_dam, _fut_vdt)],
-                                "plan_grid_kwh": [float(sch["grid_kwh"].values[i]) for i in pj],
+                                "plan_grid_dam_kwh": _fut_grid_dam,
+                                "plan_grid_vdt_kwh": _fut_grid_vdt,
+                                "plan_grid_kwh": [g + v for g, v in zip(_fut_grid_dam, _fut_grid_vdt)],
                                 "plan_curtail_kwh": [float(sch["curtail_kwh"].values[i]) for i in pj],
                                 "dt_eur": [float(price[i]) for i in pj],
                                 "ftv_kw": [float(pvper[i]) for i in pj],

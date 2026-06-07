@@ -4860,6 +4860,51 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
             dview = tdf
         else:
             dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=600) if view_day else dfull
+        # Bug X (2026-06-07): retro soft-fix — staré livesim CSV riadky pred Bug V deploy
+        # nemajú plan_batt_vdt_kw/plan_batt_dam_kw stĺpce a plan_batt_kw je čisté D-1
+        # (bez VDT). Dynamický agregát z vdt_paper_trades.csv (persistované, žiadny LP)
+        # opraví zobrazenie historických minút bez prepisovania CSV.
+        try:
+            if (dview is not None and not dview.empty
+                    and "plan_batt_vdt_kw" not in dview.columns and view_day):
+                import vdt_state as _vs_load
+                _prof_load = None
+                try:
+                    from core.profile_resolver import get_active as _ga_load
+                    _prof_load = _ga_load()
+                except Exception:
+                    pass
+                if _prof_load:
+                    _vdt_kw_arr = _vs_load.get_realized_batt_kw(
+                        _prof_load, today_iso=view_day, dt_h=0.25)
+                    _vdt_st_load = _vs_load._load_vdt_realized(_prof_load, view_day)
+                    _vdt_kwh_arr_load = (_vdt_st_load or {}).get("kwh_batt_view") or [0.0]*96
+                    if isinstance(_vdt_kw_arr, list) and len(_vdt_kw_arr) >= 96 and any(_vdt_kw_arr):
+                        def _slot15_from_ts(t):
+                            try:
+                                _ts = pd.Timestamp(t)
+                                return min(95, max(0, (_ts.hour * 60 + _ts.minute) // 15))
+                            except Exception:
+                                return 0
+                        _times = (dview["time"] if "time" in dview.columns
+                                  else dview.index)
+                        _pidx15_load = [_slot15_from_ts(t) for t in _times]
+                        _vdt_kw_per = [float(_vdt_kw_arr[j] or 0.0) for j in _pidx15_load]
+                        _vdt_kwh_per = [float(_vdt_kwh_arr_load[j] or 0.0) for j in _pidx15_load]
+                        dview = dview.copy()
+                        # batt: baseline = D-1 (čo CSV obsahoval), pripočítaj VDT
+                        dview["plan_batt_dam_kw"] = dview["plan_batt_kw"]
+                        dview["plan_batt_vdt_kw"] = _vdt_kw_per
+                        dview["plan_batt_kw"] = (dview["plan_batt_dam_kw"]
+                                                  + dview["plan_batt_vdt_kw"])
+                        # grid: baseline = D-1, pripočítaj VDT kWh
+                        if "plan_grid_kwh" in dview.columns:
+                            dview["plan_grid_dam_kwh"] = dview["plan_grid_kwh"]
+                            dview["plan_grid_vdt_kwh"] = _vdt_kwh_per
+                            dview["plan_grid_kwh"] = (dview["plan_grid_dam_kwh"]
+                                                       + dview["plan_grid_vdt_kwh"])
+        except Exception:
+            pass
         # Banner ak vybraný deň má saved plán ale livesim CSV pre neho nemá záznamy
         # (typicky: budúci deň, alebo minulý deň pre ktorý sa livesim neobehol).
         plan_only_warn = ""
