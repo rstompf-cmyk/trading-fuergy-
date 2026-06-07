@@ -6351,7 +6351,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                      f"<div style='display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap'>"
                      f"<form method='get' style='display:inline-flex;gap:6px;align-items:center'>"
                      f"<input type='hidden' name='start' value='{view_day or ''}'>"
-                     f"<input type='hidden' name='case' value='{case}'>"
+                     f"<input type='hidden' name='case' value='{r.get('case', 'plan_d1') if isinstance(r, dict) else 'plan_d1'}'>"
                      f"<label style='font-size:12px'>Posunúť späť:</label>"
                      f"<button type='submit' name='table_offset' value='{_t_off + _t_rows}' "
                      f"style='padding:4px 8px;font-size:12px'>← Predošlých {_t_rows}</button>"
