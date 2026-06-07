@@ -4629,9 +4629,77 @@ pip install reportlab matplotlib</code>
                          status_code=500, media_type="text/plain")
 
 
+@app.get("/livesim_table_csv")
+def livesim_table_csv(day: str = None):
+    """Bug GG: Export 15-min agregát tabuľky ako CSV pre celý deň.
+    Slot, batt_kw, DAM_kw, VDT_kw, work_kWh, SOC%, FTV_kw, DT_eur, VDT_eur"""
+    from fastapi.responses import StreamingResponse
+    import io
+    import csv
+    if not day:
+        day = dt.date.today().isoformat()
+    try:
+        df = lsim.load_series("default", port=_PORT, day=day, max_points=10**9)
+    except Exception as e:
+        return PlainTextResponse(f"ERROR load_series: {e}", status_code=500)
+    if df is None or df.empty:
+        return PlainTextResponse(f"Žiadne dáta pre {day}", status_code=404)
+    df = df.copy()
+    df["_slot"] = pd.to_datetime(df["time"]).dt.floor("15min")
+    agg = {"plan_batt_kw": "mean", "soc_pct": "last",
+           "ftv_kw": "mean", "dt_eur": "mean"}
+    if "plan_batt_dam_kw" in df.columns:
+        agg["plan_batt_dam_kw"] = "mean"
+    if "plan_batt_vdt_kw" in df.columns:
+        agg["plan_batt_vdt_kw"] = "mean"
+    if "dt_real_eur" in df.columns:
+        agg["dt_real_eur"] = "mean"
+    if "vdt_eur" in df.columns:
+        agg["vdt_eur"] = "mean"
+    g = df.groupby("_slot").agg(agg).reset_index()
+    g["work_kwh"] = g["plan_batt_kw"] * 0.25
+    # VDT cena z OKTE historian ak v dview prázdna
+    try:
+        if "vdt_eur" not in g.columns or g["vdt_eur"].abs().max() < 0.01:
+            import seps_sk as _ss_c
+            vm = _ss_c.load_okte_vdt_preliminary_for_day(day) or _ss_c.load_okte_vdt_for_day(day) or {}
+            if vm:
+                g["vdt_eur"] = g["_slot"].map(
+                    lambda t: float(vm.get(f"{pd.Timestamp(t).hour:02d}:{pd.Timestamp(t).minute:02d}", 0.0)))
+    except Exception:
+        pass
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["slot_start", "slot_end", "batt_kw_net", "batt_dam_kw", "batt_vdt_kw",
+                "work_kwh", "soc_pct", "ftv_kw", "dt_eur_mwh", "dt_real_eur_mwh", "vdt_eur_mwh"])
+    for _, r in g.iterrows():
+        ts = pd.Timestamp(r["_slot"])
+        ts_end = ts + pd.Timedelta(minutes=15)
+        w.writerow([
+            ts.strftime("%Y-%m-%d %H:%M"),
+            ts_end.strftime("%H:%M"),
+            f"{float(r.get('plan_batt_kw', 0)):+.1f}",
+            f"{float(r.get('plan_batt_dam_kw', 0)):+.1f}",
+            f"{float(r.get('plan_batt_vdt_kw', 0)):+.1f}",
+            f"{float(r.get('work_kwh', 0)):+.2f}",
+            f"{float(r.get('soc_pct', 0)):.1f}",
+            f"{float(r.get('ftv_kw', 0)):.1f}",
+            f"{float(r.get('dt_eur', 0)):+.1f}",
+            f"{float(r.get('dt_real_eur', 0)):+.1f}",
+            f"{float(r.get('vdt_eur', 0)):+.1f}",
+        ])
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="livesim_15min_{day}.csv"'}
+    )
+
+
 @app.get("/livesim", response_class=HTMLResponse)
 def livesim_get(case: str = None, start: str = None, view: str = None, curtail: str = None,
-                 use_rt: str = None, realio_overlay: str = None, profile: str = None):
+                 use_rt: str = None, realio_overlay: str = None, profile: str = None,
+                 table_offset: int = 0, table_rows: int = 20):
     """Živá simulácia. Voliteľné parametre:
       • realio_overlay=1 — nahradí sim FTV/load/SOC/batt reálnym meraním z realio CSV
         (pre minúty kde máme záznam). Plány zostávajú simulované. Slúži pre tab
@@ -6196,8 +6264,35 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 if kw > 1.0: return ("🔴 VYBÍJAŤ", "#C62828")
                 if kw < -1.0: return ("🟢 NABÍJAŤ", "#2E7D32")
                 return ("⊙ idle", "#999")
-            # Najnovších 20 slotov
-            _agg = _agg.tail(20)
+            # Bug GG: VDT cena z OKTE SK historian (predbežné + finálne) ak vdt_eur v dview je prázdne
+            try:
+                _all_vdt_nan = (("vdt_eur" not in _agg.columns)
+                                or _agg.get("vdt_eur", pd.Series([0])).isna().all()
+                                or (_agg.get("vdt_eur", pd.Series([0])).abs() < 0.01).all())
+                if _all_vdt_nan:
+                    import seps_sk as _ss_v
+                    _vdt_map = _ss_v.load_okte_vdt_preliminary_for_day(view_day) or {}
+                    if not _vdt_map:
+                        _vdt_map = _ss_v.load_okte_vdt_for_day(view_day) or {}
+                    if _vdt_map:
+                        def _vdt_from_slot(ts):
+                            try:
+                                _t = pd.Timestamp(ts)
+                                key = f"{_t.hour:02d}:{_t.minute:02d}"
+                                return float(_vdt_map.get(key, 0.0))
+                            except Exception:
+                                return 0.0
+                        _agg["vdt_eur"] = _agg["_slot_ts"].map(_vdt_from_slot)
+            except Exception:
+                pass
+            # Bug GG: query param ?table_offset=N + ?table_rows=M pre scroll do minulosti
+            _t_off = max(0, int(table_offset or 0))
+            _t_rows = max(5, min(96, int(table_rows or 20)))
+            # Najnovších N slotov posunutých o offset (offset=0 → najnovšie, offset=20 → predošlých 20)
+            _agg_all = _agg.copy()
+            if _t_off > 0 and len(_agg) > _t_off:
+                _agg = _agg.iloc[:-_t_off]
+            _agg = _agg.tail(_t_rows)
             trows = ""
             for _, x in _agg.iterrows():
                 _act, _col = _act_lbl(float(_nz(x.plan_batt_kw)))
@@ -6247,7 +6342,33 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                      f"<b>práca</b> = kWh ktoré batt dodala (+) alebo prijala (−) za slot. "
                      f"<b>SOC</b> = stav na konci slotu. "
                      f"<b>DT</b> = clearing cena (* = predikcia, ak realita nie je). "
-                     f"<b>VDT</b> = OKTE VDT cena.</p>")
+                     f"<b>VDT</b> = OKTE VDT cena.</p>"
+                     # Bug GG: navigácia + CSV export
+                     f"<div style='display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap'>"
+                     f"<form method='get' style='display:inline-flex;gap:6px;align-items:center'>"
+                     f"<input type='hidden' name='start' value='{view_day or ''}'>"
+                     f"<input type='hidden' name='case' value='{case}'>"
+                     f"<label style='font-size:12px'>Posunúť späť:</label>"
+                     f"<button type='submit' name='table_offset' value='{_t_off + _t_rows}' "
+                     f"style='padding:4px 8px;font-size:12px'>← Predošlých {_t_rows}</button>"
+                     + (f"<button type='submit' name='table_offset' value='{max(0, _t_off - _t_rows)}' "
+                        f"style='padding:4px 8px;font-size:12px'>Ďalších {_t_rows} →</button>"
+                        if _t_off > 0 else "")
+                     + (f"<button type='submit' name='table_offset' value='0' "
+                        f"style='padding:4px 8px;font-size:12px;background:#1F4E78;color:#fff;border:0;border-radius:4px'>Najnovšie</button>"
+                        if _t_off > 0 else "")
+                     + f"<label style='font-size:12px;margin-left:12px'>Počet slotov:</label>"
+                     f"<select name='table_rows' onchange='this.form.submit()' style='font-size:12px;padding:3px'>"
+                     + "".join(f"<option value='{n}' {'selected' if n == _t_rows else ''}>{n}</option>"
+                                for n in [10, 20, 40, 96])
+                     + f"</select>"
+                     f"</form>"
+                     f"<a href='/livesim_table_csv?day={view_day}' "
+                     f"style='padding:4px 10px;background:#2E7D32;color:#fff;text-decoration:none;border-radius:4px;font-size:12px' "
+                     f"download>📊 Export celý deň (CSV)</a>"
+                     f"<span style='color:#888;font-size:11px;margin-left:6px'>"
+                     f"Slot {_t_off + 1}–{_t_off + _t_rows} z {len(_agg_all)}</span>"
+                     f"</div>")
         except Exception as _e_t15:
             table = f"<p style='color:#C62828'>15-min tabuľka zlyhala: {_e_t15}</p>"
     else:
