@@ -6155,18 +6155,71 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                f"{_ftm_legend}"
                f"<b>🔴 FTV reálne meranie (červená)</b> = živé meranie z realio CSV (Bender). "
                f"Ak scenár nie je aktívny, sivá a žltá sa prekrývajú.</p>")
-        tail = dview.tail(12)[["time", "ftv_kw", "plan_batt_kw", "rt_dir", "rt_power_pct", "rt_reason",
-                               "soc_pct", "dt_eur", "dt_rev_min", "rt_rev_min", "cum_total"]]
-        trows = ""
-        for _, x in tail.iterrows():
-            sm = "VYBI" if _nz(x.rt_dir) > 0 else ("NABI" if _nz(x.rt_dir) < 0 else "—")
-            trows += (f"<tr><td>{str(x.time)[11:16]}</td><td>{_nz(x.ftv_kw):.0f}</td>"
-                      f"<td>{_nz(x.plan_batt_kw):+.0f}</td><td>{sm} {int(_nz(x.rt_power_pct))}%</td>"
-                      f"<td>{x.rt_reason}</td><td>{_nz(x.soc_pct):.0f}</td><td>{_nz(x.dt_eur):.0f}</td>"
-                      f"<td>{_nz(x.dt_rev_min):+.3f}</td><td>{_nz(x.rt_rev_min):+.3f}</td><td>{_nz(x.cum_total):.2f}</td></tr>")
-        table = (f"<h2>Posledné minúty (deň {view_day})</h2><div class='wrap'><table>"
-                 f"<tr><th>čas</th><th>FTV kW</th><th>Bat. plán kW</th><th>RT návrh</th><th>pravidlo</th><th>SOC %</th>"
-                 f"<th>DT €/MWh</th><th>DT €/min</th><th>RT €/min</th><th>spolu €</th></tr>{trows}</table></div>")
+        # Bug DD (2026-06-07): 15-min agregát tabuľka — user chce prehľad batt aktivity per slot
+        # (D-1 + VDT) + SOC + práca v kWh. Nahradzuje 1-min "posledné minúty" tabuľku.
+        try:
+            _tdf = dview.copy()
+            # Slot key: floor 15 min
+            _tdf["_slot_ts"] = pd.to_datetime(_tdf["time"]).dt.floor("15min")
+            agg_cols = {
+                "plan_batt_kw": "mean",       # priemerný batt kW v slot-e
+                "soc_pct": "last",            # SOC na konci slotu
+                "ftv_kw": "mean",
+                "dt_eur": "mean",
+            }
+            # Doplň VDT/DAM komponenty ak existujú (Bug V/X)
+            if "plan_batt_dam_kw" in _tdf.columns:
+                agg_cols["plan_batt_dam_kw"] = "mean"
+            if "plan_batt_vdt_kw" in _tdf.columns:
+                agg_cols["plan_batt_vdt_kw"] = "mean"
+            _agg = _tdf.groupby("_slot_ts").agg(agg_cols).reset_index()
+            # Práca = priemerný kW × 0.25 h
+            _agg["work_kwh"] = _agg["plan_batt_kw"] * 0.25
+            # Akcia label
+            def _act_lbl(kw):
+                if kw > 1.0: return ("🔴 VYBÍJAŤ", "#C62828")
+                if kw < -1.0: return ("🟢 NABÍJAŤ", "#2E7D32")
+                return ("⊙ idle", "#999")
+            # Najnovších 20 slotov
+            _agg = _agg.tail(20)
+            trows = ""
+            for _, x in _agg.iterrows():
+                _act, _col = _act_lbl(float(_nz(x.plan_batt_kw)))
+                _slot_start = str(x._slot_ts)[11:16]
+                _slot_end = (pd.Timestamp(x._slot_ts) + pd.Timedelta(minutes=15)).strftime("%H:%M")
+                _dam_cell = (f"<td style='text-align:right'>{_nz(x.get('plan_batt_dam_kw', 0)):+.0f}</td>"
+                              if "plan_batt_dam_kw" in _agg.columns
+                              else "<td style='color:#999'>—</td>")
+                _vdt_cell = (f"<td style='text-align:right;color:#E65100'>{_nz(x.get('plan_batt_vdt_kw', 0)):+.0f}</td>"
+                              if "plan_batt_vdt_kw" in _agg.columns
+                              else "<td style='color:#999'>—</td>")
+                trows += (f"<tr>"
+                           f"<td>{_slot_start}–{_slot_end}</td>"
+                           f"<td style='color:{_col};font-weight:600'>{_act}</td>"
+                           f"<td style='text-align:right;font-weight:700'>{_nz(x.plan_batt_kw):+.0f}</td>"
+                           f"{_dam_cell}{_vdt_cell}"
+                           f"<td style='text-align:right'>{_nz(x.work_kwh):+.1f}</td>"
+                           f"<td style='text-align:right;font-weight:600'>{_nz(x.soc_pct):.1f}%</td>"
+                           f"<td style='text-align:right'>{_nz(x.ftv_kw):.0f}</td>"
+                           f"<td style='text-align:right'>{_nz(x.dt_eur):.0f}</td>"
+                           f"</tr>")
+            table = (f"<h2>Posledných 20 slotov (15-min · deň {view_day})</h2>"
+                     f"<div class='wrap'>"
+                     f"<table style='font-size:13px'>"
+                     f"<tr style='background:#1F4E78;color:#fff'>"
+                     f"<th>slot</th><th>akcia</th><th title='D-1 + VDT'>batt kW</th>"
+                     f"<th title='D-1 plán'>z DAM</th>"
+                     f"<th title='VDT realized'>z VDT</th>"
+                     f"<th title='kWh za 15 min slot (+ vybíjanie, − nabíjanie)'>práca kWh</th>"
+                     f"<th>SOC %</th><th>FTV kW</th><th>DT €/MWh</th>"
+                     f"</tr>{trows}</table></div>"
+                     f"<p style='color:#666;font-size:11px;margin:4px 0'>"
+                     f"<b>batt kW</b> = priemerný setpoint za slot (D-1 + VDT). "
+                     f"<b>z DAM</b> = D-1 plán. <b>z VDT</b> = intraday paper trades (oranžová). "
+                     f"<b>práca</b> = kWh ktoré batt dodala (+) alebo prijala (−) za slot. "
+                     f"<b>SOC</b> = stav na konci slotu.</p>")
+        except Exception as _e_t15:
+            table = f"<p style='color:#C62828'>15-min tabuľka zlyhala: {_e_t15}</p>"
     else:
         chMW = chDT = chPlan = chFlow = chRiadenie = chF = table = "<p style='color:#888'>Pre zvolený deň nie sú dáta.</p>"
         chSEPSMW = ""                                                  # SK-only chart, no data → empty
