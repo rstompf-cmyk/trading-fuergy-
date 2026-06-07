@@ -4927,7 +4927,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 tdf = dec
             dview = tdf
         else:
-            dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=600) if view_day else dfull
+            dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=2000) if view_day else dfull
         # Bug X (2026-06-07): VŽDY re-aplikuj VDT agregát ako single source of truth.
         # CSV stĺpce plan_batt_vdt_kw/plan_batt_dam_kw môžu byť outdated alebo NaN pre
         # staré minúty pred Bug V deploy. Plus VDT trades sa môžu pridať / zmeniť po
@@ -6165,13 +6165,18 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 "plan_batt_kw": "mean",       # priemerný batt kW v slot-e
                 "soc_pct": "last",            # SOC na konci slotu
                 "ftv_kw": "mean",
-                "dt_eur": "mean",
+                "dt_eur": "mean",             # DT predikcia €/MWh
             }
             # Doplň VDT/DAM komponenty ak existujú (Bug V/X)
             if "plan_batt_dam_kw" in _tdf.columns:
                 agg_cols["plan_batt_dam_kw"] = "mean"
             if "plan_batt_vdt_kw" in _tdf.columns:
                 agg_cols["plan_batt_vdt_kw"] = "mean"
+            # Bug EE: pridať DT realita (clearing) + VDT cenu
+            if "dt_real_eur" in _tdf.columns:
+                agg_cols["dt_real_eur"] = "mean"
+            if "vdt_eur" in _tdf.columns:
+                agg_cols["vdt_eur"] = "mean"
             _agg = _tdf.groupby("_slot_ts").agg(agg_cols).reset_index()
             # Práca = priemerný kW × 0.25 h
             _agg["work_kwh"] = _agg["plan_batt_kw"] * 0.25
@@ -6193,6 +6198,16 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 _vdt_cell = (f"<td style='text-align:right;color:#E65100'>{_nz(x.get('plan_batt_vdt_kw', 0)):+.0f}</td>"
                               if "plan_batt_vdt_kw" in _agg.columns
                               else "<td style='color:#999'>—</td>")
+                # Bug EE: DT predikcia/realita + VDT €/MWh
+                _dt_pred = _nz(x.get('dt_eur', 0))
+                _dt_real = _nz(x.get('dt_real_eur', 0)) if 'dt_real_eur' in _agg.columns else None
+                _vdt_p = _nz(x.get('vdt_eur', 0)) if 'vdt_eur' in _agg.columns else None
+                _dt_cell = (f"<td style='text-align:right'>{_dt_real:+.0f}</td>"
+                            if _dt_real is not None and abs(_dt_real) > 0.01
+                            else f"<td style='text-align:right;color:#888'>{_dt_pred:+.0f}*</td>")
+                _vdt_eur_cell = (f"<td style='text-align:right;color:#E65100'>{_vdt_p:+.0f}</td>"
+                                  if _vdt_p is not None and abs(_vdt_p) > 0.01
+                                  else "<td style='color:#bbb;text-align:right'>—</td>")
                 trows += (f"<tr>"
                            f"<td>{_slot_start}–{_slot_end}</td>"
                            f"<td style='color:{_col};font-weight:600'>{_act}</td>"
@@ -6201,7 +6216,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                            f"<td style='text-align:right'>{_nz(x.work_kwh):+.1f}</td>"
                            f"<td style='text-align:right;font-weight:600'>{_nz(x.soc_pct):.1f}%</td>"
                            f"<td style='text-align:right'>{_nz(x.ftv_kw):.0f}</td>"
-                           f"<td style='text-align:right'>{_nz(x.dt_eur):.0f}</td>"
+                           f"{_dt_cell}{_vdt_eur_cell}"
                            f"</tr>")
             table = (f"<h2>Posledných 20 slotov (15-min · deň {view_day})</h2>"
                      f"<div class='wrap'>"
@@ -6211,13 +6226,17 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                      f"<th title='D-1 plán'>z DAM</th>"
                      f"<th title='VDT realized'>z VDT</th>"
                      f"<th title='kWh za 15 min slot (+ vybíjanie, − nabíjanie)'>práca kWh</th>"
-                     f"<th>SOC %</th><th>FTV kW</th><th>DT €/MWh</th>"
+                     f"<th>SOC %</th><th>FTV kW</th>"
+                     f"<th title='DT clearing €/MWh (realita ak je, inak predikcia*)'>DT €/MWh</th>"
+                     f"<th title='VDT cena €/MWh'>VDT €/MWh</th>"
                      f"</tr>{trows}</table></div>"
                      f"<p style='color:#666;font-size:11px;margin:4px 0'>"
                      f"<b>batt kW</b> = priemerný setpoint za slot (D-1 + VDT). "
                      f"<b>z DAM</b> = D-1 plán. <b>z VDT</b> = intraday paper trades (oranžová). "
                      f"<b>práca</b> = kWh ktoré batt dodala (+) alebo prijala (−) za slot. "
-                     f"<b>SOC</b> = stav na konci slotu.</p>")
+                     f"<b>SOC</b> = stav na konci slotu. "
+                     f"<b>DT</b> = clearing cena (* = predikcia, ak realita nie je). "
+                     f"<b>VDT</b> = OKTE VDT cena.</p>")
         except Exception as _e_t15:
             table = f"<p style='color:#C62828'>15-min tabuľka zlyhala: {_e_t15}</p>"
     else:
