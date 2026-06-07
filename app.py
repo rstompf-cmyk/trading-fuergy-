@@ -5718,19 +5718,20 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _batt_base = dview["batt_kw_realistic"]
         else:
             _batt_base = dview["plan_batt_kw"]
-        # Bug FF (2026-06-07): Batéria PREDIKCIA dataset = 15-min slot agregat (mean per slot).
-        # Predtym per-minute hodnoty s RT korekciou → chart vyzeral ako spike-y namiesto plateaux.
-        # Teraz: per minute hodnota = priemer 15-min slotu → jasne horizontalne stepped bars per slot.
+        # Bug II (2026-06-07): vratit per-minute granularitu (Bug FF agregat vymazal RT korekcie
+        # ktore v slot-e maju charge aj discharge -> rusia sa; user nevidel kazdu zmenu batt).
+        # Plus pridany druhy dataset AC_AGG (15-min slot mean) ako paralelny stepped reference.
+        _act_per_min = [(_nz(pb) + _nz(d) * _nz(p) / 100.0 * bkw)
+                          for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])]
+        AC = "[" + ",".join(_js(float(x)) for x in _act_per_min) + "]"
+        # 15-min agregat ako druhy dataset (transparentny prehlad)
         try:
-            _act_per_min = [(_nz(pb) + _nz(d) * _nz(p) / 100.0 * bkw)
-                              for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])]
             _act_df = pd.DataFrame({"_t": dview["time"].values, "_v": _act_per_min})
             _act_df["_slot"] = pd.to_datetime(_act_df["_t"]).dt.floor("15min")
             _slot_mean = _act_df.groupby("_slot")["_v"].transform("mean")
-            AC = "[" + ",".join(_js(float(x)) for x in _slot_mean) + "]"
+            AC_AGG = "[" + ",".join(_js(float(x)) for x in _slot_mean) + "]"
         except Exception:
-            AC = "[" + ",".join(_js(_nz(pb)+_nz(d)*_nz(p)/100.0*bkw)
-                                for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])) + "]"
+            AC_AGG = AC
         # SOC PREDIKCIA: z trace (plánovaný/projektovaný SOC, výsledok RT engine + plánu)
         SO = "[" + ",".join(_js(x) for x in dview["soc_pct"]) + "]"
         # ── Realio realita pre SOC + batt (len v realio_overlay móde, paralelne k predikcii) ──
@@ -6162,7 +6163,8 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         chRiadenie = (f"<h2>Riadenie batérie — predikcia (plán+RT) vs realita + SOC (deň {view_day}){_export_btn}</h2>"
                 f"<div style='height:360px'><canvas id='chRi'></canvas></div>"
                 f"<script>new Chart(document.getElementById('chRi'),{{type:'line',data:{{labels:{Ld},datasets:["
-                f"{{label:'Batéria PREDIKCIA kW (plán+RT)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:2.2}},"
+                f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
+                f"{{label:'Batéria PREDIKCIA kW (15-min agregát)',data:{AC_AGG},borderColor:'#1565C0',borderDash:[6,3],fill:false,stepped:true,pointRadius:0,borderWidth:2.2}},"
                 f"{{label:'🔴 Batéria REÁLNE MERANIE kW',data:{BATT_REAL},borderColor:'#C62828',backgroundColor:'rgba(198,40,40,.0)',fill:false,pointRadius:0,borderWidth:2.2,tension:.15}},"
                 f"{{label:'RT odchýlka kW',data:{RK},borderColor:'#7030A0',backgroundColor:'rgba(112,48,160,.12)',fill:true,stepped:true,pointRadius:0,borderWidth:1.2}},"
                 f"{{label:'SOC PREDIKCIA %',data:{SO},borderColor:'#C49000',borderWidth:1.6,borderDash:[5,3],pointRadius:0,yAxisID:'y2'}},"
