@@ -5648,8 +5648,19 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _batt_base = dview["batt_kw_realistic"]
         else:
             _batt_base = dview["plan_batt_kw"]
-        AC = "[" + ",".join(_js(_nz(pb)+_nz(d)*_nz(p)/100.0*bkw)
-                            for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])) + "]"
+        # Bug FF (2026-06-07): Batéria PREDIKCIA dataset = 15-min slot agregat (mean per slot).
+        # Predtym per-minute hodnoty s RT korekciou → chart vyzeral ako spike-y namiesto plateaux.
+        # Teraz: per minute hodnota = priemer 15-min slotu → jasne horizontalne stepped bars per slot.
+        try:
+            _act_per_min = [(_nz(pb) + _nz(d) * _nz(p) / 100.0 * bkw)
+                              for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])]
+            _act_df = pd.DataFrame({"_t": dview["time"].values, "_v": _act_per_min})
+            _act_df["_slot"] = pd.to_datetime(_act_df["_t"]).dt.floor("15min")
+            _slot_mean = _act_df.groupby("_slot")["_v"].transform("mean")
+            AC = "[" + ",".join(_js(float(x)) for x in _slot_mean) + "]"
+        except Exception:
+            AC = "[" + ",".join(_js(_nz(pb)+_nz(d)*_nz(p)/100.0*bkw)
+                                for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])) + "]"
         # SOC PREDIKCIA: z trace (plánovaný/projektovaný SOC, výsledok RT engine + plánu)
         SO = "[" + ",".join(_js(x) for x in dview["soc_pct"]) + "]"
         # ── Realio realita pre SOC + batt (len v realio_overlay móde, paralelne k predikcii) ──
