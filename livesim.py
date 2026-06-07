@@ -787,6 +787,33 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             except Exception:
                 _load_min_kw = None
                 _load_plan_per = None
+            # Bug BB (2026-06-07): pred _run_physical_day pripočítaj VDT realized k sch.batt_kw
+            # (= target pre rt_controller). RT engine bude vidieť D-1 + VDT ako target plánu
+            # a robiť RT decisions na základe odchýlky voči TÝMTO commit-om (nie len D-1).
+            # Pre 60-min plán: sumuj 4 VDT 15-min sloty na hodinu. Pre 96-slot plán: 1:1.
+            # No-op pre profil bez VDT trade-ov (vdt_state vráti nuly).
+            try:
+                import vdt_state as _vs_sch
+                from core.profile_resolver import get_active as _ga_sch
+                _prof_sch = _ga_sch()
+                if _prof_sch:
+                    _vdt_kw_96 = _vs_sch.get_realized_batt_kw(_prof_sch,
+                                                              today_iso=day.isoformat(),
+                                                              dt_h=0.25)
+                    if isinstance(_vdt_kw_96, list) and len(_vdt_kw_96) >= 96 and any(_vdt_kw_96):
+                        if step == 15 and len(sch) >= 96:
+                            # 1:1 mapping — slot i v sch zodpovedá slot i vo VDT
+                            for _i in range(min(96, len(sch))):
+                                sch.at[_i, "batt_kw"] = float(sch.at[_i, "batt_kw"]) + float(_vdt_kw_96[_i] or 0.0)
+                        elif step == 60 and len(sch) >= 24:
+                            # 60-min: každá hodina = priemer 4 VDT 15-min slotov
+                            for _h in range(min(24, len(sch))):
+                                _h_avg = sum(_vdt_kw_96[_h*4:_h*4+4]) / 4.0
+                                sch.at[_h, "batt_kw"] = float(sch.at[_h, "batt_kw"]) + _h_avg
+                        print(f"[livesim Bug BB] sch.batt_kw += VDT pre {_prof_sch} ({day.isoformat()}): "
+                              f"{sum(1 for v in _vdt_kw_96 if abs(v)>0.01)} nenulových slotov")
+            except Exception as _e_sch_vdt:
+                print(f"[livesim Bug BB] aplikácia VDT do sch zlyhala: {_e_sch_vdt}")
             rev, cyc, tr = _run_physical_day(cfg, mn_day, sch, day, step, bd, bc,
                                              soc0=soc, dev_budget_kwh=dev_budget, dt_bias_k=_dtk,
                                              rt_mask=_rt_mask, pv_min_kw=_pv_min_kw,
