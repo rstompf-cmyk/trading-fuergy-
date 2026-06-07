@@ -4919,6 +4919,50 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             dview["plan_grid_kwh"] = (dview["plan_grid_dam_kwh"].fillna(0.0)
                                                        + dview["plan_grid_vdt_kwh"].fillna(0.0))
                         _vdt_diag["applied"] = int(sum(1 for v in _vdt_kw_per if abs(v) > 0.01))
+                        # Bug Z: SOC trajektória musí reflektovať plan_batt_kw (D-1+VDT).
+                        # Predtým: soc_pct z _run_physical_day = D-1 only → SOC nereaguje na VDT.
+                        # Recompute: integruj plan_batt_kw cez čas (1-min step) + start SOC z prvého
+                        # neprázdneho riadku + batt capacity/eff z profilu.
+                        try:
+                            import profiles as _pr_soc
+                            _p_soc = _pr_soc.load_profile(_prof_load) or {}
+                            _pl_soc = (_p_soc.get("plan") or {})
+                            _batt_kwh_cap = float(_pl_soc.get("batt_kwh", 800.0))
+                            _eff_c = float(_pl_soc.get("eff_c", 0.95))
+                            _eff_d = float(_pl_soc.get("eff_d", 0.95))
+                            _soc_min_p = float(_pl_soc.get("soc_min", 5.0))
+                            _soc_max_p = float(_pl_soc.get("soc_max", 100.0))
+                            # Start SOC: prvý ne-NaN soc_pct v dview (alebo soc_init z profilu)
+                            _start_soc = None
+                            if "soc_pct" in dview.columns:
+                                _first_valid = dview["soc_pct"].dropna()
+                                if not _first_valid.empty:
+                                    _start_soc = float(_first_valid.iloc[0])
+                            if _start_soc is None:
+                                _start_soc = float(_pl_soc.get("soc_init", 50.0))
+                            # Integrate: pre každú minútu Δ_kwh = plan_batt_kw / 60 (kW × 1/60 h)
+                            # Sign: + discharge → SOC klesá; − charge → SOC stúpa
+                            _socs = []
+                            _soc_cur_kwh = _start_soc / 100.0 * _batt_kwh_cap
+                            _pb_arr = dview["plan_batt_kw"].fillna(0.0).tolist()
+                            for _pb in _pb_arr:
+                                _dkwh = float(_pb) / 60.0   # kW × 1/60 h
+                                if _dkwh > 0:                # discharge → SOC ↓ (delíme eff_d)
+                                    _soc_cur_kwh -= _dkwh / max(0.01, _eff_d)
+                                else:                        # charge → SOC ↑ (násobíme eff_c)
+                                    _soc_cur_kwh += abs(_dkwh) * _eff_c
+                                # Clip do SOC range
+                                _soc_pct = (_soc_cur_kwh / max(1.0, _batt_kwh_cap)) * 100.0
+                                _soc_pct = max(_soc_min_p, min(_soc_max_p, _soc_pct))
+                                _soc_cur_kwh = _soc_pct / 100.0 * _batt_kwh_cap
+                                _socs.append(_soc_pct)
+                            dview["soc_pct"] = _socs
+                            _vdt_diag["soc_recomputed"] = len(_socs)
+                        except Exception as _e_soc:
+                            try:
+                                print(f"[Bug Z SOC recompute] zlyhalo: {_e_soc}")
+                            except Exception:
+                                pass
         except Exception as _ex_vdt:
             try:
                 print(f"[Bug X retro fix] zlyhalo: {_ex_vdt}")
