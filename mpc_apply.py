@@ -23,7 +23,7 @@ from typing import Optional, Dict, Any
 def _data_dir(market: Optional[str] = None) -> str:
     try:
         import market as _mk
-        return _mk.out_root() if market is None else _mk.out_root_for(market)
+        return _mk.data_dir(market)   # Bug CC3.1: data_dir je správny názov
     except Exception:
         return "out"
 

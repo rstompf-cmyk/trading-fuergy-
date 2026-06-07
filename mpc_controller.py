@@ -48,7 +48,7 @@ def _market_root() -> str:
     """`out/{market}/` cesta pre mpc cache."""
     try:
         import market as _mk
-        return _mk.out_root()
+        return _mk.data_dir()   # Bug CC1.1: data_dir, NIE out_root (neexistuje)
     except Exception:
         return "out"
 
@@ -352,11 +352,12 @@ def run_mpc_tick(profile: str,
 def _write_cache(profile: str, data: Dict[str, Any]) -> None:
     path = mpc_cache_path(profile)
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+        print(f"[mpc_controller] cache zapisany: {path} (ok={data.get('ok')})")
     except Exception as e:
-        print(f"[mpc_controller] zapis cache zlyhal: {e}")
+        print(f"[mpc_controller] zapis cache zlyhal: {e} (path={path})")
 
 
 def load_cache(profile: str) -> Optional[Dict[str, Any]]:
