@@ -61,6 +61,13 @@ _PLAN_VDT_DEFAULTS: Dict[str, Any] = {
     # State integrácia (presný = profile.plan kópia, ale auto-fallback ak chýbajú)
     "vdt_eff_c": None,                      # None = použiť plan.eff_c (single source)
     "vdt_eff_d": None,                      # None = použiť plan.eff_d
+    # Bug CC5 (2026-06-07): Joint MPC kontrolér flags
+    "joint_mpc_enabled": False,             # zapne rolling MPC tick (mpc_controller) každú minútu
+    "trade_batt": True,                     # batt arbitráž povolená v joint_lp
+    "trade_ftv": True,                      # FTV export povolený
+    "trade_load": True,                     # load z grid povolený
+    "use_vdt": True,                        # VDT intraday trade povolený
+    "allow_rt_correction": True,            # RT korekcia odchýlky povolená
 }
 
 

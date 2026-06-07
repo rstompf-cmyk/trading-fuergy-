@@ -55,6 +55,7 @@ _DEFAULT_CRONS = {
     "realio_poll":         "* * * * *",         # každú minútu — poll real-time FTV/batt z DAMSU + log do CSV
     "realio_relogin":      "*/25 * * * *",      # každých 25 min — Playwright relogin do dashboardu (cookies expirujú ~30 min)
     "vdt_advisor":         "*/15 * * * *",      # každých 15 min — rolling MPC re-optimization pre VDT (cache do JSON)
+    "joint_mpc_tick":      "* * * * *",         # každú min — joint MPC kontrolér (Bug CC2): SOC + DAM + VDT + FTV + Load → joint LP
     "zco_profile_rebuild": "0 2 * * 0",         # nedeľa 02:00 — prebuilduj SK deviation_profile (PV+weekday split)
     "auto_control_apply":  "0,15,30,45 * * * *", # každú 15-minútovku — paper trading sim apply D-1 plánu (Fáza A.5)
 }
@@ -369,6 +370,86 @@ def job_vdt_advisor():
     _log("vdt_advisor", f"hotovo · {n_ok}/{len(profs)} OK · {n_fail} zlyhalo")
 
 
+@_safe("joint_mpc_tick")
+def job_joint_mpc_tick():
+    """Bug CC2 (2026-06-07): Joint MPC kontrolér — beží každú minútu.
+
+    Pre KAŽDÝ profil s joint_mpc_enabled=True v profile.plan:
+      1. Volá mpc_controller.run_mpc_tick(profile)
+      2. Ten cez vdt_state.compute_current_state získa aktuálny SOC + DAM + VDT
+      3. Plus FTV/Load/DAM/VDT ceny per zostávajúce sloty
+      4. Volá joint_lp.optimize_joint_day → optimálny batt setpoint + plán
+      5. Zapíše JSON cache out/{market}/mpc_tick_{profile}.json (read-only debug)
+      6. CC3: aplikuje paper log (sim) alebo Bender setpoint (real) — gating
+         podľa profile.mode + safety gates v auto_control.
+
+    Read-only ak joint_mpc_enabled=False alebo profil bg-OFF.
+    """
+    try:
+        import mpc_controller as _mpc
+        import profiles as _pr
+        import auto_control as _ac
+        import market as _mk
+    except ImportError:
+        return
+
+    # CZ guard — joint MPC primarily pre SK trh (cez OKTE VDT/DAM ceny)
+    try:
+        active_mk = (_mk.active_market() or "").lower()
+    except Exception:
+        active_mk = ""
+    if active_mk == "cz":
+        return   # CZ mimo VDT scope pre teraz
+
+    # Načítaj profile zoznam + bg-enabled
+    try:
+        profs = _pr.list_profiles() or []
+    except Exception:
+        return
+    try:
+        bg_enabled = _ac.get_enabled_profiles()
+    except Exception:
+        bg_enabled = set()
+
+    n_ok = 0
+    n_fail = 0
+    n_skip = 0
+    for prof_name in profs:
+        if prof_name not in bg_enabled:
+            n_skip += 1
+            continue
+        try:
+            p = _pr.load_profile(prof_name) or {}
+            plan = p.get("plan") or {}
+            if not bool(plan.get("joint_mpc_enabled", False)):
+                n_skip += 1
+                continue
+        except Exception:
+            n_skip += 1
+            continue
+
+        try:
+            result = _mpc.run_mpc_tick(prof_name, write_cache=True)
+            if result.get("ok"):
+                n_ok += 1
+                # CC3: aplikácia outputu (sim aj real cez auto_control safety gates)
+                try:
+                    import mpc_apply as _mpc_a
+                    _mpc_a.apply_mpc_output(prof_name, result, profile_mode=p.get("mode", "simulation"))
+                except Exception as _e_app:
+                    _log("joint_mpc_tick", f"{prof_name}: apply zlyhalo · {_e_app}",
+                         level="warn")
+            else:
+                n_fail += 1
+                _log("joint_mpc_tick", f"{prof_name}: {result.get('reason', '?')}",
+                     level="warn")
+        except Exception as e:
+            n_fail += 1
+            _log("joint_mpc_tick", f"{prof_name}: exception · {e}", level="warn")
+    if n_ok or n_fail:
+        _log("joint_mpc_tick", f"OK {n_ok} · skip {n_skip} · fail {n_fail}")
+
+
 @_safe("realio_poll")
 def job_realio_poll():
     """Periodický poll real-time meraní (FTV/batt/SOC/grid) cez DAMSU tagy.
@@ -624,6 +705,7 @@ def start() -> BackgroundScheduler:
         ("realio_poll",        job_realio_poll,        "Realtime FTV/batt poll"),
         ("realio_relogin",     job_realio_relogin,     "Realio Playwright relogin"),
         ("vdt_advisor",        job_vdt_advisor,        "VDT rolling MPC advisor (15-min)"),
+        ("joint_mpc_tick",     job_joint_mpc_tick,     "Joint MPC kontroler (1-min, Bug CC2)"),
         ("zco_profile_rebuild",job_zco_profile_rebuild,"SK ZCO deviation profile rebuild (nedeľa 02:00)"),
         ("auto_control_apply", job_auto_control_apply, "Fáza A.5 paper trading apply (SIMULATION)"),
     ]
@@ -662,6 +744,7 @@ def run_now(job_id: str):
         "seps_cookies":       job_seps_cookies,
         "seps_realtime_log":  job_seps_realtime_log,
         "vdt_advisor":        job_vdt_advisor,
+        "joint_mpc_tick":     job_joint_mpc_tick,
         "zco_profile_rebuild":job_zco_profile_rebuild,
         "auto_control_apply": job_auto_control_apply,
         "historian_login":    job_historian_login,
