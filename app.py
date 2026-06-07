@@ -5306,7 +5306,8 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 realio_banner = (
                     f"<div style='background:#ffeaea;border-left:6px solid #C0392B;padding:10px;border-radius:8px;"
                     f"margin:10px 0;font-size:13px'><b>⚠ Realio overlay zlyhal:</b> {_ovl_err}</div>")
-        body = _livesim_body(r, dfull, dview, view_day, days, realio_overlay=realio_on, trace_full=trace_full)
+        body = _livesim_body(r, dfull, dview, view_day, days, realio_overlay=realio_on, trace_full=trace_full,
+                              table_offset=table_offset, table_rows=table_rows)
         return (head.replace("</head>", '<meta http-equiv="refresh" content="60">' + "</head>")
                 + form + plan_warn + plan_only_warn + zero_plan_warn + realio_banner + body + "</body></html>")
     except Exception as ex:
@@ -5322,7 +5323,8 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 "<p><a href='/livesim'>← skús znova</a> &nbsp; <a href='/'>← domov</a></p></body></html>")
 
 
-def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False, trace_full=None):
+def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False, trace_full=None,
+                   table_offset: int = 0, table_rows: int = 20):
     import numpy as _np
     bkw = float(r.get("batt_kw", 100.0))
     n = 0 if dfull is None else len(dfull)
