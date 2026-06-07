@@ -6275,6 +6275,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 if kw < -1.0: return ("🟢 NABÍJAŤ", "#2E7D32")
                 return ("⊙ idle", "#999")
             # Bug GG: VDT cena z OKTE SK historian (predbežné + finálne) ak vdt_eur v dview je prázdne
+            # Bug LL (2026-06-07): kluce v _vdt_map su "YYYY-MM-DD HH:MM:SS" (full timestamp),
+            # nie "HH:MM" — preto stary lookup vzdy vracal 0. Plus skusame oba formaty
+            # ":00" aj ":00:00" pre robustnost.
             try:
                 _all_vdt_nan = (("vdt_eur" not in _agg.columns)
                                 or _agg.get("vdt_eur", pd.Series([0])).isna().all()
@@ -6285,11 +6288,23 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                     if not _vdt_map:
                         _vdt_map = _ss_v.load_okte_vdt_for_day(view_day) or {}
                     if _vdt_map:
+                        # Sample key na detekciu formatu
+                        _sample_key = next(iter(_vdt_map.keys()), "")
+                        _is_full_ts = len(_sample_key) >= 16   # "YYYY-MM-DD HH:MM:SS"
                         def _vdt_from_slot(ts):
                             try:
                                 _t = pd.Timestamp(ts)
-                                key = f"{_t.hour:02d}:{_t.minute:02d}"
-                                return float(_vdt_map.get(key, 0.0))
+                                if _is_full_ts:
+                                    # Skús full timestamp formaty
+                                    key1 = _t.strftime("%Y-%m-%d %H:%M:%S")
+                                    key2 = _t.strftime("%Y-%m-%d %H:%M:00")
+                                    v = _vdt_map.get(key1)
+                                    if v is None:
+                                        v = _vdt_map.get(key2)
+                                    return float(v) if v is not None else 0.0
+                                else:
+                                    key = f"{_t.hour:02d}:{_t.minute:02d}"
+                                    return float(_vdt_map.get(key, 0.0))
                             except Exception:
                                 return 0.0
                         _agg["vdt_eur"] = _agg["_slot_ts"].map(_vdt_from_slot)
