@@ -4860,13 +4860,14 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
             dview = tdf
         else:
             dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=600) if view_day else dfull
-        # Bug X (2026-06-07): retro soft-fix — staré livesim CSV riadky pred Bug V deploy
-        # nemajú plan_batt_vdt_kw/plan_batt_dam_kw stĺpce a plan_batt_kw je čisté D-1
-        # (bez VDT). Dynamický agregát z vdt_paper_trades.csv (persistované, žiadny LP)
-        # opraví zobrazenie historických minút bez prepisovania CSV.
+        # Bug X (2026-06-07): VŽDY re-aplikuj VDT agregát ako single source of truth.
+        # CSV stĺpce plan_batt_vdt_kw/plan_batt_dam_kw môžu byť outdated alebo NaN pre
+        # staré minúty pred Bug V deploy. Plus VDT trades sa môžu pridať / zmeniť po
+        # zapísaní livesim minúty. vdt_paper_trades.csv je single source — vždy ho
+        # použi pri renderingu. ŽIADNY LP, žiadne prepisovanie livesim CSV.
+        _vdt_diag = {"applied": 0, "kwh_total": 0.0, "trades": 0, "profile": ""}
         try:
-            if (dview is not None and not dview.empty
-                    and "plan_batt_vdt_kw" not in dview.columns and view_day):
+            if dview is not None and not dview.empty and view_day:
                 import vdt_state as _vs_load
                 _prof_load = None
                 try:
@@ -4875,10 +4876,13 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 except Exception:
                     pass
                 if _prof_load:
+                    _vdt_diag["profile"] = _prof_load
                     _vdt_kw_arr = _vs_load.get_realized_batt_kw(
                         _prof_load, today_iso=view_day, dt_h=0.25)
                     _vdt_st_load = _vs_load._load_vdt_realized(_prof_load, view_day)
                     _vdt_kwh_arr_load = (_vdt_st_load or {}).get("kwh_batt_view") or [0.0]*96
+                    _vdt_diag["trades"] = int((_vdt_st_load or {}).get("count", 0))
+                    _vdt_diag["kwh_total"] = sum(abs(k) for k in _vdt_kwh_arr_load)
                     if isinstance(_vdt_kw_arr, list) and len(_vdt_kw_arr) >= 96 and any(_vdt_kw_arr):
                         def _slot15_from_ts(t):
                             try:
@@ -4892,19 +4896,34 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                         _vdt_kw_per = [float(_vdt_kw_arr[j] or 0.0) for j in _pidx15_load]
                         _vdt_kwh_per = [float(_vdt_kwh_arr_load[j] or 0.0) for j in _pidx15_load]
                         dview = dview.copy()
-                        # batt: baseline = D-1 (čo CSV obsahoval), pripočítaj VDT
-                        dview["plan_batt_dam_kw"] = dview["plan_batt_kw"]
+                        # Baseline D-1: ak `plan_batt_dam_kw` existuje (Bug V advance), použi
+                        # ten; inak (staré CSV) D-1 = plan_batt_kw (ktorý sám neobsahuje VDT).
+                        if "plan_batt_dam_kw" in dview.columns:
+                            _dam_baseline_kw = dview["plan_batt_dam_kw"].fillna(
+                                dview["plan_batt_kw"])
+                        else:
+                            _dam_baseline_kw = dview["plan_batt_kw"]
+                        dview["plan_batt_dam_kw"] = _dam_baseline_kw
                         dview["plan_batt_vdt_kw"] = _vdt_kw_per
-                        dview["plan_batt_kw"] = (dview["plan_batt_dam_kw"]
-                                                  + dview["plan_batt_vdt_kw"])
-                        # grid: baseline = D-1, pripočítaj VDT kWh
+                        dview["plan_batt_kw"] = (dview["plan_batt_dam_kw"].fillna(0.0)
+                                                  + dview["plan_batt_vdt_kw"].fillna(0.0))
+                        # Grid: rovnaký approach
                         if "plan_grid_kwh" in dview.columns:
-                            dview["plan_grid_dam_kwh"] = dview["plan_grid_kwh"]
+                            if "plan_grid_dam_kwh" in dview.columns:
+                                _dam_baseline_g = dview["plan_grid_dam_kwh"].fillna(
+                                    dview["plan_grid_kwh"])
+                            else:
+                                _dam_baseline_g = dview["plan_grid_kwh"]
+                            dview["plan_grid_dam_kwh"] = _dam_baseline_g
                             dview["plan_grid_vdt_kwh"] = _vdt_kwh_per
-                            dview["plan_grid_kwh"] = (dview["plan_grid_dam_kwh"]
-                                                       + dview["plan_grid_vdt_kwh"])
-        except Exception:
-            pass
+                            dview["plan_grid_kwh"] = (dview["plan_grid_dam_kwh"].fillna(0.0)
+                                                       + dview["plan_grid_vdt_kwh"].fillna(0.0))
+                        _vdt_diag["applied"] = int(sum(1 for v in _vdt_kw_per if abs(v) > 0.01))
+        except Exception as _ex_vdt:
+            try:
+                print(f"[Bug X retro fix] zlyhalo: {_ex_vdt}")
+            except Exception:
+                pass
         # Banner ak vybraný deň má saved plán ale livesim CSV pre neho nemá záznamy
         # (typicky: budúci deň, alebo minulý deň pre ktorý sa livesim neobehol).
         plan_only_warn = ""
