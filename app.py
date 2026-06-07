@@ -2035,6 +2035,72 @@ def home():
     return form_page()
 
 
+def _mpc_section_for_profile(profile: str, plan_params: dict) -> str:
+    """Bug CC7: MPC tick info pre Manager dashboard card.
+
+    Ak joint_mpc_enabled=True, načíta out/{market}/mpc_tick_{profile}.json a
+    zobrazí: batt setpoint TERAZ + objective € pre zostávajúce sloty + last ts.
+    Inak: ikona "MPC vypnuté".
+    """
+    enabled = bool(plan_params.get("joint_mpc_enabled", False))
+    if not enabled:
+        return (
+            '<div style="font-size:11px;color:#999;text-align:center;'
+            'background:#fafafa;border-radius:6px;padding:4px 8px;margin-bottom:8px">'
+            '⏸ Joint MPC vypnuté (toggle v profile.plan)</div>'
+        )
+    try:
+        import mpc_controller as _mpc
+        cache = _mpc.load_cache(profile) or {}
+    except Exception:
+        cache = {}
+    if not cache or not cache.get("ok"):
+        return (
+            '<div style="font-size:11px;color:#F57F17;background:#FFF8E1;'
+            'border-left:3px solid #F57F17;border-radius:4px;padding:5px 8px;margin-bottom:8px">'
+            '⏳ MPC: čaká na prvý tick alebo failed</div>'
+        )
+    sp_kw = float(cache.get("mpc_batt_kw_now", 0.0) or 0.0)
+    obj_eur = float(cache.get("mpc_objective_eur", 0.0) or 0.0)
+    cur_slot = int(cache.get("current_slot_idx", 0))
+    ts = str(cache.get("ts", ""))[11:16]
+    flags = cache.get("diagnostics", {}).get("flags", {})
+    # Direction label
+    if sp_kw > 1.0:
+        dir_label = "VYBÍJAŤ"
+        dir_color = "#2E7D32"
+    elif sp_kw < -1.0:
+        dir_label = "NABÍJAŤ"
+        dir_color = "#1976D2"
+    else:
+        dir_label = "idle"
+        dir_color = "#999"
+    flag_chips = []
+    for k, label in (("trade_batt", "B"), ("trade_ftv", "F"),
+                     ("trade_load", "L"), ("use_vdt", "V")):
+        on = bool(flags.get(k, True))
+        flag_chips.append(
+            f'<span style="background:{("#2E7D32" if on else "#999")};color:#fff;'
+            f'padding:1px 4px;border-radius:3px;font-size:9px;font-weight:600;'
+            f'margin-right:2px" title="{k}">{label}</span>'
+        )
+    return (
+        '<div style="background:#E8F5E9;border-left:3px solid #2E7D32;'
+        'border-radius:5px;padding:6px 10px;margin-bottom:8px">'
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+        f'<span style="font-size:11px;color:#1B5E20;font-weight:600">🤖 Joint MPC</span>'
+        f'<span style="font-size:10px;color:#666">{"".join(flag_chips)}</span>'
+        f'<span style="font-size:10px;color:#999;font-family:monospace">{ts}</span>'
+        '</div>'
+        '<div style="display:flex;justify-content:space-between;margin-top:3px">'
+        f'<span style="font-size:12px;color:#444">Setpoint: '
+        f'<b style="color:{dir_color}">{sp_kw:+.0f} kW {dir_label}</b></span>'
+        f'<span style="font-size:12px;color:#444">Zvyšok dňa: '
+        f'<b style="color:#2E7D32">{obj_eur:+.0f} €</b></span>'
+        '</div></div>'
+    )
+
+
 @app.get("/manager", response_class=HTMLResponse)
 def manager_dashboard():
     try:
@@ -2286,6 +2352,8 @@ def _manager_dashboard_impl():
             f'<div style="background:#f5f7fb;padding:6px 8px;border-radius:6px"><div style="font-size:10px;color:#777">Kapacita</div>'
             f'<div style="font-size:18px;font-weight:700;color:#666">{batt_kwh:.0f} kWh</div></div>'
             f'</div>'
+            # Bug CC7: MPC sekcia — ak je joint_mpc_enabled pre profil, načítaj mpc_tick.json
+            f'{_mpc_section_for_profile(name, plan_params)}'
             # Mini chart canvas
             f'<div style="height:160px;position:relative"><canvas id="{canvas_id}"></canvas></div>'
             # Data inline (skript ich vyzbiera nižšie)
