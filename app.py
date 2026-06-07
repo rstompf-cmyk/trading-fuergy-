@@ -5714,7 +5714,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # Batéria SPOLU = REALISTICKY clipnutý plán + RT
         # (batt_kw_realistic = plán clipnutý na fyzicky možné given FTV+grid limity; fallback na čistý plán
         # ak nový stĺpec nie je v CSV — pre staré logy bez bumpu csv_cols_v)
-        if "batt_kw_realistic" in dview.columns:
+        # Bug KK (2026-06-07): ak Bug X overlay pridal VDT do plan_batt_kw,
+        # batt_kw_realistic je outdated (D-1 only, bez VDT). Použi plan_batt_kw
+        # ktoré obsahuje D-1 + VDT (SOC tiež integruje plan_batt_kw → consistency).
+        _has_vdt_overlay = ("plan_batt_vdt_kw" in dview.columns
+                            and pd.to_numeric(dview["plan_batt_vdt_kw"],
+                                              errors="coerce").fillna(0).abs().sum() > 0.1)
+        if "batt_kw_realistic" in dview.columns and not _has_vdt_overlay:
             _batt_base = dview["batt_kw_realistic"]
         else:
             _batt_base = dview["plan_batt_kw"]
