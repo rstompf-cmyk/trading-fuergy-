@@ -4932,14 +4932,29 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             _eff_d = float(_pl_soc.get("eff_d", 0.95))
                             _soc_min_p = float(_pl_soc.get("soc_min", 5.0))
                             _soc_max_p = float(_pl_soc.get("soc_max", 100.0))
-                            # Start SOC: prvý ne-NaN soc_pct v dview (alebo soc_init z profilu)
+                            # Bug AA: start SOC z vdt_state.compute_current_state.start_soc_pct
+                            # (single source of truth — rovnaké ako na /vdt/live_advisor). Predtým
+                            # sa bral first valid soc_pct v dview = z _run_physical_day = D-1 only
+                            # start. Tým vznikala nezhoda: VDT page 16%, livesim PREDIKCIA 22%.
                             _start_soc = None
-                            if "soc_pct" in dview.columns:
-                                _first_valid = dview["soc_pct"].dropna()
-                                if not _first_valid.empty:
-                                    _start_soc = float(_first_valid.iloc[0])
+                            _start_soc_src = "?"
+                            try:
+                                _cs = _vs_load.compute_current_state(_prof_load)
+                                _start_soc = float(_cs.get("start_soc_pct"))
+                                _start_soc_src = str(_cs.get("start_soc_source", "vdt_state"))
+                            except Exception:
+                                pass
+                            if _start_soc is None:
+                                if "soc_pct" in dview.columns:
+                                    _first_valid = dview["soc_pct"].dropna()
+                                    if not _first_valid.empty:
+                                        _start_soc = float(_first_valid.iloc[0])
+                                        _start_soc_src = "dview.soc_pct first"
                             if _start_soc is None:
                                 _start_soc = float(_pl_soc.get("soc_init", 50.0))
+                                _start_soc_src = "profile.soc_init"
+                            _vdt_diag["start_soc"] = round(_start_soc, 1)
+                            _vdt_diag["start_soc_src"] = _start_soc_src
                             # Integrate: pre každú minútu Δ_kwh = plan_batt_kw / 60 (kW × 1/60 h)
                             # Sign: + discharge → SOC klesá; − charge → SOC stúpa
                             _socs = []
