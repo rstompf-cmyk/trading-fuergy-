@@ -574,11 +574,14 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     # od `done_through+1` ďalej, takže staré dni by chýbali navždy. Reset = bezpečnejšie ako
     # pokus o incremental prepend (musíme prepočítať SOC chain od začiatku).
     #
-    # DETEKCIA — dve podmienky (stačí jedna):
+    # DETEKCIA — tri podmienky (stačí jedna):
     # (1) user_start < meta.start_date — explicitné posunutie štartu dozadu cez UI
     # (2) prvý riadok v CSV je neskoršie než user_start_date — CSV je out-of-sync s deklarovaným
     #     start_date (napr. meta hovorí start=Jan 1, ale CSV začína Feb 28 lebo predchádzajúci
     #     beh fungoval s 90-d capom z _minute_all). Toto pokrýva užívateľov ktorí majú stale stav.
+    # (3) CSV row count << očakávaná hodnota podľa start_date..today (#600 fix). Detekuje keď
+    #     CSV bol predtým skrátený / poškodený / kompletovaný iba čiastočne (chýbajúce historian
+    #     dáta), takže advance() iba pridáva minútu po minúte bez full backfill loopu.
     if meta is not None:
         _need_reset = False
         _reset_reason = ""
@@ -603,6 +606,30 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             _reset_reason = (f"CSV začína {_csv_first.date()} ale user_start={_user_start.date()} "
                                               f"a meta.start_date={_meta_start.date()} (stale stav)")
                 except (FileNotFoundError, ValueError, KeyError, pd.errors.EmptyDataError):
+                    pass
+            # (3) Row-count sanity check — chráni proti #600 (CSV poškodený / partial)
+            if not _need_reset:
+                try:
+                    _meta_through = meta.get("done_through")
+                    if _meta_through:
+                        _through_ts = pd.Timestamp(_meta_through).normalize()
+                        _days_expected = max(1, (_through_ts - _user_start).days + 1)
+                        _rows_expected_min = int(_days_expected * 1440 * 0.5)   # tolerancia 50%
+                        # Rýchly počet riadkov (nezávisle od CSV obsahu)
+                        try:
+                            with open(csv_path, "rb") as _f:
+                                _rows_actual = sum(1 for _ in _f) - 1   # -header
+                            if _rows_actual < _rows_expected_min:
+                                _need_reset = True
+                                _reset_reason = (
+                                    f"CSV má {_rows_actual} riadkov ale očakávame "
+                                    f"≥{_rows_expected_min} (od {_user_start.date()} po "
+                                    f"{_through_ts.date()}, ~{_days_expected} dní) — "
+                                    f"meta out-of-sync (#600)"
+                                )
+                        except (FileNotFoundError, OSError):
+                            pass
+                except Exception:
                     pass
         except Exception:
             pass
@@ -637,6 +664,8 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     today_trace = None
     appended = 0
     last_err = None
+    skipped_no_data = []                # #600: zoznam dní bez minute dát
+    skipped_no_sys_mw = []              # #600: zoznam dní bez sys_MW (historian gap)
     while day <= today:
         d = day.date()
         mn_day_full = mn[mn.date == d].sort_values("time")   # CELÝ deň (DT známe D-1) – pre plán
@@ -644,6 +673,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         if d == today.date():
             mn_day = mn_day_full[mn_day_full["time"] <= now]  # fyzika len po „teraz“
         if mn_day.empty:
+            skipped_no_data.append(str(d))
             day += pd.Timedelta(days=1); continue
         # Pre HISTORICKÉ dni ZCO ideálne dostupný (RT settlement). Ak chýba (SK trh
         # publikuje ZCO až D+1 ~11:30, alebo OKTE backend zlyhal), nech sa deň
@@ -653,6 +683,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         # Skip IBA ak nemáme NIČ (ani sys_MW) — vtedy fyzika nebeží.
         _has_sys_mw = mn_day.get("sys_MW")
         if d < today.date() and (_has_sys_mw is None or _has_sys_mw.notna().sum() == 0):
+            skipped_no_sys_mw.append(str(d))
             day += pd.Timedelta(days=1); continue
         try:
             try:
@@ -1152,9 +1183,24 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     if appended == 0 and last_err is not None:
         raise RuntimeError(last_err)                         # nič sa nepodarilo → ukáž skutočnú chybu
 
+    # #600: zaznamenaj zoznam skipnutých dní pre user-facing warning
+    if skipped_no_sys_mw or skipped_no_data:
+        gap_msg = []
+        if skipped_no_sys_mw:
+            gap_msg.append(f"{len(skipped_no_sys_mw)} dní bez sys_MW (historian gap)")
+        if skipped_no_data:
+            gap_msg.append(f"{len(skipped_no_data)} dní bez minute dát")
+        print(f"[livesim.advance] ⚠ HISTORIAN GAP: {' + '.join(gap_msg)}. "
+              f"Spusti `python -m historian_backfill --tag <tag> --from {start_date.date()} "
+              f"--to {today.date()}` pre kompletný backfill.")
+        if skipped_no_sys_mw[:5]:
+            print(f"  Prvé skipnuté dni (sys_MW): {skipped_no_sys_mw[:5]}")
+
     meta.update(done_through=done_through.strftime("%Y-%m-%d") if done_through is not None else None,
                 soc_after_done=soc, cum_dt_done=cum_dt_done, cum_rt_done=cum_rt_done,
                 last_min=last_min.strftime("%Y-%m-%d %H:%M:%S") if last_min is not None else None,
+                skipped_no_sys_mw=skipped_no_sys_mw,        # #600: pre UI banner
+                skipped_no_data=skipped_no_data,
                 settings_sig=sig_s)
     with open(meta_path, "w") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1, default=str)
