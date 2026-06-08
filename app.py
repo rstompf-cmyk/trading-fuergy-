@@ -5489,7 +5489,23 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # SOC karta — v realio_overlay móde IBA reálne meranie (rovnaká hodnota ako
         # vo Vizualizácii). Predikčný SOC z trace by používateľa mátol, lebo môže
         # divergovať od reality (sim plán vs skutočný stav batérie).
+        # Bug NN (2026-06-08): SINGLE SOURCE OF TRUTH pre SOC. Card SOC teraz musí
+        # byť rovnaké ako chart SOC PREDIKCIA aj /vdt SOC teraz. Všetky tri pochádzajú
+        # z vdt_state.compute_current_state.start_soc_pct integrovaného cez D-1 + VDT.
+        # dview["soc_pct"] uz post Bug Z/AA/MM recompute = canonical source. Card
+        # predtym pouzival now["soc_pct"] z raw today_trace (pred recompute) → desync.
         _soc_plan_val = _nz(now.get('soc_pct'))
+        try:
+            if (dview is not None and len(dview)
+                and "soc_pct" in dview.columns and "time" in dview.columns):
+                _now_ts = pd.Timestamp(now["time"])
+                _past = dview[pd.to_datetime(dview["time"]) <= _now_ts]
+                if not _past.empty:
+                    _v = _past["soc_pct"].iloc[-1]
+                    if pd.notna(_v):
+                        _soc_plan_val = float(_v)
+        except Exception:
+            pass
         if realio_overlay:
             if _r_soc is not None:
                 _soc_plan_val = _r_soc
