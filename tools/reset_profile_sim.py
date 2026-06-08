@@ -169,7 +169,14 @@ def main():
                      help="Iba ukáž čo by sa zmazalo — bez zápisu")
     ap.add_argument("--keep-vdt", action="store_true",
                      help="Iba livesim reset (zachová VDT trades + cache)")
+    ap.add_argument("--vdt-only", action="store_true",
+                     help="Iba VDT trades + cache reset (zachová livesim) — "
+                          "užitočné pri Bug UU residual cleanup")
     args = ap.parse_args()
+    if args.keep_vdt and args.vdt_only:
+        print("ERR: --keep-vdt a --vdt-only sú navzájom vylúčiteľné",
+              file=sys.stderr)
+        sys.exit(2)
 
     profile = args.profile.strip()
     if not profile:
@@ -181,9 +188,12 @@ def main():
     if backup:
         print(f"Backup: {backup}")
 
-    print("\n[1] Livesim CSV + meta:")
-    n_ls = reset_livesim(profile, args.dry_run, backup)
-    print(f"    {'(dry-run) ' if args.dry_run else ''}{n_ls} súborov")
+    if not args.vdt_only:
+        print("\n[1] Livesim CSV + meta:")
+        n_ls = reset_livesim(profile, args.dry_run, backup)
+        print(f"    {'(dry-run) ' if args.dry_run else ''}{n_ls} súborov")
+    else:
+        print("\n[1] Livesim CSV + meta: preskakuje sa (--vdt-only)")
 
     if not args.keep_vdt:
         print("\n[2] VDT paper trades:")

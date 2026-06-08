@@ -154,6 +154,7 @@ def should_log_vdt_for_profile(profile: str) -> bool:
         extras. Tieto fake trades sa neskôr cez Bug V/X aggregát skreslili plan_batt_kw
         v /livesim. Gate to zachytí pred zápisom — bez ohľadu na to ktorý writer volá.
     """
+    result = True   # default = allow (back-compat pre legacy profily)
     try:
         import profiles as _pr
         # Pydantic schema iba pre type-safe access (extra=allow zachová use_vdt:false)
@@ -161,7 +162,9 @@ def should_log_vdt_for_profile(profile: str) -> bool:
             cfg = _pr.load_profile_validated(profile)
             if cfg is not None:
                 # Explicit False = block; inak True (default + legacy)
-                return cfg.plan.joint_lp.use_vdt is not False
+                result = cfg.plan.joint_lp.use_vdt is not False
+                _maybe_audit_gate(profile, result, source="pydantic")
+                return result
         except Exception:
             pass
         # Fallback: legacy dict čítanie
@@ -170,12 +173,33 @@ def should_log_vdt_for_profile(profile: str) -> bool:
         jlp = plan.get("joint_lp") or {}
         use_vdt = jlp.get("use_vdt")
         if use_vdt is None:
-            return True   # legacy default
-        return bool(use_vdt)
+            result = True   # legacy default
+        else:
+            result = bool(use_vdt)
+        _maybe_audit_gate(profile, result, source="dict_fallback")
+        return result
     except Exception as e:
         # Bezpečnejšie pokračovať (legacy profily bez joint_lp.use_vdt)
         print(f"[vdt.should_log_vdt_for_profile] {profile}: gate check zlyhal: {e}")
         return True
+
+
+def _maybe_audit_gate(profile: str, allowed: bool, source: str) -> None:
+    """Loguje IBA blokované eventy (rare path, low-volume).
+
+    Volajúci writer zapisuje sám seba — gate sám sa hlási iba ak BLOKUJE
+    (= action=vdt_blocked_by_gate). Cieľ: zviditeľniť tichý gating bez
+    spam-u v allow-prípade.
+    """
+    if allowed:
+        return
+    try:
+        from core.audit_log import log_event
+        log_event(actor="vdt_gate", action="vdt_blocked_by_gate",
+                   profile=profile, source=source,
+                   reason="joint_lp.use_vdt:false")
+    except Exception:
+        pass
 
 
 def validate_paper_trade_row(row: dict) -> Optional[VDTTrade]:
