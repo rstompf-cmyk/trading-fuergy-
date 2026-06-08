@@ -126,9 +126,11 @@ CSV_COLS = ["time", "date", "ts15",
             "plan_batt_kw", "plan_grid_kwh", "plan_curtail_kwh",
             "batt_kw_realistic", "rt_rev_realistic_min",
             "soc_kwh", "soc_pct", "budget_left_kwh",
-            "dt_rev_min", "rt_rev_min",
-            "vdt_arb_min", "cum_vdt_arb",   # Bug #608
-            "cum_dt", "cum_rt", "cum_total"]
+            "dt_rev_min", "rt_rev_min", "cum_dt", "cum_rt", "cum_total"]
+# Bug #608 (2026-06-08 hot-fix): vdt_arb_min + cum_vdt_arb sa NEZAPISUJÚ do CSV
+# (zachovaná back-compat s 33-stĺpcovým historickým súborom bez headera). Sú to
+# runtime stĺpce v `tr` DataFrame a používajú sa pri agregácii efektu v RAM.
+# Reindex na CSV_COLS pri zápise ich automaticky odfiltruje.
 
 
 def paths(case: str, port: str = "8000"):
@@ -1134,7 +1136,14 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _rt_used = _rt_engine
                 else:
                     _rt_used = pd.Series(_rt_real, index=tr.index).fillna(0)
-                tr["cum_rt"] = cum_rt_done + _rt_used.cumsum()
+                # Konsolidácia (2026-06-08): cum_rt cez core.effect.get_rt_eur_series
+                # — rovnaký vzorec ako Excel + UI karty + grafy. Jediný zdroj pravdy.
+                try:
+                    from core.effect import get_rt_eur_series
+                    _rt_used_consolidated = get_rt_eur_series(tr, warn_legacy=False)
+                except Exception:
+                    _rt_used_consolidated = _rt_used   # legacy fallback
+                tr["cum_rt"] = cum_rt_done + _rt_used_consolidated.cumsum()
                 tr["cum_dt"] = cum_dt_done + tr["dt_rev_min"].fillna(0).cumsum()
                 # Bug #608: kumulatív VDT arbitráž (delta vs DT clearing)
                 if "vdt_arb_min" in tr.columns:

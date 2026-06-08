@@ -3680,7 +3680,8 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         # rt_rev_realistic_min = skutočný financial impact (dev × ZCO), zatiaľ čo
         # rt_rev_min je teoretický výstup RT enginu. Excel report doteraz ukazoval
         # fiktívnu pokutu napr. -370€ pri reálnom impacte 0€.
-        _rt_col_xl = "rt_rev_realistic_min" if "rt_rev_realistic_min" in df.columns else "rt_rev_min"
+        from core.effect import resolve_rt_col as _resolve_rt
+        _rt_col_xl = _resolve_rt(df)
         # Bug #608: ak vdt_arb_min existuje, agreguj ho do vdt_arb_eur (samostatná zložka)
         _has_vdt_arb = "vdt_arb_min" in df.columns
         def _agg(g):
@@ -4302,7 +4303,8 @@ pip install reportlab matplotlib</code>
         # rt_rev_realistic_min = skutočný financial impact (dev × ZCO), rt_rev_min
         # je teoretický výstup RT enginu ktorý môže ukazovať fiktívne pokuty
         # (napr. -370€) keď reálny dopad cez ZCO bol 0€.
-        _rt_col_xl2 = "rt_rev_realistic_min" if "rt_rev_realistic_min" in df.columns else "rt_rev_min"
+        from core.effect import resolve_rt_col as _resolve_rt2
+        _rt_col_xl2 = _resolve_rt2(df)
         # Bug #608: VDT arbitráž (delta VDT vs DT clearing). Ak stĺpec existuje v CSV.
         _has_vdt_arb2 = "vdt_arb_min" in df.columns
         def _agg(g):
@@ -5762,14 +5764,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 _agg_src = _df_day
         except Exception:
             _agg_src = None
+    # Konsolidácia (2026-06-08): efekt sa všade ráta cez core.effect.compute_effect_totals.
+    # Jediný zdroj pravdy pre DT/RT/VDT-arb/baseline/total.
+    from core.effect import compute_effect_totals as _eff
     if _agg_src is not None and not _agg_src.empty:
         try:
-            d_dt = float(pd.to_numeric(_agg_src.get("dt_rev_min", 0), errors="coerce").fillna(0).sum())
-            # Bug #603: prefer rt_rev_realistic_min (skutočný financial impact cez dev×ZCO)
-            # nad rt_rev_min (teoretická RT engine kalkulácia). Engine môže ukazovať stratu
-            # aj keď akcia fyzicky neprešla (SOC limit) → realistic = 0 = nič sa nestalo.
-            _rt_col = "rt_rev_realistic_min" if "rt_rev_realistic_min" in _agg_src.columns else "rt_rev_min"
-            d_rt = float(pd.to_numeric(_agg_src.get(_rt_col, 0), errors="coerce").fillna(0).sum())
+            _t = _eff(_agg_src, profile=_active_profile, day=view_day)
+            d_dt = _t["dt_eur"]; d_rt = _t["rt_eur"]
             # FTV: preferuj reálne meranie (realio overlay) pred plánom
             _ftv_col = ("ftv_min_real_kw"
                          if "ftv_min_real_kw" in _agg_src.columns
@@ -5781,10 +5782,8 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _agg_src = None
     if _agg_src is None and dview is not None and not dview.empty:
         # Fallback: decimovaný dview (môže byť 2-3× podhodnotené)
-        d_dt = float(dview["dt_rev_min"].fillna(0).sum())
-        # Bug #603: prefer realistic
-        _rt_col = "rt_rev_realistic_min" if "rt_rev_realistic_min" in dview.columns else "rt_rev_min"
-        d_rt = float(dview[_rt_col].fillna(0).sum())
+        _t = _eff(dview, profile=_active_profile, day=view_day)
+        d_dt = _t["dt_eur"]; d_rt = _t["rt_eur"]
         d_ftv = float(dview["ftv_kw"].fillna(0).sum()) / 60.0
 
     # ── BASELINE kumulatívne (bez batérie + plánu) — z PLNEJ resolution per-minute FTV − load × real_DT ──
@@ -6742,8 +6741,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         else:
             _src_for_daily = dfull.copy()
             _src_for_daily["_bl"] = _bl_per_min if _bl_per_min is not None else 0.0
-        # Bug #603: prefer rt_rev_realistic_min (skutočný financial impact)
-        _rt_col_d = "rt_rev_realistic_min" if "rt_rev_realistic_min" in _src_for_daily.columns else "rt_rev_min"
+        # Konsolidácia: rt stĺpec cez core.effect (single source of truth)
+        from core.effect import resolve_rt_col as _resolve_rt_d
+        _rt_col_d = _resolve_rt_d(_src_for_daily)
         _daily = _src_for_daily.groupby("date").agg(dt=("dt_rev_min", "sum"), rt=(_rt_col_d, "sum"),
                                                       bl=("_bl", "sum")).reset_index()
         _daily["total"] = _daily["dt"].fillna(0) + _daily["rt"].fillna(0)
@@ -6782,8 +6782,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                     _det_with_bl["_bl"] = 0.0
             except Exception:
                 _det_with_bl["_bl"] = 0.0
-            # Bug #603: prefer rt_rev_realistic_min
-            _rt_col_de = "rt_rev_realistic_min" if "rt_rev_realistic_min" in _det_with_bl.columns else "rt_rev_min"
+            # Konsolidácia: detail dňa rt cez core.effect (single source of truth)
+            from core.effect import resolve_rt_col as _resolve_rt_de
+            _rt_col_de = _resolve_rt_de(_det_with_bl)
             _det = (_det_with_bl.groupby("ts15").agg(dt=("dt_rev_min", "sum"), rt=(_rt_col_de, "sum"),
                                                        bl=("_bl", "sum"))
                     .reset_index().sort_values("ts15"))
