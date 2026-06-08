@@ -5920,7 +5920,16 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # Bug II (2026-06-07): vratit per-minute granularitu (Bug FF agregat vymazal RT korekcie
         # ktore v slot-e maju charge aj discharge -> rusia sa; user nevidel kazdu zmenu batt).
         # Plus pridany druhy dataset AC_AGG (15-min slot mean) ako paralelny stepped reference.
-        _act_per_min = [(_nz(pb) + _nz(d) * _nz(p) / 100.0 * bkw)
+        # Bug #610: clip predikciu na fyzické limity batt. RT engine môže
+        # generovať rt_power_pct >100% (proporcionálna reakcia na sys_MW),
+        # bez clip-u by graf "Riadenie batérie" ukazoval >batt_kw_max (napr.
+        # -15000 kW pre 6000 kW batt).
+        def _clip_to_batt(v):
+            if bkw > 0:
+                if v > bkw: return bkw
+                if v < -bkw: return -bkw
+            return v
+        _act_per_min = [_clip_to_batt(_nz(pb) + _nz(d) * _nz(p) / 100.0 * bkw)
                           for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])]
         AC = "[" + ",".join(_js(float(x)) for x in _act_per_min) + "]"
         # 15-min agregat ako druhy dataset (transparentny prehlad)
