@@ -1017,6 +1017,12 @@ def profiles_apply(name: str = Form(...), redirect_to: str = Form(default="")):
     except FileNotFoundError as e:
         return f"<p>Profile <b>{name}</b> nenájdený: {e}</p><a href='/profiles'>← Späť</a>"
 
+    # Bug W: invalidate livesim r-cache pri zmene profilu (template/cfg sa zmenili)
+    try:
+        _livesim_cache_invalidate()
+    except Exception:
+        pass
+
     # Auto-detect: zisti ktorý kind plánov profil najviac používa (dentrh vs plan)
     # a nastav ui_settings.livesim.case zhodne — tým sa user vyhne STRICT chybe
     # keď prepne profil ktorý plánuje len 15-min, alebo naopak.
@@ -3340,6 +3346,72 @@ def _data_page(report=None, logs=None, request=None):
 import threading as _threading
 _LIVESIM_LOCK = _threading.Lock()   # vlákno na pozadí aj prehliadač zapisujú do toho istého logu → serializuj
 
+# Bug W (2026-06-08): /livesim GET nesmie zbytocne pretacat advance() pri kazdom
+# otvoreni dashboardu. BG scheduler tick volá advance() každú minútu → CSV+meta.json
+# sa aktualizuje. Medzi tickami nema dashboard čo nového počítať.
+#
+# Strategy: cache `r` dict per (case, port, profile) podla meta.json mtime. Pokial
+# meta nezmenila od posledneho hitu, vratime cachovane r → ZIADNE volanie advance().
+# Cache invaliduje pri prvom GET po BG ticku (meta sa zmenila) + uloží nove r.
+#
+# Toto je medzistupeň pred plnym refactorom (BG by mal zapisovat snapshot na disk).
+# Aktualne riešenie: prvý GET po každom BG tick = 1× advance, ostatné GETy z cache.
+_LIVESIM_R_CACHE: dict = {}            # (case, port, profile) → (meta_mtime, r_dict)
+_LIVESIM_R_CACHE_LOCK = _threading.Lock()
+
+
+def _livesim_meta_mtime(case: str, port: str) -> float:
+    """Vráti mtime meta.json pre livesim CSV (0.0 ak neexistuje)."""
+    try:
+        if lsim is None:
+            return 0.0
+        _, meta_path = lsim.paths(case, port)
+        return os.path.getmtime(meta_path)
+    except Exception:
+        return 0.0
+
+
+def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
+                              live_minutes, rt_params, plan_params,
+                              use_rt_override, profile_key: str = ""):
+    """Wrapper okolo lsim.advance s mtime-based cache.
+
+    Bug W (2026-06-08): pokial sa meta.json nezmenila od posledneho hitu (= BG tick
+    nebol), vracia cachovane `r` dict — ZIADNE volanie advance() = ziadne pocitanie
+    pri otvarani dashboardu. Cache key zahrna profile_key aby per-profil isolacia
+    fungovala (rovnaky port, rozne profily by mali samostatne caches).
+    """
+    key = (case, port, profile_key)
+    mtime_before = _livesim_meta_mtime(case, port)
+    with _LIVESIM_R_CACHE_LOCK:
+        cached = _LIVESIM_R_CACHE.get(key)
+        if cached is not None and cached[0] == mtime_before and mtime_before > 0:
+            return cached[1]
+    # Cache miss alebo meta sa zmenila → musime volat advance().
+    with _LIVESIM_LOCK:
+        r = lsim.advance(case, start, port=port, base_case=base_case,
+                         d1_step_min=d1_step_min,
+                         live_minutes=live_minutes, rt_params=rt_params,
+                         plan_params=plan_params, use_rt_override=use_rt_override)
+    # Uložiť do cache s novým mtime (po advance sa meta zmenila)
+    mtime_after = _livesim_meta_mtime(case, port)
+    with _LIVESIM_R_CACHE_LOCK:
+        _LIVESIM_R_CACHE[key] = (mtime_after, r)
+    return r
+
+
+def _livesim_cache_invalidate(case: str = None):
+    """Zruší cache pre konkrétny case (alebo všetky ak case=None).
+    Použiteľné pri zmene profile/template — donúti rebuild pri ďalšom GET.
+    """
+    with _LIVESIM_R_CACHE_LOCK:
+        if case is None:
+            _LIVESIM_R_CACHE.clear()
+        else:
+            for k in list(_LIVESIM_R_CACHE.keys()):
+                if k[0] == case:
+                    _LIVESIM_R_CACHE.pop(k, None)
+
 
 def _livesim_pred_dt(today):
     """PREDIKOVANÉ hodinové DT ceny pre dnešok (rovnaký model ako generátor plánu /plan).
@@ -4908,10 +4980,17 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         rtp = _livesim_rt_params(_bcfg)
         plan_pp = _ui_load("plan", DEF)            # nastavenia z formulára PLÁNU (SOC, terminal, min_spread…)
         try:
-            with _LIVESIM_LOCK:
-                r = lsim.advance(case, start, port=_PORT, base_case=_bc, d1_step_min=_st,
-                                 live_minutes=live_min, rt_params=rtp, plan_params=plan_pp,
-                                 use_rt_override=cur_use_rt)
+            # Bug W: cached_advance vráti cachované r ak meta.json nezmenila od BG ticku.
+            # Žiadne zbytočné výpočty pri opakovanom otváraní dashboardu.
+            try:
+                from core.profile_resolver import get_active as _ga_w
+                _profile_key = str(_ga_w() or "")
+            except Exception:
+                _profile_key = ""
+            r = _livesim_cached_advance(
+                case, start, _PORT, _bc, _st,
+                live_min, rtp, plan_pp, cur_use_rt,
+                profile_key=_profile_key)
         except RuntimeError as _adv_err:
             # Typicky: žiadny deň v rozsahu nemá plán v plan_store → strict mode raise.
             # Namiesto Internal Server Error ukáž user-friendly stránku s odkazom na batch.
