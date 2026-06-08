@@ -20,6 +20,13 @@ from .profile import (
     RTConfig,
     DentrhConfig,
 )
+from .plan import (
+    StoredPlan,
+    PlanSlot,
+    ALLOWED_KINDS,
+    ALLOWED_STEPS,
+    KNOWN_SCHEDULE_KEYS,
+)
 
 __all__ = [
     "ProfileConfig",
@@ -28,4 +35,9 @@ __all__ = [
     "DistributionConfig",
     "RTConfig",
     "DentrhConfig",
+    "StoredPlan",
+    "PlanSlot",
+    "ALLOWED_KINDS",
+    "ALLOWED_STEPS",
+    "KNOWN_SCHEDULE_KEYS",
 ]

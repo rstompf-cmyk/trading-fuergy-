@@ -237,6 +237,43 @@ def load_plan_safe(date_iso: str, step_min: int, kind: str = "plan",
         return None
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Fáza A.2 — Pydantic-validated API (additive, neporušuje legacy)
+# ════════════════════════════════════════════════════════════════════════════
+
+def load_plan_validated(date_iso: str, step_min: int, kind: str = "plan",
+                        profile: Optional[str] = None):
+    """Načíta plán a vráti `StoredPlan` (Pydantic). None ak chýba / je poškodený.
+
+    Použitie:
+        from plan_store import load_plan_validated
+        sp = load_plan_validated("2026-06-08", 60, "plan", "Simulacia_Coop")
+        if sp is not None:
+            batt = sp.get_array("batt_kw")   # list[float], dĺžka 24
+            n = sp.expected_slots()
+    """
+    raw = load_plan_safe(date_iso, step_min, kind, profile)
+    if raw is None:
+        return None
+    try:
+        from core.schemas import StoredPlan
+        return StoredPlan.model_validate(raw)
+    except Exception as e:
+        print(f"[plan_store.load_plan_validated {date_iso} {step_min}min {kind}] "
+              f"profile={profile or 'active'} — validation zlyhal: {e}")
+        return None
+
+
+def validate_plan_dict(raw: Dict[str, Any]):
+    """Validuje raw dict cez `StoredPlan`. Vracia `StoredPlan` alebo raise.
+
+    Hodí sa pre check-pred-save: ak by save_plan dostal nekonzistentné dáta,
+    skôr to chytíme tu ako až pri load.
+    """
+    from core.schemas import StoredPlan
+    return StoredPlan.model_validate(raw)
+
+
 def list_plans(kind: Optional[str] = None, profile: Optional[str] = None) -> List[Dict[str, Any]]:
     """Vráti zoznam dostupných plánov v danom profile (alebo aktívnom)."""
     if _db_available():
