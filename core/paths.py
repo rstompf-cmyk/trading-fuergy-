@@ -112,12 +112,13 @@ def livesim_csv_path(case: str, port: str = "8000",
                       market: Optional[str] = None) -> str:
     """Cesta k livesim CSV.
 
-    Legacy: out/<market>/livesim_<case>_<port>.csv (per-port shared)
-    Sandbox: out/profiles/<profile>/livesim/<case>_<port>.csv
+    Livesim CSV je **per-port shared** (rôzne porty môžu mať rôzne casy
+    pre rovnaký profile). Ostáva v market root-e aj v sandbox móde,
+    pretože reálna životnosť dát je viazaná na port (per-port writer
+    via core/state.py PORT), nie na profile.
+
+    out/<market>/livesim_<case>_<port>.csv (vždy)
     """
-    if _is_sandbox() and profile:
-        return os.path.join(_profile_root(profile), "livesim",
-                              f"{case}_{port}.csv")
     return os.path.join(_data_dir(market), f"livesim_{case}_{port}.csv")
 
 
@@ -179,11 +180,12 @@ def vdt_advisor_cache_path(profile: Optional[str] = None,
 def shared_data_path(filename: str, market: Optional[str] = None) -> str:
     """Cesta k shared dáta (historian, imbalance, price_train).
 
-    Legacy: out/<market>/<filename>
-    Sandbox: out/_shared/<market>/<filename>
+    Shared per-market data ostávajú v market root-e aj v sandbox móde —
+    nie sú per-profile, takže nemá zmysel presúvať. Aplikácia ich číta
+    z out/<market>/.
+
+    out/<market>/<filename> (vždy)
     """
-    if _is_sandbox():
-        return os.path.join(_shared_dir(market), filename)
     return os.path.join(_data_dir(market), filename)
 
 

@@ -385,14 +385,17 @@ def run(args) -> int:
         print(f"Backup adresár: {backup}")
         print()
 
+    # POZNÁMKA: livesim CSV (step 3) a shared data (step 7) sa NEPRESÚVAJÚ.
+    # Livesim je per-port (8000/8001/8004/...) NIE per-profile — nemá zmysel
+    # ich rozdeľovať. Shared data (historian, imbalance, price_train) sú
+    # per-market, takže ostávajú v out/<market>/. Migrujeme iba to čo je
+    # naozaj per-profile: config, plans, VDT cache, VDT trades, auto_control.
     steps = [
         ("1. Profile configs", _step1_configs, [profiles]),
         ("2. Plan JSONs",      _step2_plans,    [profiles, markets]),
-        ("3. Livesim CSV → _shared/", _step3_livesim, [markets]),
         ("4. VDT trades split (per-profile)", _step4_vdt_trades_split, [profiles, markets]),
         ("5. auto_control_log split", _step5_auto_control_split, [profiles, markets]),
         ("6. VDT advisor caches", _step6_vdt_caches, [profiles, markets]),
-        ("7. Shared data (historian/imbalance/...)", _step7_shared_data, [markets]),
     ]
 
     total = 0
