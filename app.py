@@ -3681,8 +3681,10 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         # rt_rev_min je teoretický výstup RT enginu. Excel report doteraz ukazoval
         # fiktívnu pokutu napr. -370€ pri reálnom impacte 0€.
         _rt_col_xl = "rt_rev_realistic_min" if "rt_rev_realistic_min" in df.columns else "rt_rev_min"
+        # Bug #608: ak vdt_arb_min existuje, agreguj ho do vdt_arb_eur (samostatná zložka)
+        _has_vdt_arb = "vdt_arb_min" in df.columns
         def _agg(g):
-            return g.agg(
+            agg_args = dict(
                 dt_eur=("dt_rev_min", "sum"),
                 rt_eur=(_rt_col_xl, "sum"),
                 baseline_eur=("baseline_per_min_eur", "sum"),
@@ -3697,10 +3699,15 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
                 soc_avg_pct=("soc_pct", "mean"),
                 soc_min_pct=("soc_pct", "min"),
                 soc_max_pct=("soc_pct", "max"),
-            ).reset_index()
+            )
+            if _has_vdt_arb:
+                agg_args["vdt_arb_eur"] = ("vdt_arb_min", "sum")
+            return g.agg(**agg_args).reset_index()
 
         def _finalize(agg_df):
-            agg_df["total_eur"] = agg_df["dt_eur"].fillna(0) + agg_df["rt_eur"].fillna(0)
+            # Bug #608: total_eur = DT + RT + VDT arbitráž
+            _vdt_arb_col = agg_df["vdt_arb_eur"].fillna(0) if "vdt_arb_eur" in agg_df.columns else 0
+            agg_df["total_eur"] = agg_df["dt_eur"].fillna(0) + agg_df["rt_eur"].fillna(0) + _vdt_arb_col
             agg_df["prinos_bat_plan_eur"] = agg_df["total_eur"] - agg_df["baseline_eur"].fillna(0)
             agg_df["batt_cycles"] = (agg_df["batt_charge_kwh"] + agg_df["batt_discharge_kwh"]) / 2.0 / max(float(_pui_plan.get("batt_kwh", 200.0)), 1.0)
             return agg_df
@@ -4088,6 +4095,7 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
                     "baseline_p_imp_eur_mwh", "baseline_p_exp_eur_mwh",
                     "baseline_rev_eur", "baseline_cost_eur", "baseline_per_min_eur", "baseline_cum_eur",
                     "dt_rev_min", "rt_rev_min", "rt_rev_realistic_min",
+                    "vdt_arb_min",   # Bug #608
                     "cum_dt", "cum_rt", "cum_total"]
         cols_min = [c for c in cols_min if c in df.columns]
         ws_raw.append([])
@@ -4295,8 +4303,10 @@ pip install reportlab matplotlib</code>
         # je teoretický výstup RT enginu ktorý môže ukazovať fiktívne pokuty
         # (napr. -370€) keď reálny dopad cez ZCO bol 0€.
         _rt_col_xl2 = "rt_rev_realistic_min" if "rt_rev_realistic_min" in df.columns else "rt_rev_min"
+        # Bug #608: VDT arbitráž (delta VDT vs DT clearing). Ak stĺpec existuje v CSV.
+        _has_vdt_arb2 = "vdt_arb_min" in df.columns
         def _agg(g):
-            return g.agg(
+            agg_args = dict(
                 dt_eur=("dt_rev_min", "sum"), rt_eur=(_rt_col_xl2, "sum"),
                 baseline_eur=("baseline_per_min_eur", "sum"),
                 dt_cena_avg=("dt_real_eur", "mean"),
@@ -4310,10 +4320,15 @@ pip install reportlab matplotlib</code>
                 soc_avg_pct=("soc_pct", "mean"),
                 soc_min_pct=("soc_pct", "min"),
                 soc_max_pct=("soc_pct", "max"),
-            ).reset_index()
+            )
+            if _has_vdt_arb2:
+                agg_args["vdt_arb_eur"] = ("vdt_arb_min", "sum")
+            return g.agg(**agg_args).reset_index()
 
         def _finalize(a):
-            a["total_eur"] = a["dt_eur"].fillna(0) + a["rt_eur"].fillna(0)
+            # Bug #608: total_eur = DT + RT + VDT arbitráž
+            _vdt_arb_col2 = a["vdt_arb_eur"].fillna(0) if "vdt_arb_eur" in a.columns else 0
+            a["total_eur"] = a["dt_eur"].fillna(0) + a["rt_eur"].fillna(0) + _vdt_arb_col2
             a["prinos_eur"] = a["total_eur"] - a["baseline_eur"].fillna(0)
             a["cycles"] = (a["batt_charge_kwh"] + a["batt_discharge_kwh"]) / 2.0 / max(_bkwh_max, 1.0)
             return a
@@ -5802,13 +5817,25 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"<div class='v' style='color:#2E7D32'>{_benefit:+.1f} €</div></div>")
         except Exception:
             bl_cum_card = ""
+    # Bug #608: VDT arbitráž karta (delta VDT cena vs DT clearing)
+    _cum_vdt_arb = float(r.get("cum_vdt_arb", 0) or 0)
+    _vdt_arb_card = (f"<div class='card'><div class='l'>z toho VDT arbitráž</div>"
+                      f"<div class='v'>{_cum_vdt_arb:+.1f} €</div></div>") if _cum_vdt_arb else ""
+    # daily VDT arb
+    _d_vdt = 0.0
+    try:
+        if "vdt_arb_min" in dview.columns:
+            _d_vdt = float(pd.to_numeric(dview["vdt_arb_min"], errors="coerce").fillna(0).sum())
+    except Exception:
+        pass
     cards = (
         f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin:10px 0'>"
         f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{r['cum_total']:.1f} €</div></div>"
         f"<div class='card'><div class='l'>z toho DT</div><div class='v'>{r['cum_dt']:.1f} €</div></div>"
         f"<div class='card'><div class='l'>z toho odchýlka (RT)</div><div class='v'>{r['cum_rt']:.1f} €</div></div>"
+        f"{_vdt_arb_card}"
         f"{bl_cum_card}"
-        f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt:.1f} €</div></div>"
+        f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt:.1f} €</div></div>"
         f"<div class='card' style='background:#eef7ee'><div class='l'>FTV výroba za deň</div><div class='v'>{d_ftv:.0f} kWh</div></div></div>"
         f"<h2 style='margin:6px 0'>Hodnoty teraz</h2><div style='display:flex;gap:12px;flex-wrap:wrap;margin:4px 0'>{now_cards}</div>"
         f"{reco_card}")

@@ -126,7 +126,9 @@ CSV_COLS = ["time", "date", "ts15",
             "plan_batt_kw", "plan_grid_kwh", "plan_curtail_kwh",
             "batt_kw_realistic", "rt_rev_realistic_min",
             "soc_kwh", "soc_pct", "budget_left_kwh",
-            "dt_rev_min", "rt_rev_min", "cum_dt", "cum_rt", "cum_total"]
+            "dt_rev_min", "rt_rev_min",
+            "vdt_arb_min", "cum_vdt_arb",   # Bug #608
+            "cum_dt", "cum_rt", "cum_total"]
 
 
 def paths(case: str, port: str = "8000"):
@@ -1034,10 +1036,70 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     #   − dev = "short" (under-export / over-import) → ZCO > 0 → pay
                     _rt_rev_real = (_dev_kwh_min * _zco) / 1000.0
                     tr["rt_rev_realistic_min"] = _rt_rev_real.round(4)
+
+                    # Bug #608: VDT arbitráž = (VDT_cena - DT_clearing) × VDT_kwh / 1000
+                    # VDT realized objemy sa pripočítavajú do plan_grid_kwh (Bug X), takže
+                    # dt_rev_min ich valuuje za DT clearing. Skutočný cash z VDT obchodu
+                    # ide za VDT cenu (price_predicted_eur v paper trades). Rozdiel je
+                    # arbitrážny profit, ktorý sa doteraz strácal v karte "Zisk SPOLU".
+                    try:
+                        from core.profile_resolver import get_active as _ga_vdt
+                        from core.paths import vdt_trades_csv_path as _vdtpath
+                        _prof_vdt = _ga_vdt()
+                        _vdt_csv = _vdtpath(profile=_prof_vdt) if _prof_vdt else None
+                        if _vdt_csv and os.path.exists(_vdt_csv):
+                            _vt = pd.read_csv(_vdt_csv, low_memory=False)
+                            # Filter na profil + dnešný deň + iba BUY/SELL/CHARGE/DISCHARGE (nie IDLE)
+                            if "profile" in _vt.columns and _prof_vdt:
+                                _vt = _vt[_vt["profile"].astype(str) == str(_prof_vdt)]
+                            if "ts" in _vt.columns:
+                                _vt = _vt[_vt["ts"].astype(str).str[:10] == d.isoformat()]
+                            # SELL/DISCHARGE = +kwh (predaj), BUY/CHARGE = −kwh (nákup)
+                            _act_sign = {"SELL": +1.0, "DISCHARGE": +1.0,
+                                          "BUY": -1.0, "CHARGE": -1.0}
+                            _vt = _vt[_vt["action"].astype(str).str.upper().isin(_act_sign.keys())]
+                            # dt_real_eur per minute z trace
+                            _dt_per_min = pd.to_numeric(tr.get("dt_real_eur", 0), errors="coerce").fillna(0).values
+                            _vdt_arb_min = np.zeros(len(tr), dtype=float)
+                            # Mapuj každý trade do 15-min slotu (HH:MM-HH:MM alebo HH:MM)
+                            for _, _row in _vt.iterrows():
+                                _slot = str(_row.get("slot", "") or "")
+                                _start = _slot.split("-")[0].strip()
+                                if len(_start) < 5:
+                                    continue
+                                try:
+                                    _hh = int(_start[:2]); _mm = int(_start[3:5])
+                                except Exception:
+                                    continue
+                                _sign = _act_sign.get(str(_row.get("action","")).upper(), 0.0)
+                                _kwh = float(_row.get("kwh", 0) or 0) * _sign
+                                _vprice = float(_row.get("price_predicted_eur", 0) or 0)
+                                if _kwh == 0 or _vprice == 0:
+                                    continue
+                                # Distribuuj rovnomerne do 15 minút slotu
+                                _slot_start_iso = f"{d.isoformat()} {_hh:02d}:{_mm:02d}:00"
+                                _slot_start_ts = pd.to_datetime(_slot_start_iso)
+                                _slot_end_ts = _slot_start_ts + pd.Timedelta(minutes=15)
+                                _t_arr = pd.to_datetime(tr["time"], errors="coerce")
+                                _mask = (_t_arr >= _slot_start_ts) & (_t_arr < _slot_end_ts)
+                                _n = int(_mask.sum())
+                                if _n <= 0:
+                                    continue
+                                # DT clearing priemer cez slot (€/MWh)
+                                _dt_slot_avg = float(np.mean(_dt_per_min[_mask.values])) if _n > 0 else 0.0
+                                # Arbitráž za celý slot: kwh × (vdt_price - dt_clearing) / 1000
+                                _arb_slot_eur = (_kwh * (_vprice - _dt_slot_avg)) / 1000.0
+                                _vdt_arb_min[_mask.values] += _arb_slot_eur / _n
+                            tr["vdt_arb_min"] = np.round(_vdt_arb_min, 4)
+                        else:
+                            tr["vdt_arb_min"] = 0.0
+                    except Exception as _e_vdt:
+                        tr["vdt_arb_min"] = 0.0
                 except Exception as _e:
                     tr["batt_kw_realistic"] = tr["plan_batt_kw"]
                     tr["ftv_min_curtailed_kw"] = 0.0
                     tr["rt_rev_realistic_min"] = 0.0
+                    tr["vdt_arb_min"] = 0.0   # Bug #608 default
                 # reálny clearovaný day-ahead — primárne z price_train_2026.csv (rovnaký zdroj ako settlement),
                 # fallback na mn_day_full ak by tam bol (zvyčajne nie je).
                 # Pre-init _rm aby bol vždy definovaný (používa sa neskôr vo fut block).
@@ -1074,7 +1136,12 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _rt_used = pd.Series(_rt_real, index=tr.index).fillna(0)
                 tr["cum_rt"] = cum_rt_done + _rt_used.cumsum()
                 tr["cum_dt"] = cum_dt_done + tr["dt_rev_min"].fillna(0).cumsum()
-                tr["cum_total"] = tr["cum_dt"] + tr["cum_rt"]
+                # Bug #608: kumulatív VDT arbitráž (delta vs DT clearing)
+                if "vdt_arb_min" in tr.columns:
+                    tr["cum_vdt_arb"] = tr["vdt_arb_min"].fillna(0).cumsum()
+                else:
+                    tr["cum_vdt_arb"] = 0.0
+                tr["cum_total"] = tr["cum_dt"] + tr["cum_rt"] + tr["cum_vdt_arb"]
                 if d < today.date():
                     # DOKONČENÝ deň (skutočná ZCO) → zapíš do logu a fixuj kumulatívy
                     new = tr if last_min is None else tr[tr["time"] > last_min]
