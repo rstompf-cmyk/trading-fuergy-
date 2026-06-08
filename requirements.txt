@@ -10,6 +10,9 @@ scipy>=1.10
 # Webová appka
 fastapi>=0.110
 uvicorn>=0.29
+# Pydantic v2 — používame pre Pydantic schemy (Fáza A: ProfileConfig / StoredPlan / VDTTrade).
+# FastAPI ho síce ťahá tranzitívne, ale prirovesť ho explicitne kvôli istote pri update FastAPI.
+pydantic>=2.0
 # Background scheduler (denné fetche, auto D-1 plán)
 apscheduler>=3.10
 # Headless browser pre SEPS DAE cookie/XSRF refresh (post-install: playwright install chromium)
