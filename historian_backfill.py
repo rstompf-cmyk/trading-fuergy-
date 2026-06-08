@@ -118,7 +118,13 @@ def backfill_tag(h: ih.Historian, tag: str,
         df = df[df["tag"] == tag].copy()
         df["time_utc"] = df["time"].dt.strftime("%Y-%m-%d %H:%M:%S")
         df = df[["time_utc", "value", "min", "max"]]
-        df = df[~df["time_utc"].isin(existing)]                 # dedup
+        # Bug RR (2026-06-08): in-batch dedup PRED filterom voci `existing`.
+        # Historian API obcas vrati rovnaky timestamp viackrat v jednom response
+        # (overlapping windows / aggregation buckets). Bez tohto dropu by sa zapisal
+        # 2x rovnaky time_utc → CSV duplikat (existing set ho zachyti az pri DALSOM
+        # volani — but in-batch by mali ist iba unikatne).
+        df = df.drop_duplicates(subset=["time_utc"], keep="first")
+        df = df[~df["time_utc"].isin(existing)]                 # cross-batch dedup
 
         if not df.empty:
             mode = "a" if os.path.exists(csv_path) else "w"
@@ -191,7 +197,61 @@ def extend_tag_to_now(h: ih.Historian, tag: str, out_dir: str = "out/sk",
                           chunk_days=1, verbose=verbose)
 
 
+def cleanup_csv_duplicates(csv_path: str, verbose: bool = True) -> int:
+    """Bug RR (2026-06-08): one-shot cleanup CSV duplikatov v historian súboroch.
+
+    Keep first row per time_utc, prepise CSV na mieste. Vracia pocet odstrenenych
+    riadkov. Bezpecne aj na velke subory (chunked read by mohol byt potrebny pre >1M).
+    """
+    if not os.path.exists(csv_path):
+        return 0
+    try:
+        df = pd.read_csv(csv_path)
+    except Exception as e:
+        if verbose:
+            print(f"[cleanup] {csv_path}: read zlyhal: {e}")
+        return 0
+    if df.empty or "time_utc" not in df.columns:
+        return 0
+    n_before = len(df)
+    df = df.drop_duplicates(subset=["time_utc"], keep="first")
+    n_after = len(df)
+    removed = n_before - n_after
+    if removed > 0:
+        # Zachova povodne column order
+        df.to_csv(csv_path, index=False)
+        if verbose:
+            print(f"[cleanup] {csv_path}: -{removed} duplikatov ({n_before} → {n_after})")
+    elif verbose:
+        print(f"[cleanup] {csv_path}: ziadne duplikaty ({n_before} rows)")
+    return removed
+
+
+def cleanup_all_historian_csvs(out_dir: str = "out/sk", verbose: bool = True) -> int:
+    """Cleanup vsetkych historian_*.csv v adresari. Vracia total odstrenenych riadkov."""
+    import glob as _glob
+    total = 0
+    files = sorted(_glob.glob(os.path.join(out_dir, "historian_*.csv")))
+    for f in files:
+        total += cleanup_csv_duplicates(f, verbose=verbose)
+    if verbose:
+        print(f"[cleanup] HOTOVO: {len(files)} suborov, -{total} duplikatov spolu")
+    return total
+
+
+def main_cleanup(remaining_argv):
+    """CLI: python3 -m historian_backfill --cleanup  → odstráni duplikáty zo všetkých CSV."""
+    ap = argparse.ArgumentParser(description="Cleanup duplikátov v historian CSV súboroch.")
+    ap.add_argument("--out", default="out/sk", help="Adresár (default out/sk)")
+    args = ap.parse_args(remaining_argv)
+    cleanup_all_historian_csvs(out_dir=args.out, verbose=True)
+
+
 def main():
+    # Bug RR: --cleanup CLI mod pre one-shot dedup
+    if "--cleanup" in sys.argv:
+        remaining = [a for a in sys.argv[1:] if a != "--cleanup"]
+        return main_cleanup(remaining)
     ap = argparse.ArgumentParser(description="Backfill historických dát z firemného historiana.")
     ap.add_argument("--from", dest="d_from", default="2026-01-01",
                      help="Začiatok rozsahu (YYYY-MM-DD, default 2026-01-01)")
