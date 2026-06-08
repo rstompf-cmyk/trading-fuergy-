@@ -27,6 +27,12 @@ from .plan import (
     ALLOWED_STEPS,
     KNOWN_SCHEDULE_KEYS,
 )
+from .vdt import (
+    VDTTrade,
+    ALLOWED_ACTIONS,
+    should_log_vdt_for_profile,
+    validate_paper_trade_row,
+)
 
 __all__ = [
     "ProfileConfig",
@@ -40,4 +46,8 @@ __all__ = [
     "ALLOWED_KINDS",
     "ALLOWED_STEPS",
     "KNOWN_SCHEDULE_KEYS",
+    "VDTTrade",
+    "ALLOWED_ACTIONS",
+    "should_log_vdt_for_profile",
+    "validate_paper_trade_row",
 ]

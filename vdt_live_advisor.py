@@ -805,9 +805,22 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
     Pre minulé dni sa nič nemení (immutable archive).
 
     CZ guard: ak aktívny trh je "cz", nepíšeme nič (nemáme prístup k českému VDT).
+
+    Bug UU built-in (Fáza A.3, 2026-06-08): pred zápisom volá centrálny gate
+    `should_log_vdt_for_profile(profile)` — ak profile.plan.joint_lp.use_vdt:false,
+    NEPÍŠEME nič. Predtým bol gate iba v auto_control.log_vdt_extras_for_current_slot
+    a iné writers cez tento helper mohli omylom napísať fake VDT trade.
     """
     if not _is_sk_market():
         return
+    # Bug UU gate — centralizovaný v core.schemas.vdt
+    try:
+        from core.schemas.vdt import should_log_vdt_for_profile as _vdt_gate
+        if not _vdt_gate(profile):
+            return
+    except Exception as _e_gate:
+        print(f"[append_extra_paper_trade] use_vdt gate zlyhal pre {profile}: {_e_gate}")
+        # Pokračuj cautiously (legacy fallback)
     import csv
     path = paper_trades_csv_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -910,10 +923,17 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
     # CZ guard — nepíš nič na CZ trhu (nemáme prístup k českému VDT).
     if not _is_sk_market():
         return
+    profile = str(result.get("profile", "") or "")
+    # Bug UU gate (Fáza A.3) — explicit joint_lp.use_vdt:false → block
+    try:
+        from core.schemas.vdt import should_log_vdt_for_profile as _vdt_gate
+        if profile and not _vdt_gate(profile):
+            return
+    except Exception as _e_gate:
+        print(f"[append_paper_trade] use_vdt gate zlyhal pre {profile}: {_e_gate}")
     import csv
     cur = result.get("current") or {}
     soc = result.get("soc") or {}
-    profile = str(result.get("profile", "") or "")
     slot = str(cur.get("slot", "") or "")
     action = str(cur.get("action", "") or "")
     path = paper_trades_csv_path()
