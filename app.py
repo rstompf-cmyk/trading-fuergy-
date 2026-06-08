@@ -3676,10 +3676,15 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         FMT_INT  = '#,##0'
 
         # ── Agregačné helpery ──
+        # Bug #603 (Excel export): rovnaký fix ako pre /livesim karty + graf.
+        # rt_rev_realistic_min = skutočný financial impact (dev × ZCO), zatiaľ čo
+        # rt_rev_min je teoretický výstup RT enginu. Excel report doteraz ukazoval
+        # fiktívnu pokutu napr. -370€ pri reálnom impacte 0€.
+        _rt_col_xl = "rt_rev_realistic_min" if "rt_rev_realistic_min" in df.columns else "rt_rev_min"
         def _agg(g):
             return g.agg(
                 dt_eur=("dt_rev_min", "sum"),
-                rt_eur=("rt_rev_min", "sum"),
+                rt_eur=(_rt_col_xl, "sum"),
                 baseline_eur=("baseline_per_min_eur", "sum"),
                 dt_cena_avg=("dt_real_eur", "mean"),
                 zco_cena_avg=("zco_eur_min", "mean"),
@@ -4073,12 +4078,17 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         ws_raw = wb.create_sheet("Per_minute")
         ws_raw["A1"] = "Surové minútové dáta + výpočet baseline (pre audit)"
         ws_raw["A1"].font = subhdr_font
+        # Bug #603: pridať rt_rev_realistic_min ako audit stĺpec — auditor vidí
+        # aj teoretickú RT engine prognózu (rt_rev_min) aj skutočný financial
+        # impact cez dev×ZCO (rt_rev_realistic_min). Súčty v Sheet 1-5 ríjajú
+        # realistic (cez _rt_col_xl), tu sa zobrazia oba.
         cols_min = ["time", "date", "ts15", "ftv_min_kw", "load_min_kw",
                     "dt_real_eur", "zco_eur_min", "batt_kw_actual", "soc_pct",
                     "baseline_net_kw", "baseline_export_kwh", "baseline_import_kwh",
                     "baseline_p_imp_eur_mwh", "baseline_p_exp_eur_mwh",
                     "baseline_rev_eur", "baseline_cost_eur", "baseline_per_min_eur", "baseline_cum_eur",
-                    "dt_rev_min", "rt_rev_min", "cum_dt", "cum_rt", "cum_total"]
+                    "dt_rev_min", "rt_rev_min", "rt_rev_realistic_min",
+                    "cum_dt", "cum_rt", "cum_total"]
         cols_min = [c for c in cols_min if c in df.columns]
         ws_raw.append([])
         ws_raw.append(cols_min)
@@ -4280,9 +4290,14 @@ pip install reportlab matplotlib</code>
 
         _bkwh_max = float(_pui_plan.get("batt_kwh", 200.0))
 
+        # Bug #606 (Excel export, second _agg): rovnaký fix ako vyššie.
+        # rt_rev_realistic_min = skutočný financial impact (dev × ZCO), rt_rev_min
+        # je teoretický výstup RT enginu ktorý môže ukazovať fiktívne pokuty
+        # (napr. -370€) keď reálny dopad cez ZCO bol 0€.
+        _rt_col_xl2 = "rt_rev_realistic_min" if "rt_rev_realistic_min" in df.columns else "rt_rev_min"
         def _agg(g):
             return g.agg(
-                dt_eur=("dt_rev_min", "sum"), rt_eur=("rt_rev_min", "sum"),
+                dt_eur=("dt_rev_min", "sum"), rt_eur=(_rt_col_xl2, "sum"),
                 baseline_eur=("baseline_per_min_eur", "sum"),
                 dt_cena_avg=("dt_real_eur", "mean"),
                 zco_cena_avg=("zco_eur_min", "mean"),
