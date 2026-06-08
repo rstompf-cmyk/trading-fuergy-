@@ -187,6 +187,64 @@ def get_zco_for_day(date_iso: str,
 
 
 # ---------------------------------------------------------------------------
+# Bug VV (2026-06-08): TOU distribučný poplatok per slot
+# ---------------------------------------------------------------------------
+
+def get_tou_for_day(profile: Optional[str],
+                      date_iso: str,
+                      T: int = 24,
+                      dt_h: float = 1.0) -> Optional[np.ndarray]:
+    """Vráti T-array TOU + uniform distribučných poplatkov €/MWh pre profil + deň.
+
+    Použitie: livesim.advance ho pripočíta k cene importu ak
+    `profile.plan.joint_lp.optimize_distribution == True`.
+
+    Args:
+        profile: meno profilu (číta sa distribution config z profile.distribution)
+        date_iso: YYYY-MM-DD
+        T: počet slotov (24 hourly, 96 quarterly)
+        dt_h: krok slotu v hodinách
+
+    Returns:
+        np.ndarray dĺžky T (€/MWh) alebo None ak profile nemá distribučný config
+        alebo distribution.enabled je False.
+    """
+    if not profile:
+        return None
+    try:
+        import profiles as _pr
+        import distribution_cost as _dc
+        import datetime as _dt
+        prof = _pr.load_profile(profile) or {}
+        dist_cfg = prof.get("distribution") or {}
+        if not dist_cfg or not dist_cfg.get("enabled"):
+            return None
+        d = _dt.date.fromisoformat(date_iso)
+        arr = _dc.tou_prices_for_day(dist_cfg, d, T=T, dt=dt_h)
+        return np.asarray(arr, dtype=float)
+    except Exception as e:
+        print(f"[settlement.get_tou_for_day] {profile} {date_iso}: {e}")
+        return None
+
+
+def profile_uses_tou(profile: Optional[str]) -> bool:
+    """True ak profile má joint_lp.optimize_distribution=True a distribučný cfg enabled."""
+    if not profile:
+        return False
+    try:
+        import profiles as _pr
+        prof = _pr.load_profile(profile) or {}
+        plan = prof.get("plan") or {}
+        jlp = plan.get("joint_lp") or {}
+        if not jlp.get("optimize_distribution"):
+            return False
+        dist = prof.get("distribution") or {}
+        return bool(dist.get("enabled"))
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Smoke test
 # ---------------------------------------------------------------------------
 

@@ -3213,12 +3213,26 @@ a{{color:#1F4E78}}</style></head><body>
         try:
             _pui_plan = _ui_load("plan", {}) or {}
             _bp = bc.parse_baseline_params(_pui_plan)
+            # Bug VV (2026-06-08): baseline must include same TOU + grid_fee as plán scenár
+            _bl_tou = None
+            _bl_gf = 0.0
+            try:
+                import settlement as _stl_bl
+                from core.profile_resolver import get_active as _ga_bl
+                _prof_bl = _ga_bl()
+                if _stl_bl.profile_uses_tou(_prof_bl):
+                    import datetime as _dt_bl
+                    _bl_tou = _stl_bl.get_tou_for_day(_prof_bl, _dt_bl.date.today().isoformat(), T=n, dt_h=0.25)
+                _bl_gf = float(_pui_plan.get("grid_fee", 0.0) or 0.0)
+            except Exception:
+                pass
             _bl = bc.compute_baseline_day(
                 np.asarray(pv15[:n], float),
                 np.asarray(load96[:n] if load96 is not None else np.zeros(n), float),
                 np.asarray(price15[:n], float),
                 im_mode=_bp["im_mode"], im_val=_bp["im_val"],
-                ex_mode=_bp["ex_mode"], ex_val=_bp["ex_val"], dt=0.25)
+                ex_mode=_bp["ex_mode"], ex_val=_bp["ex_val"], dt=0.25,
+                tou_eur_per_mwh=_bl_tou, grid_fee_eur_per_mwh=_bl_gf)
             _bl_net = float(_bl["net_profit"])
             _benefit = float(summ.get("ZISK_EUR", 0.0)) - _bl_net
             _bl_mode_txt = (f"Import: {('DT×' + str(_bp['im_val'])) if _bp['im_mode'] == 'dt_x' else (str(_bp['im_val']) + ' €/MWh fix')} · "
@@ -13564,11 +13578,27 @@ a{{color:#1F4E78}}</style></head><body>
     baseline_card = ""
     if bc is not None:
         try:
+            # Bug VV (2026-06-08): baseline must include TOU + grid_fee — rovnaké ceny ako plán
+            _bl_tou_p = None
+            _bl_gf_p = 0.0
+            try:
+                import settlement as _stl_blp
+                from core.profile_resolver import get_active as _ga_blp
+                _prof_blp = _ga_blp()
+                if _stl_blp.profile_uses_tou(_prof_blp):
+                    import datetime as _dt_blp
+                    _bl_tou_p = _stl_blp.get_tou_for_day(
+                        _prof_blp, _dt_blp.date.today().isoformat(),
+                        T=24, dt_h=1.0)
+                _bl_gf_p = float(f.get("grid_fee", 0.0) or 0.0)
+            except Exception:
+                pass
             _bl = bc.compute_baseline_day(
                 pv_arr, (load24 if load24 is not None else np.zeros(24)),
                 price_arr,                                                   # zúčtovacia DT cena
                 im_mode=_bim_mode, im_val=_bim_val,
-                ex_mode=_bex_mode, ex_val=_bex_val, dt=1.0)
+                ex_mode=_bex_mode, ex_val=_bex_val, dt=1.0,
+                tou_eur_per_mwh=_bl_tou_p, grid_fee_eur_per_mwh=_bl_gf_p)
             _bl_net = float(_bl["net_profit"])
             _benefit = float(summ.get("ZISK_EUR", 0.0)) - _bl_net
             _bl_info = (f"Bez batérie/plánu: import {_bl['import_kwh']:.0f} kWh ({_bl['cost']:.1f} €), "

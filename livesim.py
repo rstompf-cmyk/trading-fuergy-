@@ -690,6 +690,24 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         _cc = float(plan_params.get("cycle_cost", cfg.cycle_cost)) if plan_params else float(cfg.cycle_cost)
                         dtprof = (_price_real*_ex/1000.0 - (_price_real + _gf)*_im/1000.0
                                   - _cc*(_ch + _di)/2/1000.0)
+                        # Bug VV (2026-06-08): pripočítaj TOU distribučný náklad k importu
+                        # ak profile má joint_lp.optimize_distribution:true. Joint LP optimizer
+                        # to už zaratáva v plánovacej fáze (joint_lp.py line 269-271), ale
+                        # settlement za reálne ceny dovtedy TOU ignoroval → cum_dt v livesim
+                        # CSV nezahŕňal TOU saving → "Prínos vs baseline" sa stratil pre VŠETKY
+                        # profily s optimize_distribution:true (Simulacia_Coop, Trakany, ...).
+                        try:
+                            import settlement as _stl_tou
+                            from core.profile_resolver import get_active as _ga_tou
+                            _prof_tou = _ga_tou()
+                            if _stl_tou.profile_uses_tou(_prof_tou):
+                                _tou_arr = _stl_tou.get_tou_for_day(
+                                    _prof_tou, d.isoformat(),
+                                    T=len(sch), dt_h=step/60.0)
+                                if _tou_arr is not None and len(_tou_arr) == len(sch):
+                                    dtprof -= np.asarray(_tou_arr, float) * _im / 1000.0
+                        except Exception as _e_tou:
+                            print(f"[livesim TOU settlement] {d}: {_e_tou}")
                         price = _price_real                          # tiež pre ďalšie použitia (tabuľka, trace)
                 except Exception as _re:
                     print(f"[livesim] real-price settle pre {d}: {_re}")

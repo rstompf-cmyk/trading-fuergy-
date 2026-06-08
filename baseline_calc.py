@@ -41,7 +41,9 @@ def _price_eur_per_mwh(dt_price: float, mode: str, value: float) -> float:
 def compute_baseline_day(pv_arr, load_arr, dt_price_arr,
                           im_mode: str = "dt_x", im_val: float = 1.0,
                           ex_mode: str = "dt_x", ex_val: float = 1.0,
-                          dt: float = 1.0) -> Dict[str, Any]:
+                          dt: float = 1.0,
+                          tou_eur_per_mwh=None,
+                          grid_fee_eur_per_mwh: float = 0.0) -> Dict[str, Any]:
     """Spočíta baseline scenár pre jeden deň (BEZ batérie, BEZ plánu, net-meter).
 
     Parametre
@@ -84,6 +86,16 @@ def compute_baseline_day(pv_arr, load_arr, dt_price_arr,
     # ceny per slot (€/MWh)
     p_imp = np.array([_price_eur_per_mwh(p, im_mode, im_val) for p in pr], dtype=float)
     p_exp = np.array([_price_eur_per_mwh(p, ex_mode, ex_val) for p in pr], dtype=float)
+    # Bug VV (2026-06-08): pridať distribučné poplatky (TOU + grid_fee) k cene importu.
+    # Baseline scenár bez batt aj tak musí platiť distribútorovi za odber zo siete —
+    # tie isté sadzby ako plán scenár (TOU + grid_fee). Bez toho by sa "rozdiel TOU saving"
+    # cez import shifting v Joint LP optimalizácii NIKDY neprejavil v Prínose.
+    if tou_eur_per_mwh is not None:
+        tou_arr = np.asarray(tou_eur_per_mwh, dtype=float).ravel()[:n]
+        if len(tou_arr) == n:
+            p_imp = p_imp + tou_arr
+    if grid_fee_eur_per_mwh and grid_fee_eur_per_mwh > 0:
+        p_imp = p_imp + float(grid_fee_eur_per_mwh)
     # finančný príspevok per slot (€)
     rev_arr = export_kwh_arr * p_exp / 1000.0
     cost_arr = import_kwh_arr * p_imp / 1000.0
