@@ -1,8 +1,26 @@
 # Architecture Refactor Plan
 
-**Stav:** Návrh · 2026-06-08
+**Stav (2026-06-08):** Fáza A KOMPLET · Fáza B 3/4 KOMPLET · Fáza D 1/2 KOMPLET · Fáza C TODO
 **Branch:** refactor-v2 (rovnaký ako live)
 **Ciele:** eliminovať opakované chyby cez schema-driven kontrakty, single source of truth, per-profile sandbox a automatickú verifikáciu.
+
+## ━━━ Implementation Status ━━━
+
+| Phase | Status | Tests | Notes |
+|---|---|---|---|
+| **A.1 ProfileConfig** | ✓ DONE (3c82b6a) | 7/7 | 8 profilov validovaných |
+| **A.2 StoredPlan + PlanSlot** | ✓ DONE (7114b17) | 14/14 | 712 reálnych plánov |
+| **A.3 VDTTrade + Bug UU gate** | ✓ DONE (388f601) | 12/12 | gate odhalil 63 residual trades |
+| **A.4 Integration smoke** | ✓ DONE | — | app.py imports OK |
+| **B.1 FS migration** | 🟡 PLANNED (tools/migrate_to_sandbox.py) | dry-run | execute=False default, needs downtime |
+| **B.2 Pure functions** | ❌ TODO | — | risky, needs golden tests first |
+| **B.3 Audit + sanity tools** | ✓ DONE (f177e7b) | manual | objavil 63 Bug UU residual entries |
+| **B.4 Audit log** | ✓ DONE (84549a2) | manual | wired do VDT gate + profile_save + set_active |
+| **C.1-C.3 SQLite consolidation** | ❌ TODO | — | livesim CSV → SQLite (big change) |
+| **D.1 Golden tests** | ✓ DONE | 5/5 | optimize_day snapshot |
+| **D.2 GitHub Actions CI** | ✓ DONE | — | runs on push/PR refactor-v2/dev/main |
+
+**Total passing: 38/38 testov** (33 schema + 5 golden)
 
 ---
 

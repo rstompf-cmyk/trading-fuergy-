@@ -239,6 +239,14 @@ def save_profile(name: str, data: Dict[str, Any]) -> str:
                     ))
         except Exception as e:
             print(f"[profiles.save_profile {body['name']}] DB write zlyhal: {e}")
+    # Audit log — profile_save je relevantný write event (Fáza B.4)
+    try:
+        from core.audit_log import log_event
+        log_event(actor="profile_writer", action="profile_save",
+                   profile=body["name"], mode=body["mode"],
+                   created_now=(body["created_at"] == body["updated_at"]))
+    except Exception:
+        pass
     return p
 
 
@@ -412,6 +420,7 @@ def set_active(name: Optional[str]) -> None:
     """Označí profile ako aktívny (alebo None = žiadny aktívny).
 
     DIAG: vypíše krátky stack pre audit Bug G (per-port inconsistency).
+    Plus zapíše do audit_log pre post-mortem analýzu (Fáza B.4).
     """
     try:
         import traceback as _tb
@@ -421,6 +430,14 @@ def set_active(name: Optional[str]) -> None:
             for f in _stack[-4:]
         )
         print(f"[profiles.set_active] name={name!r} | caller: {_caller}")
+        # Audit log — low-frequency event (každý profile switch je relevantný)
+        try:
+            from core.audit_log import log_event
+            log_event(actor="profile_resolver", action="profile_set_active",
+                       profile=name, port=str(_PORT),
+                       caller=_caller[:200])
+        except Exception:
+            pass
     except Exception:
         pass
     _ensure_dir()
