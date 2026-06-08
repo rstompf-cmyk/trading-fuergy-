@@ -107,6 +107,9 @@ services:
       # Žiadny rebuild netreba — git pull stačí, mount sleduje host disk.
       - ./tests:/app/tests:ro
       - ./tools:/app/tools:ro
+      # core/ bind mount — aby zmeny v core/paths.py, core/schemas/, core/audit_log.py
+      # neboli vždy potrebné rebuildovať. Read-only — žiadne modifikácie z containeru.
+      - ./core:/app/core:ro
 
     env_file:
       - ./.env
