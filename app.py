@@ -6317,19 +6317,33 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 if kw > 1.0: return ("🔴 VYBÍJAŤ", "#C62828")
                 if kw < -1.0: return ("🟢 NABÍJAŤ", "#2E7D32")
                 return ("⊙ idle", "#999")
-            # Bug GG: VDT cena z OKTE SK historian (predbežné + finálne) ak vdt_eur v dview je prázdne
-            # Bug LL (2026-06-07): kluce v _vdt_map su "YYYY-MM-DD HH:MM:SS" (full timestamp),
-            # nie "HH:MM" — preto stary lookup vzdy vracal 0. Plus skusame oba formaty
-            # ":00" aj ":00:00" pre robustnost.
+            # Bug GG: VDT cena z OKTE SK historian ak vdt_eur v dview je prazdne
+            # Bug LL (2026-06-07): kluce v _vdt_map su "YYYY-MM-DD HH:MM:SS" (full timestamp).
+            # Bug PP (2026-06-08): poradie zdrojov bolo zle — preliminary mal vsetky
+            # hodnoty 0 (historian/OKTE bug), ale check `if not _vdt_map` to nedetegoval
+            # (dict mal 96 entries vsetky 0). Plus finálny VDT (final_15m tag) ma realne
+            # ceny pre minule dni. Novy postup:
+            #   1. Skus FINAL ako primary (ma realne 135-150 €/MWh pre minule sloty)
+            #   2. Fallback na PRELIMINARY (continuous, ale teraz buggy → 0)
+            #   3. all-zero detect: ak dict ma elementy ale vsetko 0 → skipni
             try:
                 _all_vdt_nan = (("vdt_eur" not in _agg.columns)
                                 or _agg.get("vdt_eur", pd.Series([0])).isna().all()
                                 or (_agg.get("vdt_eur", pd.Series([0])).abs() < 0.01).all())
                 if _all_vdt_nan:
                     import seps_sk as _ss_v
-                    _vdt_map = _ss_v.load_okte_vdt_preliminary_for_day(view_day) or {}
-                    if not _vdt_map:
-                        _vdt_map = _ss_v.load_okte_vdt_for_day(view_day) or {}
+                    def _is_useful(_m):
+                        if not _m: return False
+                        return any(abs(float(v or 0)) > 0.01 for v in _m.values())
+                    # Final VDT first (real ceny pre minule sloty)
+                    _vdt_map = _ss_v.load_okte_vdt_for_day(view_day) or {}
+                    if not _is_useful(_vdt_map):
+                        # Fallback na preliminary (continuous, dnes)
+                        _vdt_map = _ss_v.load_okte_vdt_preliminary_for_day(view_day) or {}
+                    if not _is_useful(_vdt_map):
+                        _vdt_map = {}   # vsetko 0 → skip
+                    else:
+                        pass
                     if _vdt_map:
                         # Sample key na detekciu formatu
                         _sample_key = next(iter(_vdt_map.keys()), "")
