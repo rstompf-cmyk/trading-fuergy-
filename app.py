@@ -5093,22 +5093,49 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             _vdt_diag["start_soc_src"] = _start_soc_src
                             # Integrate: pre každú minútu Δ_kwh = plan_batt_kw / 60 (kW × 1/60 h)
                             # Sign: + discharge → SOC klesá; − charge → SOC stúpa
+                            # Bug MM (2026-06-08): scale-down planu pri SOC floor/ceiling.
+                            # Predtym sme len ostrihovali SOC ale plan_batt_kw zostal high
+                            # → tabulka ukazovala +5600 kW pri SOC=5% (nemozne). Teraz pri
+                            # narazani na floor (discharge) alebo ceiling (charge) zredukujeme
+                            # planovanu hodnotu pre tu minutu na to, co bolo realne mozne.
                             _socs = []
-                            _soc_cur_kwh = _start_soc / 100.0 * _batt_kwh_cap
+                            _pb_realiz = []   # actual executable batt kW per minute
+                            _soc_min_kwh = _soc_min_p / 100.0 * _batt_kwh_cap
+                            _soc_max_kwh = _soc_max_p / 100.0 * _batt_kwh_cap
+                            _soc_cur_kwh = max(_soc_min_kwh,
+                                                min(_soc_max_kwh,
+                                                    _start_soc / 100.0 * _batt_kwh_cap))
                             _pb_arr = dview["plan_batt_kw"].fillna(0.0).tolist()
                             for _pb in _pb_arr:
-                                _dkwh = float(_pb) / 60.0   # kW × 1/60 h
-                                if _dkwh > 0:                # discharge → SOC ↓ (delíme eff_d)
-                                    _soc_cur_kwh -= _dkwh / max(0.01, _eff_d)
-                                else:                        # charge → SOC ↑ (násobíme eff_c)
-                                    _soc_cur_kwh += abs(_dkwh) * _eff_c
-                                # Clip do SOC range
+                                _dkwh_req = float(_pb) / 60.0   # kW × 1/60 h (signed)
+                                if _dkwh_req > 0:
+                                    # discharge: SOC ↓; kontrola floor
+                                    _draw_kwh = _dkwh_req / max(0.01, _eff_d)
+                                    _avail_kwh = max(0.0, _soc_cur_kwh - _soc_min_kwh)
+                                    _draw_act = min(_draw_kwh, _avail_kwh)
+                                    _soc_cur_kwh -= _draw_act
+                                    _pb_real = (_draw_act * _eff_d) * 60.0   # späť na kW
+                                elif _dkwh_req < 0:
+                                    # charge: SOC ↑; kontrola ceiling
+                                    _push_kwh = abs(_dkwh_req) * _eff_c
+                                    _room_kwh = max(0.0, _soc_max_kwh - _soc_cur_kwh)
+                                    _push_act = min(_push_kwh, _room_kwh)
+                                    _soc_cur_kwh += _push_act
+                                    _pb_real = -(_push_act / max(0.01, _eff_c)) * 60.0
+                                else:
+                                    _pb_real = 0.0
                                 _soc_pct = (_soc_cur_kwh / max(1.0, _batt_kwh_cap)) * 100.0
                                 _soc_pct = max(_soc_min_p, min(_soc_max_p, _soc_pct))
-                                _soc_cur_kwh = _soc_pct / 100.0 * _batt_kwh_cap
                                 _socs.append(_soc_pct)
+                                _pb_realiz.append(_pb_real)
                             dview["soc_pct"] = _socs
+                            # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
+                            # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
+                            dview["plan_batt_kw"] = _pb_realiz
                             _vdt_diag["soc_recomputed"] = len(_socs)
+                            _vdt_diag["plan_clipped"] = int(sum(
+                                1 for a, b in zip(_pb_arr, _pb_realiz)
+                                if abs(float(a) - float(b)) > 1.0))
                         except Exception as _e_soc:
                             try:
                                 print(f"[Bug Z SOC recompute] zlyhalo: {_e_soc}")
