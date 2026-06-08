@@ -6317,33 +6317,57 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 if kw > 1.0: return ("🔴 VYBÍJAŤ", "#C62828")
                 if kw < -1.0: return ("🟢 NABÍJAŤ", "#2E7D32")
                 return ("⊙ idle", "#999")
-            # Bug GG: VDT cena z OKTE SK historian ak vdt_eur v dview je prazdne
-            # Bug LL (2026-06-07): kluce v _vdt_map su "YYYY-MM-DD HH:MM:SS" (full timestamp).
-            # Bug PP (2026-06-08): poradie zdrojov bolo zle — preliminary mal vsetky
-            # hodnoty 0 (historian/OKTE bug), ale check `if not _vdt_map` to nedetegoval
-            # (dict mal 96 entries vsetky 0). Plus finálny VDT (final_15m tag) ma realne
-            # ceny pre minule dni. Novy postup:
-            #   1. Skus FINAL ako primary (ma realne 135-150 €/MWh pre minule sloty)
-            #   2. Fallback na PRELIMINARY (continuous, ale teraz buggy → 0)
-            #   3. all-zero detect: ak dict ma elementy ale vsetko 0 → skipni
+            # Bug GG/LL/PP/QQ: VDT cena z paper trades + OKTE fallback.
+            # Bug QQ (2026-06-08): VDT cena v tabulke ma byt EXECUTED paper trade
+            # price (cena za aku sa obchod uzavrel — kazdy paper trade ma vlastnu
+            # price_predicted_eur), NIE OKTE clearing. To preto, ze v paper tradingu
+            # kazdy trade ma vlastnu cenu, ovela presnejsiu nez priemer cez vsetky
+            # ucastnikov trhu. OKTE clearing pouzivame iba ako fallback (D-1 a starsie).
+            #
+            # Poradie zdrojov:
+            #   1. vdt_paper_trades.csv per slot weighted-mean cena (executed)
+            #   2. OKTE final_15m (clearing, T-1 = real)
+            #   3. OKTE preliminary (broken na 0, ale future-proof fallback)
             try:
                 _all_vdt_nan = (("vdt_eur" not in _agg.columns)
                                 or _agg.get("vdt_eur", pd.Series([0])).isna().all()
                                 or (_agg.get("vdt_eur", pd.Series([0])).abs() < 0.01).all())
                 if _all_vdt_nan:
                     import seps_sk as _ss_v
-                    def _is_useful(_m):
-                        if not _m: return False
-                        return any(abs(float(v or 0)) > 0.01 for v in _m.values())
-                    # Final VDT first (real ceny pre minule sloty)
-                    _vdt_map = _ss_v.load_okte_vdt_for_day(view_day) or {}
-                    if not _is_useful(_vdt_map):
-                        # Fallback na preliminary (continuous, dnes)
-                        _vdt_map = _ss_v.load_okte_vdt_preliminary_for_day(view_day) or {}
-                    if not _is_useful(_vdt_map):
-                        _vdt_map = {}   # vsetko 0 → skip
+                    # ─── PRIMARY: paper trade executed prices ────────────────
+                    _paper_prices_96 = None
+                    try:
+                        import vdt_state as _vs_pp
+                        from core.profile_resolver import get_active as _ga_pp
+                        _prof_pp = _ga_pp()
+                        if _prof_pp:
+                            _paper_prices_96 = _vs_pp.get_realized_prices_per_slot(
+                                _prof_pp, view_day)
+                    except Exception:
+                        _paper_prices_96 = None
+                    _has_paper = (_paper_prices_96 is not None
+                                  and any(p == p for p in _paper_prices_96))   # any non-NaN
+                    if _has_paper:
+                        # Zapis paper trade ceny do _agg priamo (bypass _vdt_map dict lookup)
+                        def _paper_from_slot(ts):
+                            try:
+                                _t = pd.Timestamp(ts)
+                                idx = min(95, max(0, (_t.hour * 60 + _t.minute) // 15))
+                                v = _paper_prices_96[idx]
+                                return float(v) if v == v else 0.0   # NaN → 0
+                            except Exception:
+                                return 0.0
+                        _agg["vdt_eur"] = _agg["_slot_ts"].map(_paper_from_slot)
+                        _vdt_map = {}   # skip OKTE fallback
                     else:
-                        pass
+                        def _is_useful(_m):
+                            if not _m: return False
+                            return any(abs(float(v or 0)) > 0.01 for v in _m.values())
+                        _vdt_map = _ss_v.load_okte_vdt_for_day(view_day) or {}
+                        if not _is_useful(_vdt_map):
+                            _vdt_map = _ss_v.load_okte_vdt_preliminary_for_day(view_day) or {}
+                        if not _is_useful(_vdt_map):
+                            _vdt_map = {}   # vsetko 0 → skip
                     if _vdt_map:
                         # Sample key na detekciu formatu
                         _sample_key = next(iter(_vdt_map.keys()), "")

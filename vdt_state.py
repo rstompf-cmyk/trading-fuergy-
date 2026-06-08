@@ -275,6 +275,66 @@ def _load_vdt_realized(profile: str, today_iso: str) -> Dict[str, Any]:
             "source": f"vdt_paper_trades.csv (profile={profile}, day={today_iso}, n_trades={count})"}
 
 
+def get_realized_prices_per_slot(profile: str, today_iso: str) -> list:
+    """Bug QQ (2026-06-08): vrati 96-slot array s realnymi cenami pri paper trades.
+
+    Cena = vazeny priemer price_predicted_eur cez vsetky trades v slote
+    (weight = abs(kwh) — väčšie obchody dominuju).
+
+    Slot bez trade = NaN.
+
+    Pouzitie: livesim 15-min tabulka stlpec VDT €/MWh — uzivatel vidi za aku
+    cenu sa obchody UZAVRELI (paper trade execution price), nie OKTE clearing.
+    """
+    import math
+    prices = [float("nan")] * 96
+    sum_pw = [0.0] * 96      # sum (price * weight)
+    sum_w = [0.0] * 96       # sum (weight)
+    try:
+        import vdt_live_advisor as _vla
+        path = _vla.paper_trades_csv_path()
+    except Exception:
+        return prices
+    if not os.path.exists(path):
+        return prices
+    try:
+        import csv as _csv
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            rdr = _csv.DictReader(f)
+            for row in rdr:
+                if str(row.get("ts", ""))[:10] != today_iso:
+                    continue
+                if str(row.get("profile", "") or "") != profile:
+                    continue
+                slot = str(row.get("slot", "") or "")
+                action = str(row.get("action", "") or "").lower()
+                if action not in ("charge", "discharge"):
+                    continue
+                try:
+                    kwh = float(row.get("kwh", 0) or 0)
+                    price = float(row.get("price_predicted_eur", 0) or 0)
+                except (ValueError, TypeError):
+                    continue
+                w = abs(kwh)
+                if w <= 0 or not math.isfinite(price) or abs(price) < 0.01:
+                    continue
+                try:
+                    hh, mm = slot.split("-")[0].split(":")
+                    idx = (int(hh) * 60 + int(mm)) // 15
+                except Exception:
+                    continue
+                if not (0 <= idx < 96):
+                    continue
+                sum_pw[idx] += price * w
+                sum_w[idx] += w
+        for i in range(96):
+            if sum_w[i] > 0:
+                prices[i] = sum_pw[i] / sum_w[i]
+    except Exception:
+        pass
+    return prices
+
+
 # ────────────────────────── SOC path integrácia ──────────────────────────
 
 def _integrate_soc_path(start_soc_pct: float, dam_batt_kwh: List[float],
