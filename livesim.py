@@ -1039,16 +1039,26 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                        if "vdt_eur" in mn_day_full.columns else None)
                 tr["vdt_eur"] = tr["time"].map(_vm) if _vm is not None else np.nan
                 tr["date"] = d.isoformat()
-                # cum_rt = MERGE z dvoch zdrojov:
-                # 1) rt_rev_min  — RT engine zúčtoval (s use_rt=True; v 15-min móde ≈ 0)
-                # 2) rt_rev_realistic_min — odchýlka reality vs plan nominácia × ZCO
-                # User (2026-05-30): "aj do vypoctu ekonomiky sa musi ukldatat ralita".
-                # Berieme MAX absolútnej hodnoty — uprednostníme realistic v 15-min, RT engine v plan_d1.
+                # cum_rt = REAL financial impact (Bug #603 — 2026-06-08):
+                # 1) rt_rev_realistic_min — PRIORITY: skutočná odchýlka (dev) × ZCO settlement
+                # 2) rt_rev_min — fallback iba ak realistic stĺpec chýba (staré CSV verzie)
+                #
+                # Pôvodná logika "ak engine != 0 použij engine" bola nesprávna:
+                # ak RT engine chce reagovať (signal silný) ale fyzicky to neprejde
+                # (SOC limit, grid limit, gate), engine počíta TEORETICKÚ stratu ktorá
+                # v realite neexistuje. Karty Zisk SPOLU potom ukazujú fiktívne -387 €
+                # pre deň kedy fyzicky NIČ nepreplynulo a dev = 0 → realistic = 0.
+                #
+                # Užívateľov spôsob: 2026-05-30 "do vypoctu ekonomiky sa musi ukladat realita".
+                # 2026-06-08 znova potvrdené keď RT nastavenia nemali žiadny vplyv na "stratu"
+                # — lebo strata bola fiktívna z engine kalkulácie, fyzicky realistic=0.
                 _rt_engine = tr["rt_rev_min"].fillna(0)
-                _rt_real = tr.get("rt_rev_realistic_min", pd.Series([0.0]*len(tr), index=tr.index)).fillna(0)
-                # Ak RT engine reálne pracoval (nejaké non-zero akcie) → použij ho; inak realistic
-                _use_realistic = (_rt_engine.abs().sum() < 1e-6) and (_rt_real.abs().sum() > 1e-6)
-                _rt_used = _rt_real if _use_realistic else _rt_engine
+                _rt_real = tr.get("rt_rev_realistic_min", None)
+                if _rt_real is None:
+                    # Stará CSV verzia bez realistic stĺpca → fallback na engine
+                    _rt_used = _rt_engine
+                else:
+                    _rt_used = pd.Series(_rt_real, index=tr.index).fillna(0)
                 tr["cum_rt"] = cum_rt_done + _rt_used.cumsum()
                 tr["cum_dt"] = cum_dt_done + tr["dt_rev_min"].fillna(0).cumsum()
                 tr["cum_total"] = tr["cum_dt"] + tr["cum_rt"]
@@ -1063,20 +1073,24 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         last_min = pd.Timestamp(new["time"].max())
                         soc = float(new["soc_kwh"].iloc[-1])   # spoločné SOC (plán + RT)
                     cum_dt_done += day_dt_total
-                    # cum_rt_done: prefer realistic (dev×ZCO) keď RT engine bol pasívny (15-min mód)
+                    # Bug #603: cum_rt_done = REALISTIC (dev × ZCO), engine iba ako fallback
                     _day_rt_engine = float(rev)
-                    _day_rt_real = float(tr.get("rt_rev_realistic_min",
-                                                  pd.Series([0.0]*len(tr))).fillna(0).sum())
-                    cum_rt_done += _day_rt_real if (abs(_day_rt_engine) < 1e-6 and abs(_day_rt_real) > 1e-6) else _day_rt_engine
+                    _rt_real_col = tr.get("rt_rev_realistic_min", None)
+                    if _rt_real_col is None:
+                        cum_rt_done += _day_rt_engine
+                    else:
+                        cum_rt_done += float(pd.Series(_rt_real_col).fillna(0).sum())
                     done_through = day
                 else:
                     # DNEŠOK = provizórny (odhad ZCO) → LEN zobrazenie, NEukladá sa
                     today_dt = float(tr["dt_rev_min"].sum())
                     _today_rt_engine = float(rev)
-                    _today_rt_real = float(tr.get("rt_rev_realistic_min",
-                                                    pd.Series([0.0]*len(tr))).fillna(0).sum())
-                    today_rt = (_today_rt_real if (abs(_today_rt_engine) < 1e-6 and abs(_today_rt_real) > 1e-6)
-                                else _today_rt_engine)
+                    # Bug #603: today_rt = REALISTIC ak existuje
+                    _rt_real_col = tr.get("rt_rev_realistic_min", None)
+                    if _rt_real_col is None:
+                        today_rt = _today_rt_engine
+                    else:
+                        today_rt = float(pd.Series(_rt_real_col).fillna(0).sum())
                     tr["is_live"] = 1                       # živé minúty (po teraz)
                     # rozšír na CELÝ deň (0–24h): budúce minúty = LEN plán (DT/obchod/FTV/projekcia SOC), bez RT/live
                     try:
