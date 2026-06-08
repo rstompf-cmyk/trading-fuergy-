@@ -1,6 +1,6 @@
 # Architecture Refactor Plan
 
-**Stav (2026-06-08):** Fáza A KOMPLET · Fáza B 3/4 KOMPLET · Fáza D 1/2 KOMPLET · Fáza C TODO
+**Stav (2026-06-08):** Fáza A KOMPLET · Fáza B 4/4 KOMPLET · Fáza D 2/2 KOMPLET · Fáza C TODO
 **Branch:** refactor-v2 (rovnaký ako live)
 **Ciele:** eliminovať opakované chyby cez schema-driven kontrakty, single source of truth, per-profile sandbox a automatickú verifikáciu.
 
@@ -12,15 +12,30 @@
 | **A.2 StoredPlan + PlanSlot** | ✓ DONE (7114b17) | 14/14 | 712 reálnych plánov |
 | **A.3 VDTTrade + Bug UU gate** | ✓ DONE (388f601) | 12/12 | gate odhalil 63 residual trades |
 | **A.4 Integration smoke** | ✓ DONE | — | app.py imports OK |
-| **B.1 FS migration** | 🟡 PLANNED (tools/migrate_to_sandbox.py) | dry-run | execute=False default, needs downtime |
-| **B.2 Pure functions** | ❌ TODO | — | risky, needs golden tests first |
+| **B.1 core/paths.py + migration tool** | ✓ DONE (NEW) | manual | dual-mode (legacy/sandbox), 1403 položiek planned, execute=safe |
+| **B.2 Pure functions audit + OptimizeResult** | ✓ DONE (NEW) | manual | optimize_day/optimize_joint_day/run_day_physical = už pure; OptimizeResult Pydantic wrapper s consistency check |
 | **B.3 Audit + sanity tools** | ✓ DONE (f177e7b) | manual | objavil 63 Bug UU residual entries |
 | **B.4 Audit log** | ✓ DONE (84549a2) | manual | wired do VDT gate + profile_save + set_active |
-| **C.1-C.3 SQLite consolidation** | ❌ TODO | — | livesim CSV → SQLite (big change) |
+| **C.1-C.3 SQLite consolidation** | ❌ TODO | — | livesim CSV → SQLite (big change, separate PR) |
 | **D.1 Golden tests** | ✓ DONE | 5/5 | optimize_day snapshot |
 | **D.2 GitHub Actions CI** | ✓ DONE | — | runs on push/PR refactor-v2/dev/main |
 
 **Total passing: 38/38 testov** (33 schema + 5 golden)
+
+## ━━━ Architecture Refactor — KOMPLET (okrem C SQLite) ━━━
+
+**Čo zostáva:**
+  - **C.1-C.3** SQLite consolidation — livesim minutes + vdt_trades → SQLite tabuľky.
+    Veľká samostatná PR, vyžaduje migration scripts + careful testing.
+    Nie je blocker — môže byť robené postupne.
+
+**B.1 execute postup (keď budeš pripravený):**
+  1. `docker compose --profile dev down`  # zastav app
+  2. `python3 -m tools.migrate_to_sandbox --execute --backup`  # auto-backup + presun
+  3. Pridať `FTV_SANDBOX=1` do `docker-compose.yml` environment dev service
+  4. Update `profiles.py`, `plan_store.py`, `vdt_live_advisor.py` ďalšie miesta aby volali `core/paths.py` namiesto hardcoded paths (pôjde postupne, môže prebiehať pri budúcich Bug fixes)
+  5. `docker compose --profile dev up -d`  # spusti späť
+  6. Verify cez `tools.sanity_check`
 
 ---
 

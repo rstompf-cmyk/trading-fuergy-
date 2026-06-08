@@ -33,6 +33,11 @@ from .vdt import (
     should_log_vdt_for_profile,
     validate_paper_trade_row,
 )
+from .optimize import (
+    OptimizeResult,
+    REQUIRED_SCHEDULE_KEYS,
+    OPTIONAL_SCHEDULE_KEYS,
+)
 
 __all__ = [
     "ProfileConfig",
@@ -50,4 +55,7 @@ __all__ = [
     "ALLOWED_ACTIONS",
     "should_log_vdt_for_profile",
     "validate_paper_trade_row",
+    "OptimizeResult",
+    "REQUIRED_SCHEDULE_KEYS",
+    "OPTIONAL_SCHEDULE_KEYS",
 ]
