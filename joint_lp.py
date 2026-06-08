@@ -432,8 +432,15 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
                 # PV → batt: gated cez trade_batt + mults
                 ub = float(min(max(pv[t], 0), batt_slot_cap)) if trade_batt else 0.0
             elif g == EX_FTV:
-                # PV → grid: gated cez trade_ftv (PV→grid je nezávislé od batt mults)
-                ub = float(max(pv[t], 0)) if trade_ftv else 0.0
+                # Bug TT (2026-06-08): trade_ftv=false nesmie zakazat fyzicky export
+                # FTV do siete — to by spravilo z FTV peak-u curtail (= straty
+                # tisicov kWh/den voci baseline kde FTV ide pasivne do siete).
+                # Semantika trade_ftv je o EVIDENCII v 'obchod' aggregate (DAM
+                # nominacia user-a), nie o fyzickom obmedzeni toku. Revenue ide
+                # cez EX_DAM (do ktoreho EX_FTV decomposes), takze SVET vie ze
+                # passive feed-in je realny — len uzivatel to neuvadza ako svoj
+                # aktivny DAM obchod.
+                ub = float(max(pv[t], 0))
             elif g == DI_LOAD:
                 # batt → load: gated cez trade_batt + mults + block_planned_discharge
                 if not trade_batt or block_planned_discharge:
