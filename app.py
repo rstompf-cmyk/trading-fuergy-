@@ -5767,9 +5767,15 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     # Konsolidácia (2026-06-08): efekt sa všade ráta cez core.effect.compute_effect_totals.
     # Jediný zdroj pravdy pre DT/RT/VDT-arb/baseline/total.
     from core.effect import compute_effect_totals as _eff
+    # _active_profile nie je v scope _livesim_body — získaj cez profile_resolver
+    try:
+        from core.profile_resolver import get_active as _ga_eff
+        _active_profile_eff = _ga_eff()
+    except Exception:
+        _active_profile_eff = None
     if _agg_src is not None and not _agg_src.empty:
         try:
-            _t = _eff(_agg_src, profile=_active_profile, day=view_day)
+            _t = _eff(_agg_src, profile=_active_profile_eff, day=view_day)
             d_dt = _t["dt_eur"]; d_rt = _t["rt_eur"]
             # FTV: preferuj reálne meranie (realio overlay) pred plánom
             _ftv_col = ("ftv_min_real_kw"

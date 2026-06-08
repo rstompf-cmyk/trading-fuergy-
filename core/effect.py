@@ -70,7 +70,10 @@ def get_rt_eur_series(df: pd.DataFrame, *, warn_legacy: bool = False) -> pd.Seri
     do stdout ak `warn_legacy=True`.
     """
     col = resolve_rt_col(df)
-    s = pd.to_numeric(df.get(col, 0), errors="coerce").fillna(0.0)
+    if col in df.columns:
+        s = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    else:
+        s = pd.Series([0.0] * len(df), index=df.index)
     if col == "rt_rev_min" and warn_legacy:
         print("[core.effect] WARNING: rt_rev_realistic_min chyba v DataFrame, "
               "fallback na rt_rev_min (theoretical engine output, moze ukazovat "
@@ -121,13 +124,19 @@ def compute_effect_totals(df: pd.DataFrame,
         "rt_col_used":  str   (audit: "rt_rev_realistic_min" alebo "rt_rev_min"),
     }
     """
-    dt_eur = float(pd.to_numeric(df.get("dt_rev_min", 0), errors="coerce").fillna(0).sum())
+    # Pomocný helper: bezpečne načítaj stĺpec ako Series (vždy správna dĺžka).
+    # df.get(col, 0) vráti scalar ak stĺpec chýba → .fillna() padne. Treba Series.
+    def _col_or_zeros(col: str) -> pd.Series:
+        if col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce").fillna(0)
+        return pd.Series([0.0] * len(df), index=df.index)
+
+    dt_eur = float(_col_or_zeros("dt_rev_min").sum())
     rt_series = get_rt_eur_series(df, warn_legacy=False)
     rt_eur = float(rt_series.sum())
     vdt_series = get_vdt_arb_series(df, profile=profile, day=day)
     vdt_arb_eur = float(vdt_series.sum())
-    baseline_eur = float(pd.to_numeric(df.get("baseline_per_min_eur", 0),
-                                         errors="coerce").fillna(0).sum())
+    baseline_eur = float(_col_or_zeros("baseline_per_min_eur").sum())
     total_eur = dt_eur + rt_eur + vdt_arb_eur
     prinos_eur = total_eur - baseline_eur
     return {
