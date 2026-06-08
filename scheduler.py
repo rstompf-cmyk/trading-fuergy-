@@ -282,12 +282,28 @@ def job_vdt_advisor():
         _log("vdt_advisor", "žiadne profily v aktívnom trhu", level="warn")
         return
 
-    n_ok = 0; n_fail = 0
+    # Bug #605: Bug UU gate filter - preskoc profily s use_vdt:False.
+    # Inak scheduler spusti LP pre Simulacia_Coop / Trakany_real a vyhodi
+    # 'LP infeasible' warning v kazdom 5-min tiku.
+    try:
+        from core.schemas.vdt import should_log_vdt_for_profile as _gate
+    except Exception:
+        _gate = None
+
+    n_ok = 0; n_fail = 0; n_skipped = 0
     for prof in profs:
         prof_name = prof if isinstance(prof, str) else (
             prof.get("name") if isinstance(prof, dict) else None)
         if not prof_name:
             continue
+        # Bug UU: preskoc ak gate=False (use_vdt:False alebo bg_off bez VDT).
+        if _gate is not None:
+            try:
+                if not _gate(prof_name):
+                    n_skipped += 1
+                    continue
+            except Exception:
+                pass   # gate fail -> nech LP rozhodne
         # Defaults from profile (batt geometry, fees, ...)
         try:
             defaults = _arb.get_default_params_from_profile(profile=prof_name)
@@ -367,7 +383,8 @@ def job_vdt_advisor():
             _log("vdt_advisor", f"{prof_name}: exception · {e}", level="warn")
             n_fail += 1
 
-    _log("vdt_advisor", f"hotovo · {n_ok}/{len(profs)} OK · {n_fail} zlyhalo")
+    _log("vdt_advisor",
+         f"hotovo · {n_ok}/{len(profs)} OK · {n_fail} zlyhalo · {n_skipped} preskocene (use_vdt:False)")
 
 
 @_safe("joint_mpc_tick")

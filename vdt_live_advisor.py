@@ -510,7 +510,10 @@ def get_live_recommendation(*,
         if "infeasible" in err1.lower() or "HiGHS Status 8" in err1:
             try:
                 import vdt_optimizer as _opt
-                _opt2 = _opt.compute_optimal_trades(
+                # Bug #602: funkcia bola premenovana na optimize_vdt_day.
+                # compute_optimal_trades neexistuje -> AttributeError -> retry path
+                # vzdy zlyhal a infeasible LP s DAM commits sa nikdy nezachranil.
+                _opt2 = _opt.optimize_vdt_day(
                     snapshot=snapshot,
                     batt_kw=batt_kw, batt_kwh=batt_kwh,
                     eff_c=eff_c, eff_d=eff_d,
