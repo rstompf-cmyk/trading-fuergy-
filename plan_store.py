@@ -116,8 +116,19 @@ def resolve_profile(profile: Optional[str] = None) -> str:
 
 
 def _dir_for(profile: Optional[str] = None) -> str:
-    """Adresár pre plány daného profilu. 'default' = priamo root (legacy)."""
+    """Adresár pre plány daného profilu.
+
+    Fáza B.1: ak je FTV_SANDBOX=1, vráti `out/profiles/<name>/plans/`
+    namiesto `out/<market>/plans/<name>/`. Inak (default) → legacy.
+    """
     p = resolve_profile(profile)
+    # Fáza B.1: sandbox layout
+    try:
+        from core.paths import is_sandbox_mode, plans_dir as _pd
+        if is_sandbox_mode() and p != DEFAULT_PROFILE:
+            return _pd(p)
+    except Exception:
+        pass
     root = _dir_root()
     return root if p == DEFAULT_PROFILE else os.path.join(root, p)
 
@@ -308,6 +319,25 @@ def list_plans(kind: Optional[str] = None, profile: Optional[str] = None) -> Lis
 def list_profiles_with_plans() -> List[str]:
     """Vráti zoznam profilov ktoré majú nejaké plány (vrátane 'default' ak existujú legacy)."""
     out = set()
+    # Fáza B.1: sandbox layout — out/profiles/<name>/plans/*.json
+    try:
+        from core.paths import is_sandbox_mode
+        if is_sandbox_mode():
+            p_root = os.path.join("out", "profiles")
+            if not os.path.isdir(p_root):
+                return []
+            for name in os.listdir(p_root):
+                if name.startswith("_"):
+                    continue
+                plans_d = os.path.join(p_root, name, "plans")
+                if os.path.isdir(plans_d) and any(
+                    f.endswith(".json") for f in os.listdir(plans_d)
+                ):
+                    out.add(name)
+            return sorted(out)
+    except Exception:
+        pass
+    # Legacy layout
     _root = _dir_root()                                                # market-aware
     if not os.path.isdir(_root):
         return []

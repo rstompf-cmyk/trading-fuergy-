@@ -58,7 +58,18 @@ def _data_dir(market: Optional[str] = None) -> str:
         return "out"
 
 
-def _log_path(market: Optional[str] = None) -> str:
+def _log_path(market: Optional[str] = None, profile: Optional[str] = None) -> str:
+    """Cesta k auto_control_log.csv.
+
+    Fáza B.1: deleguje na core/paths.auto_control_log_path() pre dual-mode.
+    Legacy: out/<mk>/auto_control_log.csv (shared, filter by profile col)
+    Sandbox: out/profiles/<name>/auto_control_log.csv (per-profile)
+    """
+    try:
+        from core.paths import auto_control_log_path
+        return auto_control_log_path(profile, market)
+    except Exception:
+        pass
     return os.path.join(_data_dir(market), "auto_control_log.csv")
 
 
@@ -619,8 +630,12 @@ def _migrate_log_csv(path: str) -> None:
 
 
 def _append_log(setpoint_dict: Dict[str, Any]) -> None:
-    """Pripoji riadok do CSV log súboru pre aktívny trh."""
-    p = _log_path(setpoint_dict.get("market"))
+    """Pripoji riadok do CSV log súboru pre aktívny trh.
+
+    Fáza B.1: v sandbox móde použije per-profile path z setpoint_dict.profile.
+    """
+    p = _log_path(setpoint_dict.get("market"),
+                   setpoint_dict.get("profile"))
     os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
     _migrate_log_csv(p)
     file_exists = os.path.exists(p)
@@ -873,9 +888,14 @@ def log_vdt_extras_for_current_slot(profile: str) -> int:
 # Log reader
 # ---------------------------------------------------------------------------
 
-def read_log(market: Optional[str] = None, n: int = 100) -> List[Dict[str, Any]]:
-    """Vráti posledných n záznamov z auto_control_log.csv."""
-    p = _log_path(market)
+def read_log(market: Optional[str] = None, n: int = 100,
+              profile: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Vráti posledných n záznamov z auto_control_log.csv.
+
+    Fáza B.1: v sandbox móde s `profile` parametrom načíta per-profile log.
+    Legacy: zhromaždí všetky a vráti shared výsledok.
+    """
+    p = _log_path(market, profile)
     if not os.path.exists(p):
         return []
     rows = []

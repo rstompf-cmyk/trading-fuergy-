@@ -26,20 +26,21 @@ from typing import Dict, Any, Optional
 def cache_path(profile: Optional[str] = None) -> str:
     """Cesta k JSON cache pre posledný advisor result — PER-PROFILE.
 
-    Profile-aware aby každý profil mal vlastný cache:
-    - profile=None alebo prázdny → legacy shared cache 'vdt_live_plan.json'
-    - profile=<name>             → 'vdt_live_plan_<name>.json'
-
-    Tým sa zabezpečí že chPlan v /livesim pre profil Simulacia_Coop nemixoval
-    s plánom Trakany_real a vice versa.
+    Fáza B.1: deleguje na core/paths.vdt_advisor_cache_path() ktorá vie
+    obe — legacy aj sandbox layout cez FTV_SANDBOX env var.
     """
+    try:
+        from core.paths import vdt_advisor_cache_path
+        return vdt_advisor_cache_path(profile)
+    except Exception:
+        pass
+    # Legacy fallback (ak core/paths nedostupné)
     try:
         import market as _mk
         root = os.path.dirname(_mk.data_dir().rstrip("/").rstrip(os.sep)) or "out"
     except Exception:
         root = "out"
     if profile and profile != "default":
-        # Sanitizuj meno (žiadne /, .. ani \\)
         safe = "".join(c for c in str(profile) if c.isalnum() or c in "_-")
         if safe:
             return os.path.join(root, "sk", f"vdt_live_plan_{safe}.json")
@@ -701,8 +702,21 @@ def save_cache(result: Dict[str, Any]) -> None:
         print(f"[vdt_live_advisor.save_cache] zlyhalo: {e}")
 
 
-def paper_trades_csv_path() -> str:
-    """Cesta k paper trading log CSV."""
+def paper_trades_csv_path(profile: Optional[str] = None) -> str:
+    """Cesta k paper trading log CSV.
+
+    Fáza B.1: deleguje na core/paths.vdt_trades_csv_path() pre dual-mode
+    (legacy shared CSV vs sandbox per-profile CSV).
+
+    Legacy režim (FTV_SANDBOX nezapnutý) ignoruje `profile` parameter — vracia
+    shared CSV (filtrovanie podľa profile column).
+    """
+    try:
+        from core.paths import vdt_trades_csv_path
+        return vdt_trades_csv_path(profile)
+    except Exception:
+        pass
+    # Legacy fallback
     try:
         import market as _mk
         root = os.path.dirname(_mk.data_dir().rstrip("/").rstrip(os.sep)) or "out"
@@ -822,7 +836,8 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
         print(f"[append_extra_paper_trade] use_vdt gate zlyhal pre {profile}: {_e_gate}")
         # Pokračuj cautiously (legacy fallback)
     import csv
-    path = paper_trades_csv_path()
+    # Fáza B.1: sandbox vyžaduje profile (per-profile CSV); legacy ho ignoruje
+    path = paper_trades_csv_path(profile)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     _migrate_paper_trades_csv_add_profile(path)
     new_file = not os.path.exists(path)
@@ -936,7 +951,8 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
     soc = result.get("soc") or {}
     slot = str(cur.get("slot", "") or "")
     action = str(cur.get("action", "") or "")
-    path = paper_trades_csv_path()
+    # Fáza B.1: sandbox vyžaduje profile (per-profile CSV)
+    path = paper_trades_csv_path(profile)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     _migrate_paper_trades_csv_add_profile(path)
     new_file = not os.path.exists(path)

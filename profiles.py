@@ -139,6 +139,17 @@ def _safe_name(name: str) -> str:
 
 
 def _path(name: str) -> str:
+    """Cesta k profile config JSONu.
+
+    Fáza B.1: deleguje na core/paths ak je FTV_SANDBOX=1 (sandbox layout).
+    Inak (default) → legacy out/profiles/<name>.json.
+    """
+    try:
+        from core.paths import profile_config_path, is_sandbox_mode
+        if is_sandbox_mode():
+            return profile_config_path(_safe_name(name))
+    except Exception:
+        pass
     return os.path.join(_root(), f"{_safe_name(name)}.json")
 
 
@@ -158,10 +169,24 @@ def list_profiles() -> List[str]:
     _d = _root()
     if not os.path.isdir(_d):
         return []
+    # Fáza B.1: detekuj sandbox layout
+    try:
+        from core.paths import is_sandbox_mode
+        _sandbox = is_sandbox_mode()
+    except Exception:
+        _sandbox = False
     for fn in os.listdir(_d):
-        if fn.startswith("_") or not fn.endswith(".json"):
+        if fn.startswith("_"):
             continue
-        out.append(fn[:-5])                                  # odstránime .json
+        full = os.path.join(_d, fn)
+        if _sandbox:
+            # Sandbox: <name>/ je adresár obsahujúci config.json
+            if os.path.isdir(full) and os.path.isfile(os.path.join(full, "config.json")):
+                out.append(fn)
+        else:
+            # Legacy: <name>.json je súbor
+            if fn.endswith(".json") and os.path.isfile(full):
+                out.append(fn[:-5])
     return sorted(out)
 
 
@@ -173,6 +198,13 @@ def save_profile(name: str, data: Dict[str, Any]) -> str:
     default 'simulation'. Vracia cestu.
     """
     _ensure_dir()
+    # Fáza B.1: v sandbox móde vytvor profile sub-directory + plans/livesim/
+    try:
+        from core.paths import is_sandbox_mode, ensure_profile_dirs
+        if is_sandbox_mode():
+            ensure_profile_dirs(_safe_name(name))
+    except Exception:
+        pass
     p = _path(name)
     existing = {}
     if os.path.exists(p):
