@@ -6288,7 +6288,66 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"title='Pošle 96 setpointov pre vybraný deň priamo na Bender (s preview)'>"
                 f"📤 Export 15-min riadenia na Bender</a>"
             )
-        chRiadenie = (f"<h2>Riadenie batérie — predikcia (plán+RT) vs realita + SOC (deň {view_day}){_export_btn}</h2>"
+        # Bug SS (2026-06-08): pridať vizualizáciu AKTUÁLNEJ HODINY v grafe (žltý band)
+        # + display aktuálnej hodnoty batt výkonu + SOC v nadpise.
+        # Funguje IBA pre dnešný deň (view_day == dnes); pre historické dni žiadny highlight.
+        _now_idx = -1                 # index v Ld array pre aktuálnu minútu
+        _hour_start_idx = -1          # index začiatok aktuálnej hodiny
+        _hour_end_idx = -1            # index koniec aktuálnej hodiny
+        _now_batt_str = "—"
+        _now_soc_str = "—"
+        try:
+            _today_str = dt.date.today().isoformat()
+            if str(view_day) == _today_str:
+                _now_dt = dt.datetime.now()
+                _now_minute = _now_dt.hour * 60 + _now_dt.minute
+                # Hľadaj index v dview["time"] kde minute matchuje
+                _times = pd.to_datetime(dview["time"]).dt.hour * 60 + pd.to_datetime(dview["time"]).dt.minute
+                _matches = (_times <= _now_minute)
+                if _matches.any():
+                    _now_idx = int(_matches.cumsum().iloc[-1] - 1)
+                    # Hour boundaries
+                    _h_start = _now_dt.hour * 60
+                    _h_end = _h_start + 60
+                    _hs_mask = (_times <= _h_start)
+                    _he_mask = (_times <= _h_end)
+                    _hour_start_idx = int(_hs_mask.cumsum().iloc[-1] - 1) if _hs_mask.any() else 0
+                    _hour_end_idx = int(_he_mask.cumsum().iloc[-1] - 1) if _he_mask.any() else len(dview) - 1
+                    # Aktuálne hodnoty
+                    _row_now = dview.iloc[_now_idx]
+                    _batt_now = float(_act_per_min[_now_idx]) if _now_idx < len(_act_per_min) else 0.0
+                    _soc_now = float(_row_now.get("soc_pct", 0))
+                    _now_batt_str = f"{_batt_now:+.0f} kW"
+                    _now_soc_str = f"{_soc_now:.1f}%"
+        except Exception:
+            pass
+        # Banner s aktuálnou hodnotou pre dnešok
+        _now_banner = ""
+        if _now_idx >= 0:
+            _now_banner = (
+                f"<span style='display:inline-block;margin-left:14px;padding:6px 14px;"
+                f"background:#FFEB3B;border-radius:8px;font-size:14px;font-weight:600;"
+                f"color:#5D4037'>"
+                f"⏱ TERAZ {dt.datetime.now().strftime('%H:%M')}: "
+                f"<b style='color:#1B5E20'>{_now_batt_str}</b> · "
+                f"SOC <b style='color:#E65100'>{_now_soc_str}</b>"
+                f"</span>"
+            )
+        # JS plugin pre žltý band aktuálnej hodiny
+        _curhour_plugin = ""
+        if _hour_start_idx >= 0 and _hour_end_idx > _hour_start_idx:
+            _curhour_plugin = (
+                f"{{id:'currentHour',beforeDraw:(c)=>{{const xs=c.scales.x,a=c.chartArea;"
+                f"if(!xs||!a)return;const x1=xs.getPixelForValue({_hour_start_idx}),"
+                f"x2=xs.getPixelForValue({_hour_end_idx});c.ctx.save();"
+                f"c.ctx.fillStyle='rgba(255,235,59,0.18)';"
+                f"c.ctx.fillRect(x1,a.top,x2-x1,a.bottom-a.top);"
+                f"c.ctx.strokeStyle='rgba(245,127,23,0.55)';c.ctx.lineWidth=1.5;"
+                f"c.ctx.beginPath();c.ctx.moveTo(x1,a.top);c.ctx.lineTo(x1,a.bottom);"
+                f"c.ctx.moveTo(x2,a.top);c.ctx.lineTo(x2,a.bottom);c.ctx.stroke();"
+                f"c.ctx.restore();}}}}"
+            )
+        chRiadenie = (f"<h2>Riadenie batérie — predikcia (plán+RT) vs realita + SOC (deň {view_day}){_export_btn}{_now_banner}</h2>"
                 f"<div style='height:360px'><canvas id='chRi'></canvas></div>"
                 f"<script>new Chart(document.getElementById('chRi'),{{type:'line',data:{{labels:{Ld},datasets:["
                 f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
@@ -6299,7 +6358,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"{{label:'🔴 SOC REÁLNE MERANIE %',data:{SOC_REAL},borderColor:'#E65100',borderWidth:2.0,pointRadius:0,yAxisID:'y2',tension:.15}}"
                 f"]}},options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},"
                 f"elements:{{point:{{radius:0}}}},scales:{{y:{{title:{{display:true,text:'kW'}},grid:{{color:(c)=>c.tick.value===0?'#333':'#eee'}}}},"
-                f"y2:{{position:'right',min:0,max:100,grid:{{drawOnChartArea:false}},title:{{display:true,text:'SOC %'}}}}}}}}}});</script>")
+                f"y2:{{position:'right',min:0,max:100,grid:{{drawOnChartArea:false}},title:{{display:true,text:'SOC %'}}}}}}}}"
+                + (f",plugins:[{_curhour_plugin}]" if _curhour_plugin else "")
+                + f"}});</script>")
         # — Minútová realita FTV — priamo z trace (uložená v livesim.py ako ftv_min_real_kw)
         # Toto je TÁ ISTÁ krivka ktorú batéria naozaj použila v RT enginu.
         # Ak trace stĺpec nie je k dispozícii (starší CSV), vygeneruje sa on-the-fly.
