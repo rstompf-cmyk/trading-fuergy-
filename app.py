@@ -3647,7 +3647,9 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         _plan_b = pd.to_numeric(df.get("plan_batt_kw", pd.Series([0.0]*len(df))), errors="coerce").fillna(0).values
         _rt_d   = pd.to_numeric(df.get("rt_dir", pd.Series([0.0]*len(df))), errors="coerce").fillna(0).values
         _rt_p   = pd.to_numeric(df.get("rt_power_pct", pd.Series([0.0]*len(df))), errors="coerce").fillna(0).values
-        df["batt_kw_actual"]   = _plan_b + _rt_d * _rt_p / 100.0 * _bkw_max
+        _batt_raw = _plan_b + _rt_d * _rt_p / 100.0 * _bkw_max
+        # Bug #610 (Excel _agg): clip predikciu na fyzické limity batt (rovnako ako livesim.py)
+        df["batt_kw_actual"]   = np.clip(_batt_raw, -_bkw_max, +_bkw_max) if _bkw_max > 0 else _batt_raw
         df["batt_kwh_min"]     = df["batt_kw_actual"] / 60.0   # energia za minútu
         # ZCO (zúčtovacia cena odchýlky) — pre 15-min agregácie potrebujeme priemer
         df["zco_eur_min"]      = pd.to_numeric(df.get("zco_eur", pd.Series([np.nan]*len(df))), errors="coerce")
@@ -4293,7 +4295,9 @@ pip install reportlab matplotlib</code>
         _plan_b = pd.to_numeric(df.get("plan_batt_kw", pd.Series([0.0]*len(df))), errors="coerce").fillna(0).values
         _rt_d = pd.to_numeric(df.get("rt_dir", pd.Series([0.0]*len(df))), errors="coerce").fillna(0).values
         _rt_p = pd.to_numeric(df.get("rt_power_pct", pd.Series([0.0]*len(df))), errors="coerce").fillna(0).values
-        df["batt_kw_actual"] = _plan_b + _rt_d * _rt_p / 100.0 * _bkw_max
+        _batt_raw2 = _plan_b + _rt_d * _rt_p / 100.0 * _bkw_max
+        # Bug #610 (Excel _agg, second): clip predikciu na fyzické limity batt
+        df["batt_kw_actual"] = np.clip(_batt_raw2, -_bkw_max, +_bkw_max) if _bkw_max > 0 else _batt_raw2
         df["batt_kwh_min"] = df["batt_kw_actual"] / 60.0
         df["month"] = pd.to_datetime(df["time"]).dt.strftime("%Y-%m")
 
