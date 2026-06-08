@@ -303,6 +303,45 @@ def load_profile(name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+# ── Fáza A.1: Pydantic ProfileConfig API ────────────────────────────────────
+# Validated načítanie + zápis cez core.schemas.ProfileConfig. Tieto funkcie
+# NEnahrádzajú load_profile/save_profile (back-compat) — sú DOPLNKOVÉ pre
+# kód ktorý chce type-safe access (Bug UU, TT, 441 by sa nedali vyrobiť).
+
+def load_profile_validated(name: str):
+    """Vráti ProfileConfig (Pydantic) alebo None ak neexistuje/poškodený.
+
+    Validuje schemu + auto-fill defaults pre chýbajúce polia. Pri parse error
+    zachová pôvodný dict cez load_profile() — len logne warning.
+    """
+    raw = load_profile(name)
+    if raw is None:
+        return None
+    try:
+        from core.schemas import ProfileConfig
+        # Pred validation zabezpečíme name field (load_profile niekedy chýba meno
+        # v starých JSON-och — bere ho z filename)
+        if not raw.get("name"):
+            raw["name"] = _safe_name(name)
+        return ProfileConfig.model_validate(raw)
+    except Exception as e:
+        print(f"[profiles.load_profile_validated {name}] validation chyba: {e}")
+        return None
+
+
+def save_profile_validated(cfg) -> str:
+    """Uloží ProfileConfig (Pydantic) cez existujúce save_profile API.
+
+    Zápis stále ide cez save_profile() (zachová DB + JSON dual storage). Tu sa
+    iba validuje, že vstup je validný ProfileConfig — a vyserialize do dict.
+    """
+    from core.schemas import ProfileConfig
+    if not isinstance(cfg, ProfileConfig):
+        raise TypeError(f"save_profile_validated potrebuje ProfileConfig, dostal {type(cfg)}")
+    data = cfg.model_dump(exclude_none=False)
+    return save_profile(cfg.name, data)
+
+
 def delete_profile(name: str) -> bool:
     """Zmaže profile (DB aj JSON). True ak existoval aspoň v jednom úložisku."""
     safe = _safe_name(name)
