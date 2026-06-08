@@ -1001,7 +1001,20 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         _rt_dir_arr = pd.to_numeric(tr.get("rt_dir", 0), errors="coerce").fillna(0).values
                         _rt_pct_arr = pd.to_numeric(tr.get("rt_power_pct", 0), errors="coerce").fillna(0).values
                         _bkw_max_rt = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
-                        _batt_p = _batt_p_d1 + _rt_dir_arr * _rt_pct_arr / 100.0 * _bkw_max_rt
+                        _batt_p_raw = _batt_p_d1 + _rt_dir_arr * _rt_pct_arr / 100.0 * _bkw_max_rt
+                        # Bug #610 (bezpečnostný most do #611-#613): RT engine môže
+                        # generovať rt_power_pct > 100% (proporcionálna reakcia na
+                        # sys_MW), čo by viedlo k _batt_p > batt_kw_max (napr. -15000 kW
+                        # na 6000 kW batt). Fyzika batérie to ohraničí v batt_real cez
+                        # _avail_for_chg/_dis, ale GRAF a DEV kalk by ukázali nereálne
+                        # hodnoty. Clip ich na fyzické limity batérie ±batt_kw_max.
+                        # Po nasadení capacity ledger (#611-#613) bude RT engine
+                        # vystavený LEN voľnej kapacite (D-1 plán + VDT už zarezervujú
+                        # svoju časť) a tento clip sa odstráni.
+                        if _bkw_max_rt > 0:
+                            _batt_p = np.clip(_batt_p_raw, -_bkw_max_rt, +_bkw_max_rt)
+                        else:
+                            _batt_p = _batt_p_raw
                     except Exception:
                         _batt_p = _batt_p_d1
                     # Rozdelíme plán na nabíjanie (≤0) a vybíjanie (≥0)
