@@ -8269,17 +8269,24 @@ def vdt_live_advisor_page(
     except Exception:
         active_profile = profile or "default"
 
-    # Defaults z profilu (s explicit name)
+    # Bug OO (2026-06-08): Live advisor sa MUSI riadit profilom (sablonou) —
+    # ziadne user-editovatelne overridy v form-e. Predtym form mal SOC override
+    # + Batt kW + Batt kWh + eff + Fee + Cyklus + Min spread + SOC koniec atd.
+    # User mohol zmenit hodnoty pre tento request → drift voci D-1 planu, voci
+    # auto_control schedulerom (ktore citaju z profile) a voci /vdt/d1.
+    # FIX: vsetky params predat None → vdt_live_advisor.get_live_recommendation
+    # ich nacita z profile.plan (Bug P). SOC vzdy z compute_current_state.
+    # URL backwards-compat: query params soc_override/batt_kw/... su ignorovane.
     defaults = _arb.get_default_params_from_profile(profile=active_profile)
-    if batt_kw <= 0:    batt_kw = defaults["batt_kw"]
-    if batt_kwh <= 0:   batt_kwh = defaults["batt_kwh"]
-    if eff_c <= 0:      eff_c = defaults["eff_c"]
-    if eff_d <= 0:      eff_d = defaults["eff_d"]
-    if grid_fee <= 0:   grid_fee = defaults["grid_fee"]
-    if cycle_cost <= 0: cycle_cost = defaults["cycle_cost"]
-    if min_spread <= 0: min_spread = defaults["min_spread"]
-
-    soc_arg = None if soc_override < 0 else float(soc_override)
+    batt_kw = defaults["batt_kw"]
+    batt_kwh = defaults["batt_kwh"]
+    eff_c = defaults["eff_c"]
+    eff_d = defaults["eff_d"]
+    grid_fee = defaults["grid_fee"]
+    cycle_cost = defaults["cycle_cost"]
+    min_spread = defaults["min_spread"]
+    # SOC vzdy z vdt_state.compute_current_state (Bug O single source of truth)
+    soc_arg = None
 
     # Posledný cached run (zo scheduler-a) — pre info banner
     cached = None
@@ -8303,39 +8310,49 @@ def vdt_live_advisor_page(
         f"<b>Read-only — odporúčanie, žiadne auto-execute do Bender.</b></p>"
     )
 
-    # Form
-    form = (
-        f"<form method='get' action='/vdt/live_advisor' "
-        f"style='background:#eef3f9;padding:10px;border-radius:8px;margin:8px 0;"
-        f"display:grid;grid-template-columns:repeat(5,1fr);gap:8px;font-size:12px'>"
-        f"<label>SOC override % (-1 = z Realio): "
-        f"<input type='number' name='soc_override' value='{soc_override}' step='1' min='-1' max='100' "
-        f"style='width:70px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<label>Batt kW: <input type='number' name='batt_kw' value='{batt_kw}' step='10' "
-        f"style='width:70px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<label>Batt kWh: <input type='number' name='batt_kwh' value='{batt_kwh}' step='10' "
-        f"style='width:70px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<label>η nab: <input type='number' name='eff_c' value='{eff_c}' step='0.01' "
-        f"style='width:55px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<label>η vyb: <input type='number' name='eff_d' value='{eff_d}' step='0.01' "
-        f"style='width:55px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<label>Fee €/MWh: <input type='number' name='grid_fee' value='{grid_fee}' step='1' "
-        f"style='width:55px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<label>Cyklus €/MWh: <input type='number' name='cycle_cost' value='{cycle_cost}' step='0.5' "
-        f"style='width:55px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<label>Min spread: <input type='number' name='min_spread' value='{min_spread}' step='1' "
-        f"style='width:55px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<label>Max cyklov: <input type='number' name='max_cycles' value='{max_cycles}' step='0.5' "
-        f"style='width:55px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<label>SOC koniec ≥ %: <input type='number' name='soc_end_min_pct' value='{soc_end_min_pct}' step='5' "
-        f"style='width:55px;padding:3px;border:1px solid #ccc;border-radius:4px'></label>"
-        f"<input type='hidden' name='profile' value='{_html.escape(active_profile)}'>"
-        f"<button type='submit' style='grid-column:span 5;background:#1F4E78;color:#fff;"
-        f"border:0;padding:8px;border-radius:6px;cursor:pointer;font-weight:600'>"
-        f"🔄 Prepočítať teraz</button>"
-        f"</form>"
+    # Bug OO: read-only info box namiesto editovatelneho formulara.
+    # Vsetky params su z profilu (sablona) — single source of truth.
+    # Tlacidlo iba refreshne (POST nepotreba, GET stranku).
+    try:
+        _max_cyc_disp = float((_arb.get_default_params_from_profile(
+            profile=active_profile) or {}).get("max_cycles", 3.0))
+    except Exception:
+        _max_cyc_disp = 3.0
+    _params_box = (
+        f"<div style='background:#eef3f9;padding:12px 16px;border-radius:8px;"
+        f"margin:8px 0;border-left:4px solid #1F4E78;font-size:13px'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:center;"
+        f"margin-bottom:8px;flex-wrap:wrap;gap:8px'>"
+        f"<b style='color:#1F4E78'>📋 Parametre z profilu (read-only)</b>"
+        f"<div style='display:flex;gap:8px;align-items:center'>"
+        f"<a href='/profiles/edit?name={_html.escape(active_profile)}' "
+        f"style='background:#5E35B1;color:#fff;padding:5px 11px;border-radius:6px;"
+        f"text-decoration:none;font-size:12px;font-weight:600'>✏ Upraviť profil</a>"
+        f"<a href='/vdt/live_advisor?profile={_html.escape(active_profile)}' "
+        f"style='background:#1F4E78;color:#fff;padding:5px 11px;border-radius:6px;"
+        f"text-decoration:none;font-size:12px;font-weight:600'>🔄 Prepočítať teraz</a>"
+        f"</div></div>"
+        f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));"
+        f"gap:6px;font-size:12px;color:#33506e'>"
+        f"<span><b>Batt:</b> {batt_kw:.0f} kW / {batt_kwh:.0f} kWh</span>"
+        f"<span><b>η:</b> nab {eff_c:.2f} · vyb {eff_d:.2f}</span>"
+        f"<span><b>Fee:</b> {grid_fee:.1f} €/MWh</span>"
+        f"<span><b>Cyklus:</b> {cycle_cost:.1f} €/MWh</span>"
+        f"<span><b>Min spread:</b> {min_spread:.1f} €/MWh</span>"
+        f"<span><b>Max cyklov:</b> {_max_cyc_disp:.1f}/deň</span>"
+        f"<span><b>SOC rozsah:</b> {soc_min_pct:.0f}–{soc_max_pct:.0f}%</span>"
+        f"<span><b>SOC koniec ≥:</b> {soc_end_min_pct:.0f}%</span>"
+        f"</div>"
+        f"<div style='font-size:11px;color:#888;margin-top:6px;line-height:1.4'>"
+        f"SOC pre LP sa berie z <code>vdt_state.compute_current_state</code> "
+        f"(kumulatívna integrácia od 00:00 + VDT realized). "
+        f"Pre zmenu konštánt edituj profil — všetky stránky (D-1, Live advisor, MPC, "
+        f"auto_control) ich potom použijú konzistentne.</div>"
+        f"</div>"
     )
-    body += form
+    body += _params_box
+    # Update overriding max_cycles z profile (predtym z URL param)
+    max_cycles = _max_cyc_disp
 
     # ── ZCO predikcia diagnostika (vždy zobraziť) ────────────────────────
     try:
