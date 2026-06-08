@@ -1,14 +1,14 @@
-# Trading Fuergy — Docker Compose pre Windows produkciu
+﻿# Trading Fuergy â€” Docker Compose pre Windows produkciu
 #
-# Použitie:
-#   docker compose up -d           # spustí v pozadí
+# PouĹľitie:
+#   docker compose up -d           # spustĂ­ v pozadĂ­
 #   docker compose logs -f         # sleduje logy
-#   docker compose down            # zastaví + odstráni container (dáta v ./data zostanú)
+#   docker compose down            # zastavĂ­ + odstrĂˇni container (dĂˇta v ./data zostanĂş)
 #   docker compose pull && docker compose up -d --build   # update po git pull
 #
-# Perzistentné dáta sú v ./data/ na hostiteľovi — backupy treba robiť tam.
-# Network mode: bridge (default) — container má prístup k host LAN cez NAT.
-# Bender (10.200.136.21) + historian (192.168.34.31) sú dostupné rovnako ako z hostiteľa.
+# PerzistentnĂ© dĂˇta sĂş v ./data/ na hostiteÄľovi â€” backupy treba robiĹĄ tam.
+# Network mode: bridge (default) â€” container mĂˇ prĂ­stup k host LAN cez NAT.
+# Bender (10.200.136.21) + historian (192.168.34.31) sĂş dostupnĂ© rovnako ako z hostiteÄľa.
 
 services:
   trading-fuergy:
@@ -19,46 +19,48 @@ services:
     container_name: trading-fuergy
     restart: unless-stopped
 
-    # Port mapping — host:container. Zmena hostiteľského portu v .env (DOCKER_PORT).
+    # Port mapping â€” host:container. Zmena hostiteÄľskĂ©ho portu v .env (DOCKER_PORT).
     ports:
       - "${DOCKER_PORT:-8000}:8000"
 
-    # Bind mounty — všetky dáta na hostiteľovi, container je stateless.
-    # Pri update appky (git pull + rebuild) sa DB, plány, profily neztratia.
+    # Bind mounty â€” vĹˇetky dĂˇta na hostiteÄľovi, container je stateless.
+    # Pri update appky (git pull + rebuild) sa DB, plĂˇny, profily neztratia.
     volumes:
-      # SQLite databáza (auth users, profily, plány, vdt trades, audit log)
+      # SQLite databĂˇza (auth users, profily, plĂˇny, vdt trades, audit log)
       - ./data/db:/app/db/data
-      # Výstupné dáta: livesim CSV, plan_store, plan_overrides, load_profile,
+      # VĂ˝stupnĂ© dĂˇta: livesim CSV, plan_store, plan_overrides, load_profile,
       # ftv_scenarios, vdt_paper_trades, auto_control_log, realio_db.sqlite,
       # cache (OTE, PVF), historian CSV
       - ./data/out:/app/out
-      # OKTE mTLS certifikáty (pre SOAP IdmOrderBook)
+      # OKTE mTLS certifikĂˇty (pre SOAP IdmOrderBook)
       - ./data/okte_credentials:/app/okte_credentials
       # Cookies pre Bender / SEPS / historian (auto-refresh cez Playwright)
       - ./data/realio_cookies.json:/app/realio_cookies.json
       - ./data/seps_cookies.json:/app/seps_cookies.json
       - ./data/historian_cookies.json:/app/historian_cookies.json
 
-    # Credentials a config sa načítajú z .env (vedľa docker-compose.yml).
+    # Credentials a config sa naÄŤĂ­tajĂş z .env (vedÄľa docker-compose.yml).
     env_file:
       - ./.env
 
-    # Defaultné env vars — môžu byť prepísané v .env
+    # DefaultnĂ© env vars â€” mĂ´Ĺľu byĹĄ prepĂ­sanĂ© v .env
     environment:
-      # Timezone — bez toho container beží v UTC a všetky timestampy/grafy
-      # sú posunuté o 1-2h voči lokálnemu času Windows hosta.
+      # Timezone â€” bez toho container beĹľĂ­ v UTC a vĹˇetky timestampy/grafy
+      # sĂş posunutĂ© o 1-2h voÄŤi lokĂˇlnemu ÄŤasu Windows hosta.
       TZ: "Europe/Bratislava"
       USE_DB: "1"
       AUTH_REQUIRED: "1"
       APP_HOST: "0.0.0.0"
       APP_PORT: "8000"
-      # PORT — používa core/state.py pre per-port state isolation
+      # PORT â€” pouĹľĂ­va core/state.py pre per-port state isolation
       PORT: "8000"
-      # Vypnúť background úlohy pri prvom spustení (kým neoveríš že appka beží)
-      # Po prvom úspešnom štarte odkomentuj na produkčné fungovanie:
+      # Fáza B.1: sandbox layout — per-profile súbory v out/profiles/<name>/
+      FTV_SANDBOX: "1"
+      # VypnĂşĹĄ background Ăşlohy pri prvom spustenĂ­ (kĂ˝m neoverĂ­Ĺˇ Ĺľe appka beĹľĂ­)
+      # Po prvom ĂşspeĹˇnom Ĺˇtarte odkomentuj na produkÄŤnĂ© fungovanie:
       # NO_BACKFILL: "1"
 
-    # Health check — Docker bude sledovať že /me odpovedá
+    # Health check â€” Docker bude sledovaĹĄ Ĺľe /me odpovedĂˇ
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/me"]
       interval: 30s
@@ -74,7 +76,7 @@ services:
         max-file: "5"
 
   # ===========================================================================
-  # DEV environment — paralelne s prod, port 8001, samostatne data-dev/
+  # DEV environment â€” paralelne s prod, port 8001, samostatne data-dev/
   # ---------------------------------------------------------------------------
   # Zdielany image build, ale samostatne data + DB. Pri vyvoji:
   #   git checkout dev
@@ -93,7 +95,7 @@ services:
     ports:
       - "${DEV_PORT:-8001}:8000"
 
-    # Samostatne bind mounty — dev DB/plany/cookies nezdielaju s prod
+    # Samostatne bind mounty â€” dev DB/plany/cookies nezdielaju s prod
     volumes:
       - ./data-dev/db:/app/db/data
       - ./data-dev/out:/app/out
@@ -101,14 +103,14 @@ services:
       - ./data-dev/realio_cookies.json:/app/realio_cookies.json
       - ./data-dev/seps_cookies.json:/app/seps_cookies.json
       - ./data-dev/historian_cookies.json:/app/historian_cookies.json
-      # Dev only — mount tests/ & tools/ ako read-only z hostiteľa.
-      # V .dockerignore sú vylúčené pre prod image (zbytočná veľkosť),
-      # ale v dev ich potrebujeme spustiť (pytest, smoke tests, CLI tools).
-      # Žiadny rebuild netreba — git pull stačí, mount sleduje host disk.
+      # Dev only â€” mount tests/ & tools/ ako read-only z hostiteÄľa.
+      # V .dockerignore sĂş vylĂşÄŤenĂ© pre prod image (zbytoÄŤnĂˇ veÄľkosĹĄ),
+      # ale v dev ich potrebujeme spustiĹĄ (pytest, smoke tests, CLI tools).
+      # Ĺ˝iadny rebuild netreba â€” git pull staÄŤĂ­, mount sleduje host disk.
       - ./tests:/app/tests:ro
       - ./tools:/app/tools:ro
-      # core/ bind mount — aby zmeny v core/paths.py, core/schemas/, core/audit_log.py
-      # neboli vždy potrebné rebuildovať. Read-only — žiadne modifikácie z containeru.
+      # core/ bind mount â€” aby zmeny v core/paths.py, core/schemas/, core/audit_log.py
+      # neboli vĹľdy potrebnĂ© rebuildovaĹĄ. Read-only â€” Ĺľiadne modifikĂˇcie z containeru.
       - ./core:/app/core:ro
 
     env_file:
