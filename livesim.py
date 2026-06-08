@@ -986,7 +986,20 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                         else float(getattr(cfg, "grid_kw_import", getattr(cfg, "grid_kw", 1e9))))
                     _ftv_r = np.asarray(tr["ftv_min_real_kw"].values, float)
                     _load_r = np.asarray(tr["load_min_real_kw"].values, float)
-                    _batt_p = np.asarray(tr["plan_batt_kw"].values, float)        # kW (+= vybíja, −= nabíja)
+                    # Bug #607: plan_batt_kw je iba D-1 plán. RT engine zasahuje cez
+                    # rt_dir × rt_power_pct, čo D-1 plán nezachytáva. Pre realistic
+                    # dev kalkuláciu musíme použiť RT-finalný batt výkon (rovnaký
+                    # vzorec ako app.py:4277 batt_kw_actual). Bez toho je batt_real=0
+                    # vždy keď D-1 bol idle a RT engine vykonal arbitráž (sys_MW signál),
+                    # napr. nabíjanie -6000 kW v slot kde plan_batt_kw=0.
+                    _batt_p_d1 = np.asarray(tr["plan_batt_kw"].values, float)     # kW (+= vybíja, −= nabíja)
+                    try:
+                        _rt_dir_arr = pd.to_numeric(tr.get("rt_dir", 0), errors="coerce").fillna(0).values
+                        _rt_pct_arr = pd.to_numeric(tr.get("rt_power_pct", 0), errors="coerce").fillna(0).values
+                        _bkw_max_rt = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
+                        _batt_p = _batt_p_d1 + _rt_dir_arr * _rt_pct_arr / 100.0 * _bkw_max_rt
+                    except Exception:
+                        _batt_p = _batt_p_d1
                     # Rozdelíme plán na nabíjanie (≤0) a vybíjanie (≥0)
                     _plan_chg = np.maximum(-_batt_p, 0.0)                          # kW nabíjanie
                     _plan_dis = np.maximum(_batt_p, 0.0)                           # kW vybíjanie
