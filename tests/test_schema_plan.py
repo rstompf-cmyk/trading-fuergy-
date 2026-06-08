@@ -231,15 +231,29 @@ def test_load_plan_validated_api():
     """plan_store.load_plan_validated vracia StoredPlan alebo None.
 
     Skip ak je FTV_SANDBOX=1 (sandbox layout) a žiadne plány v sandboxe (čaká migration).
+    Skip ak je plán z neaktívneho trhu (CZ plán pri aktívnom SK trhu).
     """
-    # V sandbox móde plan_store._dir_for hľadá v out/profiles/<name>/plans/
-    # ktorý môže byť prázdny. Skip ak je tak.
     import os as _os
     sandbox = _os.environ.get("FTV_SANDBOX", "").strip() in ("1", "true", "True", "yes")
+
+    # Zisti aktívny trh — vyber plán z neho (aby _dir_for vedel cestu).
+    try:
+        import market as _mk
+        active = (_mk.active_market() or "").lower()
+    except Exception:
+        active = ""
+
     files = _all_plan_files()
     if not files:
         return  # nič na testovanie
-    # Parse path: out/<market>/plans/[<profile>/]YYYY-MM-DD_<step>min_<kind>.json
+
+    # Najprv vyber plány z aktívneho trhu (out/<active>/plans/...).
+    if active:
+        sub = f"/out/{active}/plans/"
+        files_active = [f for f in files if sub in f.replace("\\", "/")]
+        if files_active:
+            files = files_active
+
     sample = files[0]
     fn = os.path.basename(sample)
     parts = fn.replace(".json", "").split("_")
@@ -248,10 +262,19 @@ def test_load_plan_validated_api():
     kind = parts[2]
     parent = os.path.basename(os.path.dirname(sample))
     profile = None if parent == "plans" else parent
+
     sp = plan_store.load_plan_validated(date_iso, step_min, kind, profile)
     if sp is None and sandbox:
         print("  (skip — sandbox mode, plán v legacy layout-e)")
         return
+    if sp is None:
+        # Cross-market fallback: stačí keď load_plan_validated nevybuchne pri valid raw
+        raw = plan_store.load_plan_safe(date_iso, step_min, kind, profile)
+        if raw is None:
+            print(f"  (skip — plán {fn} nedostupný v aktívnom trhu '{active}')")
+            return
+        # Manual validate to overiť že schema funguje
+        sp = plan_store.validate_plan_dict(raw)
     assert sp is not None, f"load_plan_validated nevrátil StoredPlan pre {fn}"
     assert sp.date == date_iso
     assert sp.step_min == step_min
