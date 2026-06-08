@@ -766,6 +766,23 @@ def log_vdt_extras_for_current_slot(profile: str) -> int:
     Vracia počet zaolgovaných záznamov.
     """
     n = 0
+    # Bug UU (2026-06-08): GATE na use_vdt:false v profile.plan.joint_lp.
+    # Ak má profile use_vdt=False (= užívateľ nechce VDT obchodovanie), NESMIEME
+    # logovať VDT extras trades. Predtým sa logovali aj pre Simulacia_Coop (kde
+    # joint_lp.use_vdt=false) → tieto fake VDT trades sa potom skreslili plan_batt_kw
+    # cez Bug V/X aggregát → /livesim realita úplne diverged voči plánu.
+    try:
+        import profiles as _pr_uu
+        _prof_uu = _pr_uu.load_profile(profile) or {}
+        _plan_uu = _prof_uu.get("plan") or {}
+        _jlp_uu = _plan_uu.get("joint_lp") or {}
+        _use_vdt = _jlp_uu.get("use_vdt", True)
+        if _use_vdt is False:
+            # NEHLÁSIŤ ako warning každú minútu — log iba občas
+            return 0
+    except Exception as _e_uu:
+        print(f"[auto_control.vdt_extras] {profile}: use_vdt check zlyhal: {_e_uu}")
+        # Bezpečnejšie pokračovať (legacy profily bez joint_lp.use_vdt)
     # Bug O4: SAFETY CHECK pred logovaním VDT extras trades — ak vdt_state hovorí
     # že chýbajú dáta, VDT advisor cache je nedôveryhodná → preskočiť.
     try:
