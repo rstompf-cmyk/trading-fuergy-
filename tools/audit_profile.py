@@ -91,21 +91,26 @@ def _audit_config(name: str) -> Dict[str, Any]:
 
 
 def _audit_plans(name: str) -> Dict[str, Any]:
-    """Spočíta plány v plan_store + validuje."""
+    """Spočíta plány v plan_store + validuje.
+
+    Sandbox-aware: cez core.paths.plans_dir() vie obe — legacy aj sandbox.
+    """
     from core.schemas import StoredPlan
     out: Dict[str, Any] = {"total": 0, "by_kind": {}, "invalid": []}
     try:
         import plan_store
-        # market-aware root
+        # Fáza B.1: deleguj na core.paths (vie sandbox aj legacy)
         try:
-            import market as _mk
-            root = _mk.data_dir()
+            from core.paths import plans_dir
+            plan_dir = plans_dir(name)
         except Exception:
-            root = "out/cz"
-        plan_dir = os.path.join(root, "plans", name)
-        if not os.path.isdir(plan_dir):
-            # legacy default v root-e
-            plan_dir = os.path.join(root, "plans")
+            # Fallback na legacy
+            try:
+                import market as _mk
+                root = _mk.data_dir()
+            except Exception:
+                root = "out/cz"
+            plan_dir = os.path.join(root, "plans", name)
         files = []
         if os.path.isdir(plan_dir):
             files = [f for f in glob.glob(os.path.join(plan_dir, "*.json"))
@@ -177,23 +182,35 @@ def _audit_livesim() -> Dict[str, Any]:
 
 
 def _audit_vdt_trades(name: str) -> Dict[str, Any]:
-    """Spočíta VDT paper trades pre tento profil + validuje."""
+    """Spočíta VDT paper trades pre tento profil + validuje.
+
+    Sandbox-aware: deleguje na core.paths.vdt_trades_csv_path().
+    """
     from core.schemas.vdt import VDTTrade, should_log_vdt_for_profile
     out: Dict[str, Any] = {"total": 0, "valid": 0, "invalid": 0, "by_action": {}}
+    # Fáza B.1: cez core.paths (sandbox: per-profile CSV, legacy: shared)
     try:
-        import market as _mk
-        root = os.path.dirname(_mk.data_dir().rstrip("/").rstrip(os.sep)) or "out"
+        from core.paths import vdt_trades_csv_path
+        csv_path = vdt_trades_csv_path(name)
     except Exception:
-        root = "out"
-    csv_path = os.path.join(root, "sk", "vdt_paper_trades.csv")
+        try:
+            import market as _mk
+            root = os.path.dirname(_mk.data_dir().rstrip("/").rstrip(os.sep)) or "out"
+        except Exception:
+            root = "out"
+        csv_path = os.path.join(root, "sk", "vdt_paper_trades.csv")
     out["csv_exists"] = os.path.exists(csv_path)
+    out["csv_path"] = csv_path
     out["gate_allows"] = should_log_vdt_for_profile(name)
     if not out["csv_exists"]:
         return out
     try:
         with open(csv_path, "r", encoding="utf-8") as f:
             for row in csv.DictReader(f):
-                if (row.get("profile") or "") != name:
+                # V sandbox móde CSV obsahuje IBA tento profile (žiadny filter potrebný).
+                # V legacy CSV je shared → filtruj.
+                row_profile = (row.get("profile") or "")
+                if row_profile and row_profile != name:
                     continue
                 out["total"] += 1
                 try:
@@ -237,9 +254,13 @@ def _audit_caches(name: str) -> Dict[str, Any]:
 
 
 def _audit_auto_control(name: str) -> Dict[str, Any]:
-    """auto_control_log.csv — počty eventov pre tento profil za posledných 24h."""
+    """auto_control_log.csv — počty eventov pre tento profil za posledných 24h.
+
+    Sandbox-aware: deleguje na core.paths.auto_control_log_path().
+    """
     out: Dict[str, Any] = {"enabled": False, "events_24h": 0, "events_7d": 0,
                             "last_event": None}
+    # auto_control_profiles.json ostáva v <market>/ (shared config — všetky profily)
     try:
         import market as _mk
         root = os.path.dirname(_mk.data_dir().rstrip("/").rstrip(os.sep)) or "out"
@@ -253,7 +274,13 @@ def _audit_auto_control(name: str) -> Dict[str, Any]:
             out["enabled"] = name in (cfg.get("enabled") or [])
         except Exception:
             pass
-    log_path = os.path.join(root, "sk", "auto_control_log.csv")
+    # Log path: sandbox per-profile, legacy shared
+    try:
+        from core.paths import auto_control_log_path
+        log_path = auto_control_log_path(name)
+    except Exception:
+        log_path = os.path.join(root, "sk", "auto_control_log.csv")
+    out["log_path"] = log_path
     if not os.path.exists(log_path):
         return out
     try:
@@ -263,7 +290,10 @@ def _audit_auto_control(name: str) -> Dict[str, Any]:
         last_ts = None
         with open(log_path) as f:
             for row in csv.DictReader(f):
-                if (row.get("profile") or "") != name:
+                # V sandbox móde CSV obsahuje iba tento profile (žiadny filter),
+                # v legacy filter zachytí.
+                row_profile = (row.get("profile") or "")
+                if row_profile and row_profile != name:
                     continue
                 ts_raw = row.get("ts") or ""
                 try:
