@@ -101,6 +101,12 @@ services:
       - ./data-dev/realio_cookies.json:/app/realio_cookies.json
       - ./data-dev/seps_cookies.json:/app/seps_cookies.json
       - ./data-dev/historian_cookies.json:/app/historian_cookies.json
+      # Dev only — mount tests/ & tools/ ako read-only z hostiteľa.
+      # V .dockerignore sú vylúčené pre prod image (zbytočná veľkosť),
+      # ale v dev ich potrebujeme spustiť (pytest, smoke tests, CLI tools).
+      # Žiadny rebuild netreba — git pull stačí, mount sleduje host disk.
+      - ./tests:/app/tests:ro
+      - ./tools:/app/tools:ro
 
     env_file:
       - ./.env
