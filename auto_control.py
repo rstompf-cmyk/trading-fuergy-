@@ -414,6 +414,37 @@ def compute_setpoint_for_now(profile: Optional[str] = None,
             setpoint_kw = max(-batt_kw_max, min(batt_kw_max, setpoint_kw))
             clipped = True
 
+    # Bug #637 (2026-06-09): SOC-use audit pred odoslaním setpointu do batt.
+    # Ak by setpoint spôsobil SOC violation v ktoromkoľvek budúcom zazmluvnenom
+    # slote → downscale na max dovolené alebo reject (= idle).
+    soc_audit_decision = "accept"
+    soc_audit_reason = ""
+    if setpoint_kw is not None and abs(setpoint_kw) > 1.0:
+        try:
+            from core.soc_use_audit import audit_action as _soc_audit_ac
+            _step_min_ac = int(plan.get("step_min", 15) or 15)
+            _dt_h_ac = max(_step_min_ac, 1) / 60.0
+            _direction_ac = "discharge" if setpoint_kw > 0 else "charge"
+            _kwh_ac = abs(float(setpoint_kw)) * _dt_h_ac
+            _today_ac = now.date().isoformat()
+            _sa = _soc_audit_ac(prof, _today_ac, slot_idx, _direction_ac,
+                                  _kwh_ac, source="auto_control")
+            soc_audit_decision = _sa["decision"]
+            soc_audit_reason = _sa.get("reason", "")
+            if _sa["decision"] == "reject":
+                print(f"[auto_control #637] REJECT {prof} slot={slot_label} "
+                      f"{_direction_ac}: {soc_audit_reason} → setpoint=0")
+                setpoint_kw = 0.0
+            elif _sa["decision"] == "downscale":
+                _allowed_kw = (_sa["allowed_kwh"] / max(_dt_h_ac, 0.01)) * (
+                    +1.0 if setpoint_kw > 0 else -1.0)
+                print(f"[auto_control #637] DOWNSCALE {prof} slot={slot_label} "
+                      f"{_direction_ac}: {setpoint_kw:.1f}→{_allowed_kw:.1f} kW "
+                      f"({soc_audit_reason})")
+                setpoint_kw = _allowed_kw
+        except Exception as _e_soc_ac:
+            print(f"[auto_control #637] SOC audit zlyhal pre {prof}: {_e_soc_ac} → pokračujem (fail-open)")
+
     # Smer a kWh — pre normalizovaný "trade-like" záznam v logu
     _direction = "idle"
     _kwh_trade = 0.0

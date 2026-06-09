@@ -872,6 +872,23 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
                     kwh = _ax["allowed_kwh"] * _sign
                     print(f"[append_extra_paper_trade #612] DOWNSCALE {profile} slot={slot} "
                           f"{_act_upper}: {_ax['note']}")
+                # Bug #637 (2026-06-09): SOC-use audit pre VDT extras (BUY/SELL nad DAM)
+                if abs(kwh) > 0:
+                    try:
+                        from core.soc_use_audit import audit_action as _soc_audit
+                        _sa = _soc_audit(profile, today, _slot_idx2, _direction,
+                                          abs(kwh), source="vdt_extra")
+                        if _sa["decision"] == "reject":
+                            print(f"[append_extra_paper_trade #637] REJECT {profile} slot={slot} "
+                                  f"{_act_upper}: {_sa['reason']}")
+                            return
+                        if _sa["decision"] == "downscale":
+                            _sign = -1.0 if kwh < 0 else 1.0
+                            kwh = _sa["allowed_kwh"] * _sign
+                            print(f"[append_extra_paper_trade #637] DOWNSCALE {profile} slot={slot} "
+                                  f"{_act_upper}: {_sa['reason']}")
+                    except Exception as _e_soc:
+                        print(f"[append_extra_paper_trade #637] SOC audit zlyhal: {_e_soc} → pokračujem (fail-open)")
         except Exception as _e_audit:
             # Bug #625-C (2026-06-09): fail-CLOSED — REJECT pri chybe auditu.
             print(f"[append_extra_paper_trade #612+#625-C] audit zlyhal pre {profile}/{slot}: {_e_audit} → REJECT (fail-closed)")
@@ -1018,9 +1035,35 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
                         _sign = -1.0 if _kwh_req < 0 else 1.0
                         cur["kwh_per_slot"] = _allowed * _sign
                         cur["kw"] = _allowed * 4.0 * _sign   # 15-min → kW
+                        _kwh_req = abs(float(cur.get("kwh_per_slot", 0) or 0))   # update pre #637 audit
                         print(f"[append_paper_trade #612] DOWNSCALE {profile} slot={slot} "
-                              f"{_action_upper}: {_kwh_req:.2f}→{_allowed:.2f} kWh ({_ax['note']})")
+                              f"{_action_upper}: {_ax['note']}")
                     # decision == "accept" → pokračuj bez zmeny
+                # Bug #637 (2026-06-09): SOC-use audit — pred zápisom VDT trade-u
+                # simuluje 24h SOC trajektóriu vrátane navrhovaného trade-u + všetkých
+                # už zazmluvnených commitmentov (D-1 plán + VDT realized). Ak by trade
+                # spôsobil SOC violation v ktoromkoľvek budúcom slote → downscale alebo reject.
+                if _action_upper in ("CHARGE", "DISCHARGE", "BUY", "SELL") and abs(_kwh_req) > 0:
+                    try:
+                        from core.soc_use_audit import audit_action as _soc_audit
+                        _sa = _soc_audit(profile, _today, _slot_idx, _direction,
+                                          abs(_kwh_req), source="vdt")
+                        if _sa["decision"] == "reject":
+                            print(f"[append_paper_trade #637] REJECT {profile} slot={slot} "
+                                  f"{_action_upper}: {_sa['reason']}")
+                            return
+                        if _sa["decision"] == "downscale":
+                            _allowed = _sa["allowed_kwh"]
+                            _sign = -1.0 if (cur.get("kwh_per_slot", 0) or 0) < 0 else 1.0
+                            cur["kwh_per_slot"] = _allowed * _sign
+                            cur["kw"] = _allowed * 4.0 * _sign
+                            print(f"[append_paper_trade #637] DOWNSCALE {profile} slot={slot} "
+                                  f"{_action_upper}: {_sa['reason']}")
+                    except Exception as _e_soc:
+                        # Fail-OPEN pre #637 — capacity audit (Bug #612) už prešiel,
+                        # nepríjemné je nezapísať trade keby SOC audit padol z dôvodu
+                        # nedostupných dát (napr. compute_current_state zlyhalo).
+                        print(f"[append_paper_trade #637] SOC audit zlyhal pre {profile}/{slot}: {_e_soc} → pokračujem (fail-open)")
         except Exception as _e_audit:
             # Bug #625-C (2026-06-09): fail-CLOSED. Pri chybe auditu REJECT trade.
             # Plán nesmie obsahovať nominácie ktoré neprešli kapacitnou kontrolou,

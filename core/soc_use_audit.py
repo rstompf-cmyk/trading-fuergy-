@@ -1,0 +1,305 @@
+# -*- coding: utf-8 -*-
+"""soc_use_audit.py — Bug #637 (2026-06-09)
+
+Pred KAŽDOU akciou ktorá ovplyvní chod batérie (VDT trade, RT zásah, auto_control
+setpoint) simulujeme SOC trajektóriu na 24h dopredu vrátane všetkých už zazmluvnených
+commitmentov (D-1 plán + VDT realized). Ak by navrhovaná akcia spôsobila SOC violation
+v ktoromkoľvek z budúcich zazmluvnených slotov, akciu **downscale** na max dovolené,
+prípadne **reject**.
+
+Asymetria hraníc:
+- discharge: SOC musí ostať >= soc_min + soc_reserve_pct vo VŠETKÝCH budúcich slotoch
+- charge:    SOC musí ostať <= soc_max - soc_reserve_pct vo VŠETKÝCH budúcich slotoch
+
+Reason (z user feedback):
+- "ak má pri vybíjaní väčšiu kapacitu nevadí" → SOC > expected NEVADÍ pre discharge
+- "pri nabíjaní nižšiu kapacitu tiež nevadí" → SOC < expected NEVADÍ pre charge
+
+Iba dolná hranica je kritická pre vybíjanie (batt sa nezvládne vybiť pod soc_min),
+iba horná pre nabíjanie (batt sa nezvládne nabiť nad soc_max).
+"""
+from __future__ import annotations
+
+import datetime as dt
+from typing import Dict, List, Any, Optional, Tuple
+
+
+# ─────────────── Helpery: SOC simulácia bez clip-u ───────────────
+
+def simulate_soc_unclipped(start_soc_pct: float,
+                             batt_kwh_per_slot: List[float],
+                             batt_kwh_capacity: float,
+                             eff_c: float = 0.95,
+                             eff_d: float = 0.95) -> List[float]:
+    """Simulácia SOC trajektórie BEZ clip-u na soc_min/soc_max.
+
+    Bez clip-u potrebné pre audit aby sme videli violations. _integrate_soc_path
+    v vdt_state.py clipuje a tak NEVIDÍME kde by simulácia narazila do dna.
+
+    Args:
+        start_soc_pct: počiatočný SOC v %
+        batt_kwh_per_slot: 96 hodnôt kWh per 15-min slot (+ = vybíjať, − = nabíjať)
+        batt_kwh_capacity: kapacita batérie v kWh
+        eff_c, eff_d: efektivity
+
+    Returns: 97 hodnôt (start + 96 endov slotu), neclipnuté.
+    """
+    cap = max(1.0, float(batt_kwh_capacity))
+    soc_path = [float(start_soc_pct)]
+    cur = float(start_soc_pct)
+    eff_d_safe = max(0.01, eff_d)
+    for t in range(min(96, len(batt_kwh_per_slot))):
+        v = float(batt_kwh_per_slot[t] or 0.0)
+        if v >= 0:                                                # vybíjanie
+            delta_kwh = -v / eff_d_safe
+        else:                                                      # nabíjanie
+            delta_kwh = (-v) * eff_c
+        cur += (delta_kwh / cap) * 100.0
+        soc_path.append(cur)
+    # Doplniť ak vstup bol kratší ako 96
+    while len(soc_path) < 97:
+        soc_path.append(cur)
+    return soc_path
+
+
+def check_violations(soc_path: List[float],
+                       direction_per_slot: List[str],
+                       *,
+                       soc_min_eff_pct: float,
+                       soc_max_eff_pct: float,
+                       from_slot: int = 0) -> List[Tuple[int, str, float]]:
+    """Per-slot asymetrický check.
+
+    Vráti zoznam violation tuples: (slot_idx, kind, soc_value).
+    kind: "below_min" (discharge slot, SOC pod soc_min_eff) alebo "above_max"
+    (charge slot, SOC nad soc_max_eff).
+
+    SOC path má 97 hodnôt: index t+1 = koniec slotu t.
+
+    Args:
+        soc_path: 97 SOC hodnôt z simulate_soc_unclipped
+        direction_per_slot: 96 stringov per slot ("charge"|"discharge"|"idle")
+        soc_min_eff_pct: minimálne SOC = soc_min + soc_reserve_pct
+        soc_max_eff_pct: maximálne SOC = soc_max - soc_reserve_pct
+        from_slot: štartovací slot pre kontrolu (audit od now, ignoruj minulé)
+    """
+    violations: List[Tuple[int, str, float]] = []
+    for t in range(max(0, from_slot), min(96, len(direction_per_slot))):
+        soc_end = soc_path[t + 1] if t + 1 < len(soc_path) else soc_path[-1]
+        dir_t = direction_per_slot[t]
+        if dir_t == "discharge" and soc_end < soc_min_eff_pct - 0.01:
+            violations.append((t, "below_min", soc_end))
+        elif dir_t == "charge" and soc_end > soc_max_eff_pct + 0.01:
+            violations.append((t, "above_max", soc_end))
+    return violations
+
+
+def _scheduled_to_direction(scheduled_kwh: List[float]) -> List[str]:
+    """Per slot direction string podľa znamienka.
+
+    + = discharge, − = charge, 0 = idle.
+    """
+    out: List[str] = []
+    for v in scheduled_kwh:
+        vv = float(v or 0.0)
+        if vv > 0.01:
+            out.append("discharge")
+        elif vv < -0.01:
+            out.append("charge")
+        else:
+            out.append("idle")
+    return out
+
+
+# ─────────────── Main API ───────────────
+
+def audit_action(profile: str,
+                  day: str,
+                  slot_idx: int,
+                  direction: str,
+                  kwh_proposed: float,
+                  *,
+                  source: str = "vdt",
+                  today_state: Optional[Dict[str, Any]] = None,
+                  step_min: int = 15) -> Dict[str, Any]:
+    """Audit navrhovanej akcie pred zápisom.
+
+    Args:
+        profile: meno profilu
+        day: ISO date (napr. "2026-06-08")
+        slot_idx: 15-min slot index 0..95
+        direction: "charge" | "discharge"
+        kwh_proposed: absolútna hodnota kWh ktorú akcia chce použiť (>= 0)
+        source: kategória akcie ("vdt", "rt", "auto_control") pre logging
+        today_state: voliteľne predpočítaný compute_current_state dict (cache reuse)
+        step_min: 15 alebo 60 (default 15)
+
+    Returns:
+        {
+            "decision": "accept" | "downscale" | "reject",
+            "requested_kwh": float,
+            "allowed_kwh": float,
+            "reason": str (popis ak nie accept),
+            "violations": List[(slot_idx, kind, soc_value)],
+            "soc_path_proposed": List[float] (97 hodnôt),
+            "soc_min_eff_pct": float,
+            "soc_max_eff_pct": float,
+            "current_soc_pct": float,
+        }
+
+    Konvencie:
+    - direction="discharge", kwh_proposed=500 → batt vybíja 500 kWh v slot_idx
+    - direction="charge", kwh_proposed=500 → batt nabíja 500 kWh v slot_idx
+    """
+    out = {"decision": "accept",
+           "requested_kwh": float(kwh_proposed),
+           "allowed_kwh": float(kwh_proposed),
+           "reason": "",
+           "violations": [],
+           "soc_path_proposed": [],
+           "soc_min_eff_pct": 0.0,
+           "soc_max_eff_pct": 100.0,
+           "current_soc_pct": 0.0,
+           "source": source}
+    kwh_req = abs(float(kwh_proposed or 0.0))
+    if kwh_req <= 0.0:
+        out["decision"] = "reject"
+        out["reason"] = "kwh_proposed <= 0"
+        out["allowed_kwh"] = 0.0
+        return out
+    direction = (direction or "").lower().strip()
+    if direction not in ("charge", "discharge"):
+        out["decision"] = "reject"
+        out["reason"] = f"unknown direction: {direction!r}"
+        out["allowed_kwh"] = 0.0
+        return out
+
+    # Načítaj baseline state (D-1 plán + VDT realized + current SOC)
+    try:
+        if today_state is None:
+            import vdt_state as _vs
+            d_obj = dt.date.fromisoformat(day)
+            today_state = _vs.compute_current_state(profile, today=d_obj)
+    except Exception as e:
+        out["decision"] = "reject"
+        out["reason"] = f"compute_current_state zlyhalo: {e}"
+        out["allowed_kwh"] = 0.0
+        return out
+
+    if not today_state or not today_state.get("ok"):
+        out["decision"] = "reject"
+        out["reason"] = "today_state not ok"
+        out["allowed_kwh"] = 0.0
+        return out
+
+    # Profil parametre
+    cap = float(today_state.get("batt_kwh") or 1.0)
+    eff_c = float(today_state.get("eff_c") or 0.95)
+    eff_d = float(today_state.get("eff_d") or 0.95)
+    soc_min = float(today_state.get("soc_min_pct") or 5.0)
+    soc_max = float(today_state.get("soc_max_pct") or 100.0)
+    # soc_reserve_pct z profile.plan.soc_reserve_pct (Bug #624) — single source of truth
+    soc_reserve = 0.0
+    try:
+        import profiles as _pr
+        _prof_obj = _pr.load_profile(profile) or {}
+        soc_reserve = float((_prof_obj.get("plan") or {}).get("soc_reserve_pct", 0.0) or 0.0)
+    except Exception:
+        pass
+    soc_reserve = max(0.0, min(50.0, soc_reserve))
+    soc_min_eff = soc_min + soc_reserve
+    soc_max_eff = soc_max - soc_reserve
+    out["soc_min_eff_pct"] = soc_min_eff
+    out["soc_max_eff_pct"] = soc_max_eff
+    out["current_soc_pct"] = float(today_state.get("current_soc_pct") or 50.0)
+
+    # Scheduled batt-pohľad kWh per slot (D-1 + VDT realized)
+    dam_kwh = list(today_state.get("dam_nomination_kwh") or [0.0] * 96)
+    vdt_kwh = list(today_state.get("vdt_realized_kwh") or [0.0] * 96)
+    # Doplniť na 96 ak menej (safety)
+    while len(dam_kwh) < 96: dam_kwh.append(0.0)
+    while len(vdt_kwh) < 96: vdt_kwh.append(0.0)
+    scheduled_kwh = [float(dam_kwh[i]) + float(vdt_kwh[i]) for i in range(96)]
+
+    # Pridaj navrhovanú akciu do slot_idx
+    si = int(max(0, min(95, slot_idx)))
+    proposed_sign = +1.0 if direction == "discharge" else -1.0
+    proposed_kwh_signed = proposed_sign * kwh_req
+
+    def _trial(kwh_try: float) -> Tuple[List[float], List[str]]:
+        """Vráti soc_path + direction_per_slot s navrhovanou akciou kwh_try."""
+        signed_try = proposed_sign * abs(kwh_try)
+        trial_kwh = list(scheduled_kwh)
+        trial_kwh[si] = trial_kwh[si] + signed_try
+        soc_path = simulate_soc_unclipped(
+            float(today_state["start_soc_pct"]),
+            trial_kwh, cap, eff_c=eff_c, eff_d=eff_d)
+        dirs = _scheduled_to_direction(trial_kwh)
+        return soc_path, dirs
+
+    # Pokus s plnou požadovanou hodnotou
+    soc_path_full, dirs_full = _trial(kwh_req)
+    violations_full = check_violations(
+        soc_path_full, dirs_full,
+        soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
+        from_slot=si)        # auditujeme len budúce sloty od slot_idx (vrátane)
+    out["soc_path_proposed"] = soc_path_full
+
+    if not violations_full:
+        out["decision"] = "accept"
+        return out
+
+    # Binárne hľadanie max_allowed_kwh
+    lo, hi = 0.0, kwh_req
+    max_iter = 24
+    for _ in range(max_iter):
+        mid = 0.5 * (lo + hi)
+        if mid <= 0.001:
+            break
+        soc_path_mid, dirs_mid = _trial(mid)
+        viol_mid = check_violations(
+            soc_path_mid, dirs_mid,
+            soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
+            from_slot=si)
+        if viol_mid:
+            hi = mid
+        else:
+            lo = mid
+    allowed = max(0.0, lo)
+    # Re-eval final soc_path
+    soc_path_final, dirs_final = _trial(allowed)
+    out["soc_path_proposed"] = soc_path_final
+    out["violations"] = check_violations(
+        soc_path_final, dirs_final,
+        soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
+        from_slot=si)
+    if allowed < 0.5:           # menej ako 0.5 kWh nemá zmysel
+        out["decision"] = "reject"
+        out["allowed_kwh"] = 0.0
+        out["reason"] = (f"SOC violation: aj 0 kWh by spôsobilo violation "
+                          f"({len(violations_full)} slotov mimo limitov). "
+                          f"Možno už existujúci D-1/VDT plán je infeasible.")
+    else:
+        out["decision"] = "downscale"
+        out["allowed_kwh"] = float(allowed)
+        v0 = violations_full[0]
+        out["reason"] = (f"SOC violation v slot {v0[0]} ({v0[1]} @ {v0[2]:.1f}%). "
+                          f"Downscale {kwh_req:.1f}→{allowed:.1f} kWh "
+                          f"(limity {soc_min_eff:.1f}–{soc_max_eff:.1f}%).")
+    return out
+
+
+def audit_action_simple(profile: str, day: str, slot_idx: int,
+                          direction: str, kwh: float,
+                          source: str = "vdt") -> Tuple[str, float]:
+    """Skrátený wrapper — vráti len (decision, allowed_kwh) pre rýchle volanie."""
+    r = audit_action(profile, day, slot_idx, direction, kwh, source=source)
+    return r["decision"], r["allowed_kwh"]
+
+
+__all__ = [
+    "audit_action",
+    "audit_action_simple",
+    "simulate_soc_unclipped",
+    "check_violations",
+]
