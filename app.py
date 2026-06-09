@@ -450,6 +450,16 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
     if ps is None:
         raise RuntimeError("plan_store modul nie je dostupný")
     d = dt.date.fromisoformat(date_iso)
+    # Bug #641 diag: vstup _gen_one_plan — vidíme či sa volá a aké parametre dostane
+    print(f"[_gen_one_plan] day={date_iso} step={step_min} kind={kind} "
+          f"batt_kw={fp.get('batt_kw')} batt_kwh={fp.get('batt_kwh')} "
+          f"soc_init={fp.get('soc_init')} soc_min={fp.get('soc_min')} "
+          f"soc_reserve_pct={fp.get('soc_reserve_pct', 0.0)} "
+          f"grid_im={fp.get('grid_kw_import') or fp.get('grid_kw')} "
+          f"grid_ex={fp.get('grid_kw_export') or fp.get('grid_kw')} "
+          f"max_dam_im={fp.get('max_import_kwh_day')} "
+          f"max_dam_ex={fp.get('max_export_kwh_day')} "
+          f"joint_lp={(fp.get('joint_lp') or {}).get('enabled', False)}")
     if int(step_min) == 60 and kind == "plan":
         # Ak profil nemá FTV (kwp=0), netreba volať PVF — pv_arr = 0 array.
         # Cena sa berie zo ISOT predikcie nezávisle od počasia (model nemá GTI keď nie je PV).

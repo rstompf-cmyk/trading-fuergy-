@@ -239,6 +239,12 @@ def optimize_day_or_joint(
         joint_flags = get_flags_from_profile(profile)
     else:
         joint_flags = normalize_flags(joint_flags)
+    # Bug #641: diagnostika — vidieť či sa volá joint LP alebo classic optimize_day
+    print(f"[optimize_day_or_joint] profile={profile!r}, "
+          f"joint_enabled={joint_flags.get('enabled')}, "
+          f"batt_kw={batt_kw:.0f}, batt_kwh={batt_kwh:.0f}, "
+          f"soc_reserve_pct={soc_reserve_pct:.1f}, "
+          f"max_dam_im={max_import_kwh_day}/ex={max_export_kwh_day}")
 
     # ── Toggle = INPUT FILTER ──────────────────────────────────────────────
     # Sémantika: zaškrtnutie BAT/FTV/LOAD určuje ČO sa zahŕňa do optimalizácie.
