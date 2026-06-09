@@ -23,10 +23,16 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
                  settle_price=None,
                  grid_kw_export=None, grid_kw_import=None,
                  load_kwh=None,
-                 max_export_kwh_day=None, max_import_kwh_day=None):
+                 max_export_kwh_day=None, max_import_kwh_day=None,
+                 soc_reserve_pct=0.0):
     """`load_kwh` = spotreba zákazníka [kWh/perióda] (net-meter setup): pv + di + im − ex − ch − cu = load.
     Ak má profil naimportovanú spotrebu, predáva sa najprv self-consumption (zadarmo),
-    zvyšok ide do siete/batérie. Pri load > pv treba import alebo battery discharge."""
+    zvyšok ide do siete/batérie. Pri load > pv treba import alebo battery discharge.
+
+    Bug #624 (Krok E): `soc_reserve_pct` = safety buffer nad soc_min_pct. LP nikdy
+    nesmie nominovať plán ktorý by spotreboval SOC pod (soc_min_pct + soc_reserve_pct).
+    Slúži na pokrytie nepredikovaných strát počas dňa (VDT trade, RT zásahy, eff_d
+    nepresnosti). Default 0 = back-compat. Typicky 5-10 % je rozumné."""
     # asymetrické limity siete: default = grid_kw (backward compat)
     grid_kw_export = float(grid_kw_export) if grid_kw_export is not None else float(grid_kw)
     grid_kw_import = float(grid_kw_import) if grid_kw_import is not None else float(grid_kw)
@@ -37,7 +43,10 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     if load.size < T:
         load = np.concatenate([load, np.zeros(T - load.size)])
     _has_load = bool(load.sum() > 1e-6)
-    socmin, socmax = batt_kwh*soc_min_pct/100, batt_kwh*soc_max_pct/100
+    # Bug #624: efektívne soc_min = soc_min + reserve buffer
+    _soc_reserve_pct = max(0.0, min(50.0, float(soc_reserve_pct or 0.0)))
+    _eff_soc_min_pct = float(soc_min_pct) + _soc_reserve_pct
+    socmin, socmax = batt_kwh*_eff_soc_min_pct/100, batt_kwh*soc_max_pct/100
     soc0 = batt_kwh*soc_init_pct/100
     term = soc0 if terminal_soc_pct is None else batt_kwh*terminal_soc_pct/100
 

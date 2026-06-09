@@ -524,6 +524,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             soc_min_pct=float(fp.get("soc_min", DEF["soc_min"])),
             soc_max_pct=float(fp.get("soc_max", DEF["soc_max"])),
             soc_init_pct=_soc_init_use,
+            soc_reserve_pct=float(fp.get("soc_reserve_pct", 0.0) or 0.0),
             terminal_soc_pct=float(fp.get("terminal_soc", DEF["terminal_soc"])),
             grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
             grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
@@ -612,6 +613,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                                   soc_min_pct=float(fp.get("soc_min", DEF["soc_min"])),
                                   soc_max_pct=float(fp.get("soc_max", DEF["soc_max"])),
                                   soc_init_pct=_soc_init_use15,
+                                  soc_reserve_pct=float(fp.get("soc_reserve_pct", 0.0) or 0.0),
                                   terminal_soc_pct=float(fp.get("terminal_soc", DEF["terminal_soc"])),
                                   grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
                                   grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
@@ -1935,7 +1937,7 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 {_field("Výkon batérie [kW]","batt_kw",f['batt_kw'])}{_field("Kapacita [kWh]","batt_kwh",f['batt_kwh'])}
 {_field("Účinnosť nabíjania","eff_c",f['eff_c'])}{_field("Účinnosť vybíjania","eff_d",f['eff_d'])}
 {_field("SOC min [%]","soc_min",f['soc_min'])}{_field("SOC max [%]","soc_max",f['soc_max'])}
-{_field("SOC začiatok [%]","soc_init",f['soc_init'])}{_field("SOC koniec [%]","terminal_soc",f['terminal_soc'])}
+{_field("SOC začiatok [%]","soc_init",f['soc_init'])}{_field("SOC koniec [%]","terminal_soc",f['terminal_soc'])}{_field("SOC rezerva [%]","soc_reserve_pct",f.get('soc_reserve_pct', 0.0))}
 {_field("Limit dodávky do siete [kW]","grid_kw_export",f.get('grid_kw_export', f['grid_kw']))}{_field("Limit odberu zo siete [kW]","grid_kw_import",f.get('grid_kw_import', f['grid_kw']))}
 {(
   f'<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">'
@@ -2980,7 +2982,7 @@ Ak zvolíš <b>dnešný deň</b>, dole uvidíš aj odporúčanie pre aktuálny 1
 {_field("Výkon batérie [kW]","batt_kw",f['batt_kw'])}{_field("Kapacita [kWh]","batt_kwh",f['batt_kwh'])}
 {_field("Účinnosť nabíjania","eff_c",f['eff_c'])}{_field("Účinnosť vybíjania","eff_d",f['eff_d'])}
 {_field("SOC min [%]","soc_min",f['soc_min'])}{_field("SOC max [%]","soc_max",f['soc_max'])}
-{_field("SOC začiatok [%]","soc_init",f['soc_init'])}{_field("SOC koniec [%]","terminal_soc",f['terminal_soc'])}
+{_field("SOC začiatok [%]","soc_init",f['soc_init'])}{_field("SOC koniec [%]","terminal_soc",f['terminal_soc'])}{_field("SOC rezerva [%]","soc_reserve_pct",f.get('soc_reserve_pct', 0.0))}
 {_field("Limit dodávky do siete [kW]","grid_kw_export",f.get('grid_kw_export', f['grid_kw']))}{_field("Limit odberu zo siete [kW]","grid_kw_import",f.get('grid_kw_import', f['grid_kw']))}
 {(
   f'<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">'
@@ -3050,6 +3052,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
            kwp: float = Form(...), tilt: float = Form(...), azimuth: float = Form(...), eff: float = Form(...),
            batt_kw: float = Form(...), batt_kwh: float = Form(...), eff_c: float = Form(...), eff_d: float = Form(...),
            soc_min: float = Form(...), soc_max: float = Form(...), soc_init: float = Form(...),
+           soc_reserve_pct: float = Form(default=0.0),
            terminal_soc: float = Form(...), grid_kw: float = Form(...),
            grid_kw_import: float = Form(default=None), grid_kw_export: float = Form(default=None),
            grid_fee: float = Form(...),
@@ -3174,6 +3177,8 @@ a{{color:#1F4E78}}</style></head><body>
                                  settle_price=price15[:n],
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
+                soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                 soc_reserve_pct=float(soc_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
                                  allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
@@ -3189,6 +3194,8 @@ a{{color:#1F4E78}}</style></head><body>
                                  settle_price=price15[:n],
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
+                soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                 soc_reserve_pct=float(soc_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
                                  allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
@@ -3214,6 +3221,9 @@ a{{color:#1F4E78}}</style></head><body>
             dentrh_params = dict(date=date, lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
                                   batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                   soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
+                soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                  soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                 soc_reserve_pct=float(soc_reserve_pct or 0.0),
                                   terminal_soc_pct=terminal_soc, grid_kw=grid_kw,
                                   grid_kw_import=gki, grid_kw_export=gke,
                                   grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread_eur=min_spread,
@@ -13406,6 +13416,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          kwp: float = Form(...), tilt: float = Form(...), azimuth: float = Form(...), eff: float = Form(...),
          batt_kw: float = Form(...), batt_kwh: float = Form(...), eff_c: float = Form(...), eff_d: float = Form(...),
          soc_min: float = Form(...), soc_max: float = Form(...), soc_init: float = Form(...),
+         soc_reserve_pct: float = Form(default=0.0),
          terminal_soc: float = Form(...), grid_kw: float = Form(...),
          grid_kw_import: float = Form(default=None), grid_kw_export: float = Form(default=None),
          grid_fee: float = Form(...),
@@ -13615,6 +13626,8 @@ a{{color:#1F4E78}}</style></head><body>
                                  settle_price=price_arr,
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
+                soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                 soc_reserve_pct=float(soc_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
                                  allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
@@ -13633,6 +13646,8 @@ a{{color:#1F4E78}}</style></head><body>
                                  settle_price=price_arr,
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
+                soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                 soc_reserve_pct=float(soc_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
                                  allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
@@ -13649,6 +13664,7 @@ a{{color:#1F4E78}}</style></head><body>
     meta = dict(date=date, lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
                 batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                 soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
+                soc_reserve_pct=float(soc_reserve_pct or 0.0),
                 grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                 grid_fee=grid_fee, cycle_cost=cycle_cost,
                 allow_grid_charge=agc, terminal_soc_pct=terminal_soc, allow_curtail=acu,
