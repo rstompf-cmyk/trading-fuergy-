@@ -406,6 +406,44 @@ def _carried_soc_banner(date: str, soc_init_pct: float, case: str = "plan_d1") -
             f"<br><i>Pre 1:1 porovnanie s livesim: nastav <b>SOC začiatok = {carried_pct:.1f}</b> a klikni Generovať.</i></div>")
 
 
+def _resolve_soc_init_carryover(date_iso: str, fp: dict,
+                                   case: str = "plan_d1") -> tuple:
+    """Bug #622: vráti (soc_init_pct, source_label) pre D-1 plán.
+
+    Hľadá poradí:
+      1. `lsim.carried_soc_for_date(case, port, date)` — koniec dňa D-1 zo
+         simulácie / realnej trajektórie. Použije sa ak je v rozumnom rozsahu
+         [soc_min, soc_max].
+      2. fallback na fp["soc_init"] (alebo DEF["soc_init"]).
+
+    Cieľ: D-1 plán začne s reálnym SOC po predošlom dni, nie ideálnym z form.
+    Tým sa znížia nereálne nominácie ktoré spôsobujú odchýlku v evening peakoch.
+
+    Returns:
+        (soc_pct, source) — source ∈ {"carried", "manual_fallback", "manual_clamped"}
+    """
+    manual_soc = float(fp.get("soc_init", DEF["soc_init"]))
+    try:
+        info = lsim.carried_soc_for_date(case, port=_PORT, date=date_iso)
+    except Exception:
+        info = None
+    if not info:
+        return (manual_soc, "manual_fallback")
+    try:
+        carried_pct = float(info["soc_pct"])
+    except (KeyError, TypeError, ValueError):
+        return (manual_soc, "manual_fallback")
+    # Sanity: SOC musi byt v batt rozsahu [soc_min, soc_max]
+    soc_min = float(fp.get("soc_min", DEF["soc_min"]))
+    soc_max = float(fp.get("soc_max", DEF["soc_max"]))
+    if not (soc_min <= carried_pct <= soc_max):
+        # mimo rozsahu (corrupted CSV alebo prvy beh) -> manual
+        print(f"[#622 carryover] {date_iso}: carried={carried_pct:.1f}% mimo "
+              f"[{soc_min:.0f}, {soc_max:.0f}], fallback na manual {manual_soc:.1f}%")
+        return (manual_soc, "manual_clamped")
+    return (carried_pct, "carried")
+
+
 def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
     """Internal helper pre /plan a /plan_batch. Spustí kompletnú generáciu pre jeden deň + uloží plán.
     Vracia cestu k uloženému súboru. Pri chybe hodí výnimku."""
@@ -473,6 +511,10 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         except Exception:
             _jb_prof = "default"
         _joint_flags_b = _gjlp_batch(_jb_prof if _jb_prof != "default" else None)
+        # Bug #622: SOC carryover pre 60-min plan (Krok A)
+        _soc_init_use, _soc_init_src = _resolve_soc_init_carryover(date_iso, fp, case="plan_d1")
+        print(f"[#622 _gen_one_plan 60min] {date_iso}: soc_init={_soc_init_use:.1f}% "
+              f"({_soc_init_src})")
         sch, summ = _od_or_joint_batch(
             pv_arr, decision_price,
             joint_flags=_joint_flags_b, profile=_jb_prof,
@@ -481,7 +523,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
             soc_min_pct=float(fp.get("soc_min", DEF["soc_min"])),
             soc_max_pct=float(fp.get("soc_max", DEF["soc_max"])),
-            soc_init_pct=float(fp.get("soc_init", DEF["soc_init"])),
+            soc_init_pct=_soc_init_use,
             terminal_soc_pct=float(fp.get("terminal_soc", DEF["terminal_soc"])),
             grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
             grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
@@ -558,6 +600,10 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         except Exception:
             _jb_prof15 = "default"
         _joint_flags_b15 = _gjlp_batch15(_jb_prof15 if _jb_prof15 != "default" else None)
+        # Bug #622: SOC carryover pre 15-min dentrh
+        _soc_init_use15, _soc_init_src15 = _resolve_soc_init_carryover(date_iso, fp, case="dentrh")
+        print(f"[#622 _gen_one_plan 15min] {date_iso}: soc_init={_soc_init_use15:.1f}% "
+              f"({_soc_init_src15})")
         sch, summ = _od_or_joint_batch15(pv15[:n], price15[:n], dt=0.25,
                                   joint_flags=_joint_flags_b15, profile=_jb_prof15,
                                   batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])),
@@ -565,7 +611,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                                   eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
                                   soc_min_pct=float(fp.get("soc_min", DEF["soc_min"])),
                                   soc_max_pct=float(fp.get("soc_max", DEF["soc_max"])),
-                                  soc_init_pct=float(fp.get("soc_init", DEF["soc_init"])),
+                                  soc_init_pct=_soc_init_use15,
                                   terminal_soc_pct=float(fp.get("terminal_soc", DEF["terminal_soc"])),
                                   grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
                                   grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
@@ -3026,6 +3072,16 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
     _mex = float(max_export_kwh_day) if max_export_kwh_day and max_export_kwh_day > 0 else None
     _mim = float(max_import_kwh_day) if max_import_kwh_day and max_import_kwh_day > 0 else None
     zbw = float(zco_bias_w or 0.0)
+    # Bug #622 (Krok A): SOC carryover z livesim trace pre /dentrh.
+    # Override user-vstupu `soc_init` reálnym SOC po predošlom dni — D-1 plán
+    # nesmie predpokladať ideálnu trajektóriu, lebo večerné nominácie potom
+    # nedosiahne (= odchýlka voči trhu = pokuta).
+    _soc_init_carry, _soc_init_src = _resolve_soc_init_carryover(
+        date, {"soc_init": soc_init, "soc_min": soc_min, "soc_max": soc_max}, case="dentrh")
+    if _soc_init_src == "carried":
+        print(f"[#622 /dentrh POST] {date}: soc_init={soc_init:.1f}% → "
+              f"carried {_soc_init_carry:.1f}%")
+        soc_init = _soc_init_carry
     # asymetrické limity siete: ak prázdne, použiť grid_kw (backward compat)
     gki = float(grid_kw_import) if grid_kw_import is not None else float(grid_kw)
     gke = float(grid_kw_export) if grid_kw_export is not None else float(grid_kw)
@@ -13395,6 +13451,14 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
     acu = bool(allow_curtail)
     npd = bool(no_planned_discharge)
     zbw = float(zco_bias_w or 0.0)
+    # Bug #622 (Krok A): SOC carryover z livesim trace pre /plan POST.
+    # Override user-vstupu `soc_init` reálnym SOC po predošlom dni.
+    _soc_init_carry_p, _soc_init_src_p = _resolve_soc_init_carryover(
+        date, {"soc_init": soc_init, "soc_min": soc_min, "soc_max": soc_max}, case="plan_d1")
+    if _soc_init_src_p == "carried":
+        print(f"[#622 /plan POST] {date}: soc_init={soc_init:.1f}% → "
+              f"carried {_soc_init_carry_p:.1f}%")
+        soc_init = _soc_init_carry_p
     rtf = bool(rt_freedom)
     aggr = bool(aggressive_rt)                                  # default False; ak True → RT bez cycle budgetu
     fbal = bool(ftv_balance)                                    # default True; ak True → FTV-driven RT balansovanie
