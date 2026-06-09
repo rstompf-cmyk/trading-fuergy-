@@ -49,6 +49,16 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     socmin, socmax = batt_kwh*_eff_soc_min_pct/100, batt_kwh*soc_max_pct/100
     soc0 = batt_kwh*soc_init_pct/100
     term = soc0 if terminal_soc_pct is None else batt_kwh*terminal_soc_pct/100
+    # Bug #641 (2026-06-09): diagnostika použitých LP parametrov.
+    # Bez toho je problém potichu nepropagovaných parametrov neviditeľný.
+    print(f"[optimize_day] batt={batt_kw:.0f}kW/{batt_kwh:.0f}kWh, "
+          f"eff_c={eff_c:.3f}/eff_d={eff_d:.3f}, "
+          f"soc_init={soc_init_pct:.1f}%, soc_min={soc_min_pct:.1f}%, "
+          f"soc_reserve={_soc_reserve_pct:.1f}% → eff_min={_eff_soc_min_pct:.1f}%, "
+          f"soc_max={soc_max_pct:.1f}%, term={terminal_soc_pct}, "
+          f"grid_im={grid_kw_import:.0f}/ex={grid_kw_export:.0f}, "
+          f"max_dam_im={max_import_kwh_day}/ex={max_export_kwh_day}, "
+          f"dt={dt:.2f}h, T={T}")
 
     # poradie premenných: ch, di, ex, im, cu, soc  (každá dĺžky T)
     CH, DI, EX, IM, CU, SOC = (g*T for g in range(6))
@@ -246,6 +256,28 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
             max_export_kwh_day or max_import_kwh_day) else None,
         "cap_warning": cap_warning,
     }
+    # Bug #641: log cap warning ak existuje (predtým len v summary, neviditeľné)
+    if cap_warning:
+        print(f"[optimize_day cap_warning] {cap_warning}")
+    # Diagnostika peak batt + SOC trajektórie (rýchla detekcia infeasibility)
+    try:
+        _peak_di = float(np.max(np.abs(sch.get("batt_kw", [0])))) if len(sch) else 0.0
+        _peak_ex = float(np.max(np.abs(sch.get("grid_kwh", [0])))) if len(sch) else 0.0
+        _soc_min_seen = float(np.min(sch["soc_pct"])) if "soc_pct" in sch and len(sch) else 0.0
+        _soc_max_seen = float(np.max(sch["soc_pct"])) if "soc_pct" in sch and len(sch) else 0.0
+        print(f"[optimize_day result] peak_batt={_peak_di:.0f}kW, peak_grid={_peak_ex:.0f}kWh/period, "
+              f"SOC range {_soc_min_seen:.0f}–{_soc_max_seen:.0f}% (eff_min was {_eff_soc_min_pct:.1f}%), "
+              f"export={summary.get('trzba_export_EUR',0):.2f}€, import={summary.get('naklad_import_EUR',0):.2f}€")
+        # Sanity: ak peak_batt > batt_kw → LP nominoval cez fyzický limit (bug)
+        if _peak_di > batt_kw * 1.01:
+            print(f"[optimize_day WARN] peak_batt {_peak_di:.0f} kW > batt_kw {batt_kw:.0f} kW "
+                  f"(LP nominoval cez fyzický limit!)")
+        # Sanity: ak SOC klesol pod eff_min → LP porušil soc_reserve_pct
+        if _soc_min_seen < _eff_soc_min_pct - 0.5:
+            print(f"[optimize_day WARN] SOC min {_soc_min_seen:.1f}% < eff_min {_eff_soc_min_pct:.1f}% "
+                  f"(LP porušil soc_reserve_pct!)")
+    except Exception:
+        pass
     # ── voliteľný post-process: ručné násobitele nad batt_kw (D-1 plán) ─────
     if batt_kw_override is not None:
         sch, summary = _apply_batt_override(
