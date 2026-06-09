@@ -1028,63 +1028,38 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     # SOC mimo ±tolerance band D-1 plánu. Inak by RT za noci/ráno mohol
                     # nabiť batt na 100% (kvôli sys_MW arbitráži) a poobede D-1 plán
                     # by nemohol nabíjať pre lacný DT → odchýlka voči Obchodu.
-                    # Optimalizácia: load-once-per-day. Načítame celú trajektóriu (96
-                    # slotov) jedným SQL dotazom, potom per-minute lookup v dict-u.
+                    # Pre každú minútu: rt zásah (= _batt_p − plan_batt_d1) sa obmedzí
+                    # tak aby výsledný SOC zostal v bande.
                     try:
+                        from core.capacity_ledger import (
+                            expected_soc as _expected_soc, constrain_rt_to_soc_band,
+                        )
                         from core.profile_resolver import get_active as _ga_soc
-                        from db import get_session as _gs_soc
-                        from db.models import D1SocTrajectory as _D1Traj, Profile as _PrSoc
                         _prof_soc = _ga_soc()
                         _bkwh_max_soc = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
                         if _prof_soc and _bkwh_max_soc > 0:
                             _day_iso2 = d.isoformat()
-                            # Load 96 slotov per deň jediným query
-                            _traj_cache = {}    # slot_idx -> (expected, lo, hi)
-                            with _gs_soc() as _s_soc:
-                                _p_soc = _s_soc.query(_PrSoc).filter_by(name=_prof_soc).one_or_none()
-                                if _p_soc:
-                                    _rows = _s_soc.query(_D1Traj).filter_by(
-                                        profile_id=_p_soc.id, day=_day_iso2).all()
-                                    for _r in _rows:
-                                        _exp = _r.expected_soc_pct
-                                        _tol = _r.tolerance_pct or 10.0
-                                        _traj_cache[_r.slot_idx] = (
-                                            _exp, max(0.0, _exp - _tol), min(100.0, _exp + _tol))
-                            if _traj_cache:
-                                _t_arr2 = pd.to_datetime(tr["time"], errors="coerce")
-                                _slot_arr2 = ((_t_arr2.dt.hour * 60 + _t_arr2.dt.minute) // 15).values
-                                _soc_pct_arr = pd.to_numeric(tr.get("soc_pct", 50),
-                                                              errors="coerce").fillna(50).values
-                                _batt_p_constrained = _batt_p.copy()
-                                _n_constrained = 0
-                                _dt_h_min = 1.0 / 60.0
-                                for _i in range(len(tr)):
-                                    _sl = int(_slot_arr2[_i])
-                                    _band = _traj_cache.get(_sl)
-                                    if _band is None:
-                                        continue
-                                    _exp, _lo, _hi = _band
-                                    _current_soc = float(_soc_pct_arr[_i])
-                                    _proposed = float(_batt_p[_i])
-                                    # Predikuj výsledný SOC ak by sa proposed_kw uplatnil za 1 min
-                                    _delta_kwh = _proposed * _dt_h_min
-                                    _soc_after = _current_soc - (_delta_kwh / _bkwh_max_soc) * 100.0
-                                    _soc_after = max(0.0, min(100.0, _soc_after))
-                                    if _lo <= _soc_after <= _hi:
-                                        continue   # v bande, žiadny constraint
-                                    # Mimo bandu → obmedz na hranicu bandu
-                                    if _soc_after > _hi:
-                                        _required_kwh = (_current_soc - _hi) * _bkwh_max_soc / 100.0
-                                        _allowed = _required_kwh / _dt_h_min
-                                    else:   # _soc_after < _lo
-                                        _required_kwh = (_current_soc - _lo) * _bkwh_max_soc / 100.0
-                                        _allowed = _required_kwh / _dt_h_min
-                                    _batt_p_constrained[_i] = _allowed
+                            _t_arr2 = pd.to_datetime(tr["time"], errors="coerce")
+                            _slot_arr2 = ((_t_arr2.dt.hour * 60 + _t_arr2.dt.minute) // 15).values
+                            _soc_pct_arr = pd.to_numeric(tr.get("soc_pct", 50),
+                                                          errors="coerce").fillna(50).values
+                            # Per-minute constraint
+                            _batt_p_constrained = _batt_p.copy()
+                            _n_constrained = 0
+                            for _i in range(len(tr)):
+                                _sl = int(_slot_arr2[_i])
+                                _current_soc = float(_soc_pct_arr[_i])
+                                _proposed = float(_batt_p[_i])
+                                _result = constrain_rt_to_soc_band(
+                                    _prof_soc, _day_iso2, _sl, _current_soc,
+                                    _proposed, _bkwh_max_soc, dt_h=1.0/60.0)
+                                if _result["decision"] in ("constrain_charge", "constrain_discharge"):
+                                    _batt_p_constrained[_i] = _result["allowed_kw"]
                                     _n_constrained += 1
-                                if _n_constrained > 0:
-                                    _batt_p = _batt_p_constrained
-                                    print(f"[livesim.advance #614] {_prof_soc}/{_day_iso2}: "
-                                          f"{_n_constrained}/{len(tr)} minút constrained na SOC band")
+                            if _n_constrained > 0:
+                                _batt_p = _batt_p_constrained
+                                print(f"[livesim.advance #614] {_prof_soc}/{_day_iso2}: "
+                                      f"{_n_constrained} minút constrained na SOC band")
                     except Exception as _e_soc:
                         pass   # fail-safe — bez constraint pokračuj
                     # Rozdelíme plán znova (po SOC constraint)
