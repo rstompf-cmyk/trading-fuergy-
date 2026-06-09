@@ -44,21 +44,23 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
         load = np.concatenate([load, np.zeros(T - load.size)])
     _has_load = bool(load.sum() > 1e-6)
     # Bug #624: efektívne soc_min = soc_min + reserve buffer
+    # Bug #646: aj efektívne soc_max = soc_max - reserve buffer (symetria)
     _soc_reserve_pct = max(0.0, min(50.0, float(soc_reserve_pct or 0.0)))
     _eff_soc_min_pct = float(soc_min_pct) + _soc_reserve_pct
-    socmin, socmax = batt_kwh*_eff_soc_min_pct/100, batt_kwh*soc_max_pct/100
+    _eff_soc_max_pct = max(_eff_soc_min_pct, float(soc_max_pct) - _soc_reserve_pct)
+    socmin, socmax = batt_kwh*_eff_soc_min_pct/100, batt_kwh*_eff_soc_max_pct/100
     soc0 = batt_kwh*soc_init_pct/100
     # Bug #643 (2026-06-09): terminal_soc MUSÍ rešpektovať soc_reserve_pct.
     # Predtým: ak používateľ zadal terminal_soc=5% (default = soc_min), LP smel pre
     # posledný slot ísť až na 5% — pod eff_min=20%. To umožnilo plánovať vybíjanie
     # do dna bez buffer-u → realita drift kvôli eff_d nepresnosti = pokuta.
-    # Fix: clamp terminal_soc na minimum eff_soc_min_pct.
+    # Fix: clamp terminal_soc na [eff_soc_min, eff_soc_max].
     if terminal_soc_pct is not None:
         _term_pct_raw = float(terminal_soc_pct)
-        _term_pct_eff = max(_eff_soc_min_pct, min(float(soc_max_pct), _term_pct_raw))
+        _term_pct_eff = max(_eff_soc_min_pct, min(_eff_soc_max_pct, _term_pct_raw))
         if _term_pct_eff != _term_pct_raw:
             print(f"[optimizer #643] terminal_soc clamp: {_term_pct_raw:.1f}% → {_term_pct_eff:.1f}% "
-                  f"(eff_min={_eff_soc_min_pct:.1f}%, soc_max={soc_max_pct:.1f}%)")
+                  f"(eff_min={_eff_soc_min_pct:.1f}%, eff_max={_eff_soc_max_pct:.1f}%)")
         term = batt_kwh * _term_pct_eff / 100
     else:
         term = soc0

@@ -196,20 +196,20 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         mults = np.clip(mults, 0.0, 5.0)
 
     # SOC limity
-    # Bug #624: efektívne soc_min = soc_min + reserve buffer
+    # Bug #624 + #646: efektívne soc_min/max = soc_min/max ± reserve buffer
     _soc_reserve_pct = max(0.0, min(50.0, float(soc_reserve_pct or 0.0)))
     _eff_soc_min_pct = float(soc_min_pct) + _soc_reserve_pct
+    _eff_soc_max_pct = max(_eff_soc_min_pct, float(soc_max_pct) - _soc_reserve_pct)
     socmin = batt_kwh * _eff_soc_min_pct / 100.0
-    socmax = batt_kwh * soc_max_pct / 100.0
+    socmax = batt_kwh * _eff_soc_max_pct / 100.0
     soc0 = batt_kwh * soc_init_pct / 100.0
-    # Bug #643: terminal_soc clamp na [eff_soc_min, soc_max]. Bez tohto LP smel
-    # ísť až po soc_min, ignorujúc reserve buffer.
+    # Bug #643/#646: terminal_soc clamp na [eff_soc_min, eff_soc_max].
     if terminal_soc_pct is not None:
         _term_pct_raw = float(terminal_soc_pct)
-        _term_pct_eff = max(_eff_soc_min_pct, min(float(soc_max_pct), _term_pct_raw))
+        _term_pct_eff = max(_eff_soc_min_pct, min(_eff_soc_max_pct, _term_pct_raw))
         if _term_pct_eff != _term_pct_raw:
             print(f"[joint_lp #643] terminal_soc clamp: {_term_pct_raw:.1f}% → {_term_pct_eff:.1f}% "
-                  f"(eff_min={_eff_soc_min_pct:.1f}%, soc_max={soc_max_pct:.1f}%)")
+                  f"(eff_min={_eff_soc_min_pct:.1f}%, eff_max={_eff_soc_max_pct:.1f}%)")
         term = batt_kwh * _term_pct_eff / 100.0
     else:
         term = soc0
