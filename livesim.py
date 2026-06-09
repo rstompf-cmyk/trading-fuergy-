@@ -1086,8 +1086,36 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                         _n_constrained += 1
                                 if _n_constrained > 0:
                                     _batt_p = _batt_p_constrained
+                                    # Bug #617: prepočítaj soc_pct v tr z constrained _batt_p,
+                                    # aby graf SOC odrážal skutočnú trajektóriu po obmedzení RT.
+                                    # SOC[t+1] = SOC[t] - batt_kw * dt_h / batt_kwh * 100
+                                    # (+ batt_kw = vybíja → SOC klesá; - batt_kw = nabíja → SOC rastie)
+                                    try:
+                                        _dt_h_min = 1.0 / 60.0
+                                        _eff_chg = float(getattr(cfg, "eff_chg", getattr(cfg, "eff", 0.95)) or 0.95)
+                                        _eff_dis = float(getattr(cfg, "eff_dis", getattr(cfg, "eff", 0.95)) or 0.95)
+                                        if _eff_chg > 1.5: _eff_chg /= 100.0
+                                        if _eff_dis > 1.5: _eff_dis /= 100.0
+                                        _soc_new = np.full(len(tr), 0.0, dtype=float)
+                                        # Start zo SOC z prvej minúty (pred constraint to bol pôvodný SOC)
+                                        _soc_cur = float(_soc_pct_arr[0])
+                                        _soc_new[0] = _soc_cur
+                                        for _i in range(1, len(tr)):
+                                            _kw_prev = float(_batt_p[_i-1])
+                                            if _kw_prev >= 0:
+                                                # vybíjanie z batt: SOC klesá podľa eff_dis
+                                                _delta_kwh = (_kw_prev * _dt_h_min) / max(_eff_dis, 0.01)
+                                            else:
+                                                # nabíjanie: SOC rastie podľa eff_chg
+                                                _delta_kwh = (_kw_prev * _dt_h_min) * _eff_chg
+                                            _soc_cur = _soc_cur - (_delta_kwh / _bkwh_max_soc) * 100.0
+                                            _soc_cur = max(0.0, min(100.0, _soc_cur))
+                                            _soc_new[_i] = _soc_cur
+                                        tr["soc_pct"] = _soc_new
+                                    except Exception as _e_rec:
+                                        pass
                                     print(f"[livesim.advance #614v2] {_prof_soc}/{_day_iso2}: "
-                                          f"{_n_constrained}/{len(tr)} minút RT vypnuté (SOC mimo band)")
+                                          f"{_n_constrained}/{len(tr)} minút RT vypnuté (SOC mimo band) + SOC recomputed")
                     except Exception as _e_soc:
                         pass   # fail-safe — bez constraint pokračuj
                     # Rozdelíme plán znova (po SOC constraint)
