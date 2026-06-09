@@ -430,49 +430,6 @@ class BattCapacityReservation(Base):
     profile: Mapped["Profile"] = relationship()
 
 
-class D1SocTrajectory(Base):
-    """Bug #614: SOC trajektória očakávaná D-1 plánom per 15-min slot.
-
-    D-1 plán určuje **želaný stav SOC** v každom slote. RT engine musí
-    rešpektovať túto trajektóriu — ak by zásah vyústil v SOC mimo `[expected −
-    tolerance, expected + tolerance]`, RT sa obmedzí.
-
-    Tým sa zabráni scenáru: RT za noci/ráno nabilo batt na 100% kvôli sys_MW
-    arbitráži → poobede D-1 chce nabíjať pre lacný DT → fyzicky nemôže prijať
-    → odchýlka voči Obchodu.
-
-    Trajektória sa vyráta zo `schedule['batt_kw']` D-1 plánu cez kumulatívnu
-    integráciu: SOC[t+1] = SOC[t] − batt_kw[t] × dt / batt_kwh.
-
-    UNIQUE (profile_id, day, slot_idx) — pri novom D-1 uložení sa staré
-    trajektórie pre deň zmažú (`clear_day_trajectory`).
-    """
-    __tablename__ = "d1_soc_trajectory"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    profile_id: Mapped[int] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"),
-                                              nullable=False, index=True)
-    day: Mapped[str] = mapped_column(String(10), nullable=False, index=True)   # YYYY-MM-DD
-    slot_idx: Mapped[int] = mapped_column(Integer, nullable=False)             # 0..95
-    expected_soc_pct: Mapped[float] = mapped_column(Float, nullable=False)     # SOC pri začiatku slotu
-    tolerance_pct: Mapped[float] = mapped_column(Float, default=10.0)          # ±%
-    created_at: Mapped[str] = mapped_column(String(32), nullable=False)        # ISO timestamp
-
-    __table_args__ = (
-        UniqueConstraint("profile_id", "day", "slot_idx",
-                          name="uq_d1_soc_trajectory"),
-        Index("idx_d1_soc_lookup", "profile_id", "day", "slot_idx"),
-        CheckConstraint("slot_idx >= 0 AND slot_idx <= 95",
-                          name="ck_d1_soc_slot_idx"),
-        CheckConstraint("expected_soc_pct >= 0 AND expected_soc_pct <= 100",
-                          name="ck_d1_soc_pct"),
-        CheckConstraint("tolerance_pct >= 0 AND tolerance_pct <= 100",
-                          name="ck_d1_soc_tolerance"),
-    )
-
-    profile: Mapped["Profile"] = relationship()
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # SYSTEM — UI settings, Cases, Realio config
 # ════════════════════════════════════════════════════════════════════════════

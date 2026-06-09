@@ -225,39 +225,11 @@ def save_plan(date_iso: str, step_min: int, kind: str, *,
     # Iba pre kind='plan' (D-1) — dentrh a dam_d1 sú samostatné a delia kapacitu.
     if kind == "plan":
         try:
-            from core.capacity_ledger import (
-                reserve as _ledger_reserve, clear_day,
-                save_d1_trajectory, compute_soc_trajectory, clear_day_trajectory,
-            )
+            from core.capacity_ledger import reserve as _ledger_reserve, clear_day
             _prof_for_ledger = resolve_profile(profile)
             if _prof_for_ledger:
                 # Reset existujúce D-1 rezervácie pre tento deň (re-uloženie plánu)
                 clear_day(_prof_for_ledger, date_iso)
-                # Bug #614: aj SOC trajektóriu reset + nová
-                clear_day_trajectory(_prof_for_ledger, date_iso)
-                # Vyrátaj D-1 SOC trajektóriu a ulož do d1_soc_trajectory
-                try:
-                    _batt_arr_traj = schedule.get("batt_kw") or schedule.get("batt") or []
-                    _soc_init = float((params or {}).get("soc_init", 0.0) or 0.0)
-                    # soc_init môže byť v % alebo v kWh — preferuj %
-                    _batt_kwh_traj = float((params or {}).get("batt_kwh", 0.0) or 0.0)
-                    if _soc_init > 1.5 and _batt_kwh_traj > 0:
-                        # _soc_init je v % (typicky 5..100)
-                        _soc_init_pct = _soc_init if _soc_init <= 100 else 100.0
-                    elif _batt_kwh_traj > 0:
-                        # legacy: soc_init je fraction (0..1) — prepočítaj na %
-                        _soc_init_pct = _soc_init * 100.0
-                    else:
-                        _soc_init_pct = 0.0
-                    _soc_traj = compute_soc_trajectory(
-                        _batt_arr_traj, _soc_init_pct, _batt_kwh_traj, int(step_min))
-                    if _soc_traj:
-                        _n_saved = save_d1_trajectory(_prof_for_ledger, date_iso,
-                                                       _soc_traj, tolerance_pct=10.0)
-                        print(f"[plan_store #614] D-1 SOC trajectory saved: {_n_saved} slots "
-                              f"(soc_init={_soc_init_pct:.1f}%, batt={_batt_kwh_traj:.0f}kWh)")
-                except Exception as _e_traj:
-                    print(f"[plan_store #614] SOC trajectory zlyhal: {_e_traj}")
                 # Schedule batt_kw môže byť pod kľúčom 'batt_kw' alebo 'batt'
                 _batt_arr = schedule.get("batt_kw") or schedule.get("batt") or []
                 _step = int(step_min)
