@@ -697,6 +697,18 @@ hodnôt vo formulári <a href="/">/Plán D-1</a> a <a href="/dentrh">/Denný trh
   </select></label>
 <p style="color:#666;font-size:12px;margin:6px 0">Tip: pri kroku 60 použi <b>kind=plan</b>, pri kroku 15 použi <b>kind=dentrh</b>. (Inak livesim plán nenájde.)</p>
 </fieldset>
+<fieldset style="background:#fff3e0;border-left:4px solid #FB8C00">
+<legend style="color:#E65100">Pred regeneráciou</legend>
+<label style="display:flex;gap:8px;align-items:center;cursor:pointer">
+  <input type="checkbox" name="purge_history" value="1" checked>
+  <span><b>Zmazať históriu DT plánov + VDT trades v rozsahu</b>
+  <span style="color:#666;font-size:12px;display:block;margin-top:2px">
+    Doporučené pri zmene parametrov (Max DAM, batt_kw, soc_reserve_pct…).
+    Inak livesim merguje staré VDT obchody do nového plánu → drift → pokuta za odchýlku.
+    Maže: plán JSON+DB, VDT paper_trades, capacity_ledger rezervácie pre vybraný rozsah.
+  </span></span>
+</label>
+</fieldset>
 <button type="submit">Spustiť generovanie</button>
 </form>
 
@@ -735,7 +747,8 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
                 zco_bias_w: float = Form(default=None),
                 max_export_kwh_day: float = Form(default=None),
                 max_import_kwh_day: float = Form(default=None),
-                rt_freedom: str = Form(default=None)):
+                rt_freedom: str = Form(default=None),
+                purge_history: str = Form(default=None)):
     """Hromadné generovanie plánov pre rozsah dátumov.
     Pre každý deň v [from, to] (inkluzívne) spustí internú generáciu a uloží do plan_store.
     Ak sú v requeste prítomné aj štandardné form polia (z /plan alebo /dentrh formulára),
@@ -777,11 +790,21 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
     from concurrent.futures import ThreadPoolExecutor, as_completed
     MAX_PARALLEL = 1                                       # sériovo (Open-Meteo veľmi striktný rate limit ~10 req/min)
 
+    _do_purge = bool(purge_history)
     def _stream():
         # PRE-flight: ktoré dni už majú plán na disku
         already = [d.date().isoformat() for d in dates
                     if ps.has_plan(d.date().isoformat(), int(step_min), str(kind))]
         total = len(dates)
+        # Bug #631: zmazať históriu pred regeneráciou (default ON cez checkbox)
+        purge_counts = {"plans": 0, "vdt_trades": 0, "ledger_rows": 0}
+        if _do_purge and total > 0:
+            try:
+                purge_counts = ps.purge_history_range(
+                    str(dates[0].date()), str(dates[-1].date()),
+                    step_min=int(step_min), kind=str(kind))
+            except Exception as _e_purge:
+                print(f"[plan_batch #631] purge_history_range zlyhal: {_e_purge}")
         yield ("<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
                 f"<title>Batch ({from_date}→{to_date})</title>"
                 "<style>body{font-family:-apple-system,Segoe UI,Arial;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}"
@@ -793,6 +816,13 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
         yield (f"<h1>📦 Batch plánovanie</h1>"
                 f"<p>Rozsah <b>{from_date} → {to_date}</b> ({total} dní), krok <b>{step_min} min</b>, kind <b>{kind}</b>. "
                 f"<i>Paralelizácia: {MAX_PARALLEL} workers.</i></p>")
+        if _do_purge:
+            yield (f"<div style='background:#fff3e0;border-left:4px solid #FB8C00;"
+                    f"padding:8px 12px;border-radius:6px;margin:8px 0'>"
+                    f"🗑️ <b>Pred-cleanup hotový:</b> zmazaných "
+                    f"<b>{purge_counts['plans']}</b> plánov, "
+                    f"<b>{purge_counts['vdt_trades']}</b> VDT trade-ov, "
+                    f"<b>{purge_counts['ledger_rows']}</b> ledger rezervácií</div>")
         if already:
             ul = "".join(
                 f"<li><a href='/plan_view?date={d}&step={int(step_min)}&kind={kind}'>{d}</a></li>"

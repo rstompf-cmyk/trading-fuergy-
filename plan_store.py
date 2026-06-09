@@ -455,6 +455,102 @@ def missing_plans(date_start_iso: str, date_end_iso: str, step_min: int,
     return [str(d.date()) for d in rng if not has_plan(str(d.date()), step_min, kind, profile)]
 
 
+def purge_history_range(date_start_iso: str, date_end_iso: str, *,
+                         profile: Optional[str] = None,
+                         step_min: Optional[int] = None,
+                         kind: Optional[str] = None) -> Dict[str, int]:
+    """Zmaže históriu (plány + VDT trades + capacity ledger rezervácie) pre rozsah.
+
+    Volá sa pred regeneráciou, aby simulácia v livesim nebrala do úvahy obchody
+    a plány vygenerované so starými parametrami. Bez tohto livesim merguje staré
+    VDT do plánu cez Bug BB → drift voči realite → skreslené výsledky.
+
+    Args:
+        date_start_iso, date_end_iso: rozsah dní (inclusive)
+        profile: cieľový profil (None = aktívny)
+        step_min: ak zadané, maže iba plány s týmto krokom (inak všetky kroky)
+        kind: ak zadané, maže iba plány s týmto kind (inak plan + dentrh)
+
+    Returns:
+        {"plans": N, "vdt_trades": N, "ledger_rows": N}
+    """
+    import pandas as _pd
+    counts = {"plans": 0, "vdt_trades": 0, "ledger_rows": 0}
+    prof = resolve_profile(profile)
+    rng = _pd.date_range(date_start_iso, date_end_iso, freq="D")
+    # ── 1. Plány ─────────────────────────────────────────────────────────
+    steps = [step_min] if step_min is not None else [60, 15]
+    kinds = [kind] if kind is not None else ["plan", "dentrh"]
+    for d in rng:
+        d_iso = str(d.date())
+        for s in steps:
+            for k in kinds:
+                try:
+                    if delete_plan(d_iso, int(s), str(k), profile=prof):
+                        counts["plans"] += 1
+                except Exception:
+                    pass
+    # ── 2. VDT paper trades (DB + CSV) ───────────────────────────────────
+    if prof:
+        try:
+            if _db_available():
+                from db import get_session
+                from db.models import Profile as _DbProfile, VdtPaperTrade as _DbVPT
+                with get_session() as sess:
+                    p_prof = sess.query(_DbProfile).filter_by(name=prof).one_or_none()
+                    if p_prof:
+                        qry = sess.query(_DbVPT).filter(
+                            _DbVPT.profile_id == p_prof.id,
+                            _DbVPT.date >= str(rng[0].date()),
+                            _DbVPT.date <= str(rng[-1].date()),
+                        )
+                        counts["vdt_trades"] = qry.count()
+                        qry.delete(synchronize_session=False)
+        except Exception as e:
+            print(f"[purge_history_range] VDT DB delete zlyhal: {e}")
+        # CSV cleanup (sandbox path)
+        try:
+            from core.paths import paper_trades_csv_path as _vdt_csv_path
+            import csv as _csv
+            csv_p = _vdt_csv_path(prof)
+            if os.path.exists(csv_p):
+                with open(csv_p, newline="") as f:
+                    rdr = _csv.reader(f); rows = list(rdr)
+                if rows:
+                    header = rows[0]
+                    try:
+                        ts_idx = header.index("timestamp")
+                    except ValueError:
+                        ts_idx = None
+                    if ts_idx is not None:
+                        d_min, d_max = str(rng[0].date()), str(rng[-1].date())
+                        kept = [header]
+                        removed_csv = 0
+                        for r in rows[1:]:
+                            if len(r) > ts_idx:
+                                d_str = (r[ts_idx] or "")[:10]
+                                if d_min <= d_str <= d_max:
+                                    removed_csv += 1
+                                    continue
+                            kept.append(r)
+                        if removed_csv > 0:
+                            with open(csv_p, "w", newline="") as f:
+                                w = _csv.writer(f); w.writerows(kept)
+                            counts["vdt_trades"] = max(counts["vdt_trades"], removed_csv)
+        except Exception as e:
+            print(f"[purge_history_range] VDT CSV cleanup zlyhal: {e}")
+    # ── 3. Capacity ledger ───────────────────────────────────────────────
+    if prof:
+        try:
+            from core.capacity_ledger import clear_day as _ledger_clear
+            for d in rng:
+                n = _ledger_clear(prof, str(d.date()))
+                counts["ledger_rows"] += int(n or 0)
+        except Exception as e:
+            print(f"[purge_history_range] ledger clear zlyhal: {e}")
+    return counts
+
+
 def delete_plan(date_iso: str, step_min: int, kind: str = "plan",
                 profile: Optional[str] = None) -> bool:
     """Zmaže plán; True ak existoval a zmazal sa, False inak."""
