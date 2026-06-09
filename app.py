@@ -699,29 +699,35 @@ hodnôt vo formulári <a href="/">/Plán D-1</a> a <a href="/dentrh">/Denný trh
 </fieldset>
 <fieldset style="background:#fff3e0;border-left:4px solid #FB8C00">
 <legend style="color:#E65100">Pred regeneráciou</legend>
-<label style="display:flex;gap:8px;align-items:center;cursor:pointer;margin-bottom:8px">
-  <input type="checkbox" name="purge_history" value="1" checked>
-  <span><b>Zmazať históriu DT plánov + VDT trades v rozsahu</b>
-  <span style="color:#666;font-size:12px;display:block;margin-top:2px">
+<div style="margin-bottom:10px">
+  <div style="display:flex;align-items:flex-start;gap:8px">
+    <input type="checkbox" name="purge_history" value="1" id="cb_purge" checked style="margin-top:3px;width:18px;height:18px">
+    <label for="cb_purge" style="display:block;cursor:pointer;font-weight:600;color:#222">
+      Zmazať históriu DT plánov + VDT trades v rozsahu
+    </label>
+  </div>
+  <div style="color:#666;font-size:12px;margin:4px 0 0 26px;line-height:1.5">
     Doporučené pri zmene parametrov (Max DAM, batt_kw, soc_reserve_pct…).
     Inak livesim merguje staré VDT obchody do nového plánu → drift → pokuta za odchýlku.
     Maže: plán JSON+DB, VDT paper_trades, VDT cache, auto_control eventy,
     capacity_ledger pre <b>vybraný rozsah</b>.
-  </span></span>
-</label>
-<label style="display:flex;gap:8px;align-items:center;cursor:pointer;
-        background:#ffebee;padding:8px 10px;border-radius:6px;
-        border:2px solid #C62828">
-  <input type="checkbox" name="full_reset" value="1">
-  <span><b style="color:#C62828">🔥 ÚPLNÝ reset profilu (ako nový profil)</b>
-  <span style="color:#666;font-size:12px;display:block;margin-top:2px">
+  </div>
+</div>
+<div style="background:#ffebee;padding:10px 12px;border-radius:6px;border:2px solid #C62828">
+  <div style="display:flex;align-items:flex-start;gap:8px">
+    <input type="checkbox" name="full_reset" value="1" id="cb_full" style="margin-top:3px;width:18px;height:18px">
+    <label for="cb_full" style="display:block;cursor:pointer;font-weight:700;color:#C62828">
+      🔥 ÚPLNÝ reset profilu (ako nový profil)
+    </label>
+  </div>
+  <div style="color:#444;font-size:12px;margin:4px 0 0 26px;line-height:1.5">
     Pri tejto možnosti rozsah dátumov sa <b>ignoruje</b> — vyčistí sa <b>všetko</b>:
     všetky plány (nielen v rozsahu), <b>livesim CSV trace</b>, plan_overrides
     (× šablóny), MPC cache, VDT cache, paper trades, ledger, auto_control eventy.
     Profile config (batt_kw, kwp, lat/lon…) sa zachová.
     Použi keď je drift voči realite hocikedy v minulosti a chceš čistý štart.
-  </span></span>
-</label>
+  </div>
+</div>
 </fieldset>
 <button type="submit">Spustiť generovanie</button>
 </form>
