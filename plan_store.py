@@ -606,6 +606,213 @@ def purge_history_range(date_start_iso: str, date_end_iso: str, *,
     return counts
 
 
+def purge_full_profile(profile: Optional[str] = None) -> Dict[str, int]:
+    """ÚPLNÝ reset profilu — ako keby bol novovytvorený.
+
+    Maže VŠETKO čo môže ovplyvniť simuláciu/livesim:
+    - Všetky plány (JSON + DB) bez ohľadu na rozsah dní
+    - Všetky VDT paper trades (DB + CSV) pre profil
+    - Capacity ledger (všetky rezervácie pre profil)
+    - VDT live_advisor cache + MPC cache
+    - Auto_control_event log
+    - Plan overrides (× šablóny per day)
+    - Livesim CSV trace (per-port súbory aktívne pre tento profil)
+
+    Zachová:
+    - Profile config (name, batt_kw, kwp, lat/lon, eff, …)
+    - UI settings (formulárové polia)
+
+    Returns: dict s počtami zmazaných položiek per kategória.
+    """
+    counts = {"plans": 0, "vdt_trades": 0, "ledger_rows": 0,
+              "vdt_cache": 0, "auto_control_events": 0,
+              "plan_overrides": 0, "livesim_files": 0}
+    prof = resolve_profile(profile)
+    if not prof:
+        return counts
+    # ── 1. Plány — všetky (cez DB scan + JSON glob) ──────────────────────
+    try:
+        if _db_available():
+            from db import get_session
+            from db.models import Profile as _DbProfile, Plan as _DbPlan
+            with get_session() as sess:
+                p_prof = sess.query(_DbProfile).filter_by(name=prof).one_or_none()
+                if p_prof:
+                    qry = sess.query(_DbPlan).filter(_DbPlan.profile_id == p_prof.id)
+                    counts["plans"] = qry.count()
+                    qry.delete(synchronize_session=False)
+    except Exception as e:
+        print(f"[purge_full_profile] plans DB delete zlyhal: {e}")
+    # JSON glob — všetky plány v sandbox path
+    try:
+        from core.paths import plans_dir as _plans_dir
+        import glob as _g
+        pd = _plans_dir(prof)
+        if os.path.isdir(pd):
+            for fp in _g.glob(os.path.join(pd, "*.json")):
+                try:
+                    os.remove(fp)
+                    counts["plans"] += 1
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[purge_full_profile] plans JSON glob zlyhal: {e}")
+    # ── 2. VDT paper trades — všetky pre profil ──────────────────────────
+    try:
+        if _db_available():
+            from db import get_session
+            from db.models import Profile as _DbProfile, VdtPaperTrade as _DbVPT
+            with get_session() as sess:
+                p_prof = sess.query(_DbProfile).filter_by(name=prof).one_or_none()
+                if p_prof:
+                    qry = sess.query(_DbVPT).filter(_DbVPT.profile_id == p_prof.id)
+                    counts["vdt_trades"] = qry.count()
+                    qry.delete(synchronize_session=False)
+    except Exception as e:
+        print(f"[purge_full_profile] VDT DB delete zlyhal: {e}")
+    # VDT CSV — odstráň všetky riadky pre profil
+    try:
+        from core.paths import paper_trades_csv_path as _vdt_csv
+        import csv as _csv
+        csv_p = _vdt_csv(prof)
+        if os.path.exists(csv_p):
+            with open(csv_p, newline="") as f:
+                rows = list(_csv.reader(f))
+            if rows:
+                header = rows[0]
+                try:
+                    prof_idx = header.index("profile")
+                except ValueError:
+                    prof_idx = None
+                if prof_idx is not None:
+                    kept = [header]; removed = 0
+                    for r in rows[1:]:
+                        if len(r) > prof_idx and r[prof_idx] == prof:
+                            removed += 1; continue
+                        kept.append(r)
+                    if removed > 0:
+                        with open(csv_p, "w", newline="") as f:
+                            _csv.writer(f).writerows(kept)
+                        counts["vdt_trades"] = max(counts["vdt_trades"], removed)
+    except Exception as e:
+        print(f"[purge_full_profile] VDT CSV cleanup zlyhal: {e}")
+    # ── 3. Capacity ledger — všetky dni (cez DB scan) ────────────────────
+    try:
+        if _db_available():
+            from db import get_session
+            from db.models import Profile as _DbProfile
+            try:
+                from db.models import BattCapacityReservation as _DbLed
+            except ImportError:
+                _DbLed = None
+            if _DbLed is not None:
+                with get_session() as sess:
+                    p_prof = sess.query(_DbProfile).filter_by(name=prof).one_or_none()
+                    if p_prof:
+                        qry = sess.query(_DbLed).filter(_DbLed.profile_id == p_prof.id)
+                        counts["ledger_rows"] = qry.count()
+                        qry.delete(synchronize_session=False)
+    except Exception as e:
+        print(f"[purge_full_profile] ledger DB delete zlyhal: {e}")
+    # ── 4. VDT cache + MPC cache ─────────────────────────────────────────
+    try:
+        from core.paths import vdt_advisor_cache_path as _vdt_cache
+        cp = _vdt_cache(prof)
+        if os.path.exists(cp):
+            os.remove(cp); counts["vdt_cache"] += 1
+        # MPC cache + súrodencov v rovnakom adresári
+        cache_dir = os.path.dirname(cp)
+        import glob as _g
+        safe_name = prof.replace("/", "_").replace("\\", "_")
+        for pattern in [f"vdt_advisor_{safe_name}*.json",
+                        f"mpc_tick_{safe_name}*.json",
+                        f"mpc_last_setpoint_{safe_name}*.json"]:
+            for fp in _g.glob(os.path.join(cache_dir, pattern)):
+                try:
+                    os.remove(fp); counts["vdt_cache"] += 1
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[purge_full_profile] VDT/MPC cache cleanup zlyhal: {e}")
+    # ── 5. Auto_control events ────────────────────────────────────────────
+    try:
+        if _db_available():
+            from db import get_session
+            from db.models import Profile as _DbProfile
+            try:
+                from db.models import AutoControlEvent as _DbACE
+            except ImportError:
+                _DbACE = None
+            if _DbACE is not None:
+                with get_session() as sess:
+                    p_prof = sess.query(_DbProfile).filter_by(name=prof).one_or_none()
+                    if p_prof:
+                        qry = sess.query(_DbACE).filter(_DbACE.profile_id == p_prof.id)
+                        counts["auto_control_events"] = qry.count()
+                        qry.delete(synchronize_session=False)
+    except Exception as e:
+        print(f"[purge_full_profile] auto_control DB delete zlyhal: {e}")
+    # ── 6. Plan overrides ────────────────────────────────────────────────
+    try:
+        import plan_overrides as _po
+        # plan_overrides.clear_day vyžaduje date — pôjdeme glob cestou
+        from core.paths import plan_overrides_dir as _po_dir
+        po_root = _po_dir(prof) if hasattr(_po, "_path") else None
+        if po_root and os.path.isdir(po_root):
+            import glob as _g
+            for fp in _g.glob(os.path.join(po_root, "*.json")):
+                try:
+                    os.remove(fp); counts["plan_overrides"] += 1
+                except Exception:
+                    pass
+    except Exception as e:
+        # plan_overrides_dir nemusí existovať v core/paths — skús priamy filesystem path
+        try:
+            import glob as _g
+            for base in ["out/sk/plan_overrides", "out/cz/plan_overrides", "out/plan_overrides"]:
+                pdir = os.path.join(base, prof)
+                if os.path.isdir(pdir):
+                    for fp in _g.glob(os.path.join(pdir, "*.json")):
+                        try:
+                            os.remove(fp); counts["plan_overrides"] += 1
+                        except Exception:
+                            pass
+        except Exception as e2:
+            print(f"[purge_full_profile] plan_overrides cleanup zlyhal: {e} / {e2}")
+    # ── 7. Livesim CSV — per-port files kde aktívny profil = prof ────────
+    try:
+        import glob as _g, json as _json
+        for market_sub in ["sk", "cz"]:
+            md = os.path.join("out", market_sub)
+            if not os.path.isdir(md):
+                continue
+            # Per-port active profile lookup
+            for pf in _g.glob(os.path.join(md, "profiles", "_active*.json")):
+                try:
+                    with open(pf) as fh:
+                        active = _json.load(fh)
+                    active_name = active.get("name") or active.get("active") or ""
+                except Exception:
+                    continue
+                if active_name != prof:
+                    continue
+                base = os.path.basename(pf).replace(".json", "").replace("_active", "")
+                port = base.lstrip("_") if base.lstrip("_") else "8000"
+                for pattern in [
+                    f"livesim_*_{port}.csv",
+                    f"livesim_*_{port}.meta.json",
+                    f"livesim_*_{port}_meta.json",
+                ]:
+                    for fp in _g.glob(os.path.join(md, pattern)):
+                        try:
+                            os.remove(fp); counts["livesim_files"] += 1
+                        except Exception:
+                            pass
+    except Exception as e:
+        print(f"[purge_full_profile] livesim cleanup zlyhal: {e}")
+    return counts
+
+
 def delete_plan(date_iso: str, step_min: int, kind: str = "plan",
                 profile: Optional[str] = None) -> bool:
     """Zmaže plán; True ak existoval a zmazal sa, False inak."""

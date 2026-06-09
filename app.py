@@ -699,13 +699,27 @@ hodnôt vo formulári <a href="/">/Plán D-1</a> a <a href="/dentrh">/Denný trh
 </fieldset>
 <fieldset style="background:#fff3e0;border-left:4px solid #FB8C00">
 <legend style="color:#E65100">Pred regeneráciou</legend>
-<label style="display:flex;gap:8px;align-items:center;cursor:pointer">
+<label style="display:flex;gap:8px;align-items:center;cursor:pointer;margin-bottom:8px">
   <input type="checkbox" name="purge_history" value="1" checked>
   <span><b>Zmazať históriu DT plánov + VDT trades v rozsahu</b>
   <span style="color:#666;font-size:12px;display:block;margin-top:2px">
     Doporučené pri zmene parametrov (Max DAM, batt_kw, soc_reserve_pct…).
     Inak livesim merguje staré VDT obchody do nového plánu → drift → pokuta za odchýlku.
-    Maže: plán JSON+DB, VDT paper_trades, capacity_ledger rezervácie pre vybraný rozsah.
+    Maže: plán JSON+DB, VDT paper_trades, VDT cache, auto_control eventy,
+    capacity_ledger pre <b>vybraný rozsah</b>.
+  </span></span>
+</label>
+<label style="display:flex;gap:8px;align-items:center;cursor:pointer;
+        background:#ffebee;padding:8px 10px;border-radius:6px;
+        border:2px solid #C62828">
+  <input type="checkbox" name="full_reset" value="1">
+  <span><b style="color:#C62828">🔥 ÚPLNÝ reset profilu (ako nový profil)</b>
+  <span style="color:#666;font-size:12px;display:block;margin-top:2px">
+    Pri tejto možnosti rozsah dátumov sa <b>ignoruje</b> — vyčistí sa <b>všetko</b>:
+    všetky plány (nielen v rozsahu), <b>livesim CSV trace</b>, plan_overrides
+    (× šablóny), MPC cache, VDT cache, paper trades, ledger, auto_control eventy.
+    Profile config (batt_kw, kwp, lat/lon…) sa zachová.
+    Použi keď je drift voči realite hocikedy v minulosti a chceš čistý štart.
   </span></span>
 </label>
 </fieldset>
@@ -748,7 +762,8 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
                 max_export_kwh_day: float = Form(default=None),
                 max_import_kwh_day: float = Form(default=None),
                 rt_freedom: str = Form(default=None),
-                purge_history: str = Form(default=None)):
+                purge_history: str = Form(default=None),
+                full_reset: str = Form(default=None)):
     """Hromadné generovanie plánov pre rozsah dátumov.
     Pre každý deň v [from, to] (inkluzívne) spustí internú generáciu a uloží do plan_store.
     Ak sú v requeste prítomné aj štandardné form polia (z /plan alebo /dentrh formulára),
@@ -791,14 +806,21 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
     MAX_PARALLEL = 1                                       # sériovo (Open-Meteo veľmi striktný rate limit ~10 req/min)
 
     _do_purge = bool(purge_history)
+    _do_full = bool(full_reset)
     def _stream():
         # PRE-flight: ktoré dni už majú plán na disku
         already = [d.date().isoformat() for d in dates
                     if ps.has_plan(d.date().isoformat(), int(step_min), str(kind))]
         total = len(dates)
-        # Bug #631: zmazať históriu pred regeneráciou (default ON cez checkbox)
+        # Bug #631/#634: zmazať históriu pred regeneráciou
+        # full_reset má prednosť pred purge_history (úplný wipe ignoruje date range)
         purge_counts = {"plans": 0, "vdt_trades": 0, "ledger_rows": 0}
-        if _do_purge and total > 0:
+        if _do_full:
+            try:
+                purge_counts = ps.purge_full_profile()
+            except Exception as _e_purge:
+                print(f"[plan_batch #634] purge_full_profile zlyhal: {_e_purge}")
+        elif _do_purge and total > 0:
             try:
                 purge_counts = ps.purge_history_range(
                     str(dates[0].date()), str(dates[-1].date()),
@@ -816,7 +838,19 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
         yield (f"<h1>📦 Batch plánovanie</h1>"
                 f"<p>Rozsah <b>{from_date} → {to_date}</b> ({total} dní), krok <b>{step_min} min</b>, kind <b>{kind}</b>. "
                 f"<i>Paralelizácia: {MAX_PARALLEL} workers.</i></p>")
-        if _do_purge:
+        if _do_full:
+            yield (f"<div style='background:#ffebee;border-left:4px solid #C62828;"
+                    f"padding:10px 14px;border-radius:6px;margin:8px 0'>"
+                    f"🔥 <b>ÚPLNÝ reset profilu hotový:</b> zmazaných "
+                    f"<b>{purge_counts.get('plans', 0)}</b> plánov, "
+                    f"<b>{purge_counts.get('vdt_trades', 0)}</b> VDT trade-ov, "
+                    f"<b>{purge_counts.get('vdt_cache', 0)}</b> VDT/MPC cache súborov, "
+                    f"<b>{purge_counts.get('auto_control_events', 0)}</b> auto_control eventov, "
+                    f"<b>{purge_counts.get('plan_overrides', 0)}</b> plan_override súborov, "
+                    f"<b>{purge_counts.get('livesim_files', 0)}</b> livesim CSV/meta súborov, "
+                    f"<b>{purge_counts.get('ledger_rows', 0)}</b> ledger rezervácií.<br>"
+                    f"<i>Profile config (batt_kw, kwp, lat/lon, …) zostáva nedotknutý.</i></div>")
+        elif _do_purge:
             yield (f"<div style='background:#fff3e0;border-left:4px solid #FB8C00;"
                     f"padding:8px 12px;border-radius:6px;margin:8px 0'>"
                     f"🗑️ <b>Pred-cleanup hotový:</b> zmazaných "
