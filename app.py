@@ -1259,7 +1259,16 @@ def market_set(market: str = Form(...)):
 def profiles_delete(name: str = Form(...)):
     if pr is None:
         return "<p>profiles modul nedostupný.</p>"
-    deleted = pr.delete_profile(name)
+    try:
+        deleted = pr.delete_profile(name)
+    except Exception as e:
+        # Bug #640: error v delete (FK constraint, IntegrityError) sa už nepotláča
+        return (f"<!doctype html><html><head><meta charset='utf-8'></head><body style='font-family:Arial;padding:20px'>"
+                 f"<h2 style='color:#C62828'>✗ Mazanie profilu zlyhalo</h2>"
+                 f"<p>Profil <b>{name}</b> sa nepodarilo zmazať. Detail chyby:</p>"
+                 f"<pre style='background:#ffebee;padding:12px;border-radius:6px;overflow:auto'>"
+                 f"{type(e).__name__}: {e}</pre>"
+                 f"<p><a href='/profiles'>← Späť na zoznam profilov</a></p></body></html>")
     msg = "✓ Zmazané" if deleted else "⚠ Neexistovalo"
     return (f"<!doctype html><html><head><meta charset='utf-8'>"
              f"<meta http-equiv='refresh' content='1;url=/profiles'></head><body>"

@@ -18,7 +18,7 @@ import os
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, Session as _SASession
 
 # ── DB URL z env (lokálne SQLite, na Postgres stačí zmeniť env var) ─────────
@@ -33,6 +33,19 @@ if DB_URL.startswith("sqlite"):
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
 
 engine = create_engine(DB_URL, **_engine_kwargs)
+
+
+# Bug #640 (2026-06-09): zapnúť PRAGMA foreign_keys=ON v každom SQLite connection.
+# SQLite default = vypnuté, takže ON DELETE CASCADE nepôsobí. Bez tohto sa
+# delete_profile zachytí na IntegrityError lebo Plan má FK profile_id (no cascade).
+if DB_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _conn_record):
+        cur = dbapi_conn.cursor()
+        try:
+            cur.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cur.close()
 
 # Session factory — autoflush=False aby sme mali plnú kontrolu nad commit-mi
 SessionFactory = sessionmaker(bind=engine, autoflush=False, autocommit=False,

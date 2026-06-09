@@ -383,7 +383,13 @@ def save_profile_validated(cfg) -> str:
 
 
 def delete_profile(name: str) -> bool:
-    """Zmaže profile (DB aj JSON). True ak existoval aspoň v jednom úložisku."""
+    """Zmaže profile (DB aj JSON). True ak existoval aspoň v jednom úložisku.
+
+    Bug #640 (2026-06-09): explicitne mažeme FK závislosti BEZ cascade pred
+    samotným Profile (Plan, ActiveProfile, AutoControlEvent, BattCapacityReservation).
+    Ostatné (VdtPaperTrade, PlanOverride, LoadProfile, UserProfileAccess) majú
+    ORM cascade="all, delete-orphan" → vymažú sa automaticky.
+    """
     safe = _safe_name(name)
     found = False
     # DB delete (dual storage)
@@ -393,19 +399,63 @@ def delete_profile(name: str) -> bool:
             from db.models import Profile as _DbProfile
             with get_session() as s:
                 p_db = s.query(_DbProfile).filter_by(name=safe).one_or_none()
+                if p_db is None:
+                    # Skús pôvodný (neescapovaný) názov — pri sandbox sa nemusí trafiť
+                    p_db = s.query(_DbProfile).filter_by(name=str(name).strip()).one_or_none()
                 if p_db is not None:
+                    pid = p_db.id
+                    # 1. Plans (Plan + PlanSlot cez cascade na plan_id)
+                    try:
+                        from db.models import Plan as _DbPlan
+                        s.query(_DbPlan).filter_by(profile_id=pid).delete(synchronize_session=False)
+                    except Exception as _e1:
+                        print(f"[delete_profile #640] Plan delete zlyhal: {_e1}")
+                    # 2. ActiveProfile (per-port lookup)
+                    try:
+                        from db.models import ActiveProfile as _DbAP
+                        s.query(_DbAP).filter_by(profile_id=pid).delete(synchronize_session=False)
+                    except Exception as _e2:
+                        print(f"[delete_profile #640] ActiveProfile delete zlyhal: {_e2}")
+                    # 3. AutoControlEvent (Optional FK)
+                    try:
+                        from db.models import AutoControlEvent as _DbACE
+                        s.query(_DbACE).filter_by(profile_id=pid).delete(synchronize_session=False)
+                    except Exception as _e3:
+                        print(f"[delete_profile #640] AutoControlEvent delete zlyhal: {_e3}")
+                    # 4. BattCapacityReservation (ondelete CASCADE — pre istotu manuálne)
+                    try:
+                        from db.models import BattCapacityReservation as _DbBCR
+                        s.query(_DbBCR).filter_by(profile_id=pid).delete(synchronize_session=False)
+                    except Exception as _e4:
+                        print(f"[delete_profile #640] BattCapacityReservation delete zlyhal: {_e4}")
+                    # 5. D1SocTrajectory (ondelete CASCADE — pre istotu manuálne)
+                    try:
+                        from db.models import D1SocTrajectory as _DbD1S
+                        s.query(_DbD1S).filter_by(profile_id=pid).delete(synchronize_session=False)
+                    except Exception:
+                        pass            # tabuľka môže neexistovať v starých DB
+                    # 6. UserProfileAccess (ORM cascade existuje, ale pre istotu)
+                    try:
+                        from db.models import UserProfileAccess as _DbUPA
+                        s.query(_DbUPA).filter_by(profile_id=pid).delete(synchronize_session=False)
+                    except Exception:
+                        pass
+                    # 7. Samotný Profile (cascade odstráni zvyšné rels: VDT, plan_overrides,
+                    #    load_profiles)
                     s.delete(p_db)
                     found = True
+                    print(f"[delete_profile #640] {safe} (id={pid}) odstránený z DB")
         except Exception as e:
             print(f"[profiles.delete_profile {safe}] DB delete zlyhal: {e}")
-    # JSON delete (vždy)
+            raise   # bug #640: prebublať chybu nahor, nech UI vidí dôvod
+    # JSON delete (vždy) — sandbox aj legacy path
     p = _path(name)
     if os.path.exists(p):
         try:
             os.remove(p)
             found = True
-        except OSError:
-            pass
+        except OSError as _e_fs:
+            print(f"[profiles.delete_profile {safe}] FS delete zlyhal: {_e_fs}")
     return found
 
 
