@@ -213,16 +213,29 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         term = batt_kwh * _term_pct_eff / 100.0
     else:
         term = soc0
-    # Auto-adjust ak start je mimo limits (rovnaká logika ako vdt_optimizer)
-    if soc0 < socmin:
-        socmin = soc0
-    if soc0 > socmax:
-        socmax = soc0
+    # Bug #645 (2026-06-09): auto-adjust SOC bound IBA pre prípady BEZ reserve buffer.
+    # Predtým: keď soc_init < socmin (vrátane reserve), znížil sa socmin → Bug #624/#643
+    # constraint sa zmazal a LP plánoval vybíjanie po soc_min (=5%) namiesto eff_min (=20%).
+    # Fix: ak má profile reserve>0, NESPUSTIŤ auto-adjust — LP musí nabíjať na začiatok
+    # aby SOC[0] dosiahlo eff_min. Pre legacy bez reserve necháme pôvodnú logiku.
+    if _soc_reserve_pct <= 0:
+        if soc0 < socmin:
+            socmin = soc0
+        if soc0 > socmax:
+            socmax = soc0
+    else:
+        # Diag log keď reserve aktívne — vidíme či LP zvládne nabiť na začiatok
+        if soc0 < socmin:
+            print(f"[joint_lp #645] soc_init={soc_init_pct:.1f}% < eff_min={_eff_soc_min_pct:.1f}% "
+                  f"— LP musí v prvých slotoch nabiť (žiadny auto-adjust kvôli reserve)")
+        if soc0 > socmax:
+            print(f"[joint_lp #645] soc_init={soc_init_pct:.1f}% > soc_max={soc_max_pct:.1f}%")
     # Bug #644: diagnostika joint_lp vstupu
     print(f"[optimize_joint_day] batt={batt_kw:.0f}kW/{batt_kwh:.0f}kWh, "
           f"soc_init={soc_init_pct:.1f}%, soc_min={soc_min_pct:.1f}%, "
           f"soc_reserve={_soc_reserve_pct:.1f}% → eff_min={_eff_soc_min_pct:.1f}%, "
-          f"soc_max={soc_max_pct:.1f}%, term={terminal_soc_pct}")
+          f"soc_max={soc_max_pct:.1f}%, term={terminal_soc_pct}, "
+          f"socmin_kwh={socmin:.0f}, term_kwh={term:.0f}")
 
     # Grid limits
     g_im = grid_kw_import if grid_kw_import is not None else 1e6
