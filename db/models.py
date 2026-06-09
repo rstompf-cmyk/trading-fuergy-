@@ -387,6 +387,49 @@ class AutoControlEvent(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
 
+class BattCapacityReservation(Base):
+    """Bug #611: Capacity ledger — rezervácie kapacity batérie per 15-min slot.
+
+    Drží poradie nasadenia D-1 → VDT → RT s explicitným audit trailom.
+    Pre každý (profile, day, slot, source, direction) môže existovať najviac
+    jeden záznam s aktívnou rezerváciou. Po VDT audite (#612) sa nové trades
+    obmedzia na voľnú kapacitu (= batt_kw_max − Σ existujúce rezervácie).
+
+    Vzťahy:
+        - D-1 plán pri uložení do plan_store → reserve(source='d1', kw=plan_batt)
+        - VDT order pred zápisom → audit_vdt_order → reserve(source='vdt', trade_id=X)
+        - RT engine v livesim → available(slot, dir) → vrátiť voľnú kapacitu
+
+    `slot_idx` 0..95 (15-min sloty dňa). `direction`: 'charge'|'discharge'.
+    `kw` vždy POSITIVE — direction určuje znamienko v agregácii.
+    """
+    __tablename__ = "batt_capacity_reservation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"),
+                                              nullable=False, index=True)
+    day: Mapped[str] = mapped_column(String(10), nullable=False, index=True)   # YYYY-MM-DD
+    slot_idx: Mapped[int] = mapped_column(Integer, nullable=False)             # 0..95
+    source: Mapped[str] = mapped_column(String(16), nullable=False)            # 'd1'|'vdt'|'rt'|'auto_control'
+    direction: Mapped[str] = mapped_column(String(10), nullable=False)         # 'charge'|'discharge'
+    kw: Mapped[float] = mapped_column(Float, nullable=False)                   # positive
+    trade_id: Mapped[Optional[str]] = mapped_column(String(64))                # link na vdt_paper_trade pre VDT zdroj
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)        # ISO timestamp
+    note: Mapped[Optional[str]] = mapped_column(Text)                          # audit poznámka (downscale, reject reason)
+
+    __table_args__ = (
+        UniqueConstraint("profile_id", "day", "slot_idx", "source", "direction", "trade_id",
+                          name="uq_batt_reservation"),
+        Index("idx_batt_lookup", "profile_id", "day", "slot_idx"),
+        CheckConstraint("source IN ('d1','vdt','rt','auto_control')", name="ck_batt_source"),
+        CheckConstraint("direction IN ('charge','discharge')", name="ck_batt_direction"),
+        CheckConstraint("slot_idx >= 0 AND slot_idx <= 95", name="ck_batt_slot_idx"),
+        CheckConstraint("kw >= 0", name="ck_batt_kw_positive"),
+    )
+
+    profile: Mapped["Profile"] = relationship()
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # SYSTEM — UI settings, Cases, Realio config
 # ════════════════════════════════════════════════════════════════════════════
