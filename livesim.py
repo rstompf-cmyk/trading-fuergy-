@@ -845,26 +845,47 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             # a robiť RT decisions na základe odchýlky voči TÝMTO commit-om (nie len D-1).
             # Pre 60-min plán: sumuj 4 VDT 15-min sloty na hodinu. Pre 96-slot plán: 1:1.
             # No-op pre profil bez VDT trade-ov (vdt_state vráti nuly).
+            # Bug #625-A (2026-06-09): clip na ±batt_kw_max — plán target NESMIE prekročiť
+            # fyzický limit batérie. Ak by D-1+VDT presiahlo max, rt_controller dostane
+            # nedosiahnuteľný target a vznikne odchýlka voči nominácii obchodu = pokuta.
             try:
                 import vdt_state as _vs_sch
                 from core.profile_resolver import get_active as _ga_sch
                 _prof_sch = _ga_sch()
+                _bkw_max_clip = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
                 if _prof_sch:
                     _vdt_kw_96 = _vs_sch.get_realized_batt_kw(_prof_sch,
                                                               today_iso=day.isoformat(),
                                                               dt_h=0.25)
                     if isinstance(_vdt_kw_96, list) and len(_vdt_kw_96) >= 96 and any(_vdt_kw_96):
+                        _clipped_slots = 0
                         if step == 15 and len(sch) >= 96:
                             # 1:1 mapping — slot i v sch zodpovedá slot i vo VDT
                             for _i in range(min(96, len(sch))):
-                                sch.at[_i, "batt_kw"] = float(sch.at[_i, "batt_kw"]) + float(_vdt_kw_96[_i] or 0.0)
+                                _new = float(sch.at[_i, "batt_kw"]) + float(_vdt_kw_96[_i] or 0.0)
+                                # Bug #625-A: hard clip na fyzický limit batérie
+                                if _bkw_max_clip > 0 and abs(_new) > _bkw_max_clip:
+                                    _clipped_slots += 1
+                                    _new = max(-_bkw_max_clip, min(_bkw_max_clip, _new))
+                                sch.at[_i, "batt_kw"] = _new
                         elif step == 60 and len(sch) >= 24:
                             # 60-min: každá hodina = priemer 4 VDT 15-min slotov
                             for _h in range(min(24, len(sch))):
                                 _h_avg = sum(_vdt_kw_96[_h*4:_h*4+4]) / 4.0
-                                sch.at[_h, "batt_kw"] = float(sch.at[_h, "batt_kw"]) + _h_avg
-                        print(f"[livesim Bug BB] sch.batt_kw += VDT pre {_prof_sch} ({day.isoformat()}): "
-                              f"{sum(1 for v in _vdt_kw_96 if abs(v)>0.01)} nenulových slotov")
+                                _new = float(sch.at[_h, "batt_kw"]) + _h_avg
+                                # Bug #625-A: hard clip na fyzický limit batérie
+                                if _bkw_max_clip > 0 and abs(_new) > _bkw_max_clip:
+                                    _clipped_slots += 1
+                                    _new = max(-_bkw_max_clip, min(_bkw_max_clip, _new))
+                                sch.at[_h, "batt_kw"] = _new
+                        _vdt_nonzero = sum(1 for v in _vdt_kw_96 if abs(v)>0.01)
+                        if _clipped_slots > 0:
+                            print(f"[livesim Bug BB+#625-A] sch.batt_kw += VDT pre {_prof_sch} ({day.isoformat()}): "
+                                  f"{_vdt_nonzero} nenulových slotov, CLIPPED {_clipped_slots} slotov "
+                                  f"(prekročili ±{_bkw_max_clip:.0f} kW)")
+                        else:
+                            print(f"[livesim Bug BB] sch.batt_kw += VDT pre {_prof_sch} ({day.isoformat()}): "
+                                  f"{_vdt_nonzero} nenulových slotov")
             except Exception as _e_sch_vdt:
                 print(f"[livesim Bug BB] aplikácia VDT do sch zlyhala: {_e_sch_vdt}")
             rev, cyc, tr = _run_physical_day(cfg, mn_day, sch, day, step, bd, bc,
@@ -910,7 +931,15 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     pass
                 tr["plan_batt_dam_kw"] = dam_per_min
                 tr["plan_batt_vdt_kw"] = vdt_per_min
-                tr["plan_batt_kw"] = [d + v for d, v in zip(dam_per_min, vdt_per_min)]
+                # Bug #625-A (2026-06-09): plan_batt_kw = D-1 + VDT clipnuté na ±batt_kw_max.
+                # Plán target NESMIE prekročiť fyzický limit batérie — inak vznikne nereálna
+                # nominácia voči ktorej sa meria odchýlka (= pokuta).
+                _bkw_max_pb = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
+                _plan_batt_raw = [d + v for d, v in zip(dam_per_min, vdt_per_min)]
+                if _bkw_max_pb > 0:
+                    tr["plan_batt_kw"] = [max(-_bkw_max_pb, min(_bkw_max_pb, x)) for x in _plan_batt_raw]
+                else:
+                    tr["plan_batt_kw"] = _plan_batt_raw
                 # Bug V (2026-06-07): VDT trade ide cez sieť (predaj batt→grid = export +;
                 # nákup grid→batt = import −). Plus VDT kWh má rovnakú konvenciu ako plan_grid_kwh
                 # (+ export, − import). Pripočítame VDT kWh per 15-min slot ku každej minúte slotu.
@@ -935,7 +964,19 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 _dam_grid = [float(sch["grid_kwh"].values[i]) for i in tr["pidx"]]
                 tr["plan_grid_dam_kwh"] = _dam_grid
                 tr["plan_grid_vdt_kwh"] = vdt_kwh_per_min
-                tr["plan_grid_kwh"] = [g + v for g, v in zip(_dam_grid, vdt_kwh_per_min)]
+                # Bug #625-B (2026-06-09): plan_grid_kwh clip na fyzický limit siete.
+                # _dam_grid je kWh za periódu (60 alebo 15 min). max export per perióda =
+                # grid_kw_export × step_h. Nad to = nominácia ktorú batt fyzicky nedodá.
+                _step_h_pg = max(int(step), 1) / 60.0
+                _gke_kwh_max = (float(_gke) * _step_h_pg) if (_gke is not None and _gke > 0) else None
+                _gki_kwh_max = (float(_gki) * _step_h_pg) if (_gki is not None and _gki > 0) else None
+                _plan_grid_raw = [g + v for g, v in zip(_dam_grid, vdt_kwh_per_min)]
+                if _gke_kwh_max is not None or _gki_kwh_max is not None:
+                    _clip_hi = _gke_kwh_max if _gke_kwh_max is not None else float("inf")
+                    _clip_lo = -_gki_kwh_max if _gki_kwh_max is not None else float("-inf")
+                    tr["plan_grid_kwh"] = [max(_clip_lo, min(_clip_hi, x)) for x in _plan_grid_raw]
+                else:
+                    tr["plan_grid_kwh"] = _plan_grid_raw
                 tr["plan_curtail_kwh"] = [float(sch["curtail_kwh"].values[i]) for i in tr["pidx"]]
                 tr["dt_eur"] = [float(price[i]) for i in tr["pidx"]]
                 tr["ftv_kw"] = [float(pvper[i]) for i in tr["pidx"]]
@@ -1275,14 +1316,28 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                     _fut_grid_vdt = [float(_vdt_kwh_fut[j] or 0.0) for j in _pidx15_grid]
                             except Exception:
                                 pass
+                            # Bug #625-A/B (2026-06-09): clip D-1+VDT na fyzické limity
+                            # aj v projekcii budúcich minút — plán nesmie pretiecť ani v UI.
+                            _bkw_max_fut = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
+                            _step_h_fut = max(int(step), 1) / 60.0
+                            _gke_kwh_fut = (float(_gke) * _step_h_fut) if (_gke is not None and _gke > 0) else None
+                            _gki_kwh_fut = (float(_gki) * _step_h_fut) if (_gki is not None and _gki > 0) else None
+                            _fut_plan_batt = [d2 + v2 for d2, v2 in zip(_fut_dam, _fut_vdt)]
+                            if _bkw_max_fut > 0:
+                                _fut_plan_batt = [max(-_bkw_max_fut, min(_bkw_max_fut, x)) for x in _fut_plan_batt]
+                            _fut_plan_grid = [g + v for g, v in zip(_fut_grid_dam, _fut_grid_vdt)]
+                            if _gke_kwh_fut is not None or _gki_kwh_fut is not None:
+                                _hi_f = _gke_kwh_fut if _gke_kwh_fut is not None else float("inf")
+                                _lo_f = -_gki_kwh_fut if _gki_kwh_fut is not None else float("-inf")
+                                _fut_plan_grid = [max(_lo_f, min(_hi_f, x)) for x in _fut_plan_grid]
                             fut = pd.DataFrame({
                                 "time": fut_idx, "ts15": fut_idx.floor("15min"),
                                 "plan_batt_dam_kw": _fut_dam,
                                 "plan_batt_vdt_kw": _fut_vdt,
-                                "plan_batt_kw": [d2 + v2 for d2, v2 in zip(_fut_dam, _fut_vdt)],
+                                "plan_batt_kw": _fut_plan_batt,
                                 "plan_grid_dam_kwh": _fut_grid_dam,
                                 "plan_grid_vdt_kwh": _fut_grid_vdt,
-                                "plan_grid_kwh": [g + v for g, v in zip(_fut_grid_dam, _fut_grid_vdt)],
+                                "plan_grid_kwh": _fut_plan_grid,
                                 "plan_curtail_kwh": [float(sch["curtail_kwh"].values[i]) for i in pj],
                                 "dt_eur": [float(price[i]) for i in pj],
                                 "ftv_kw": [float(pvper[i]) for i in pj],

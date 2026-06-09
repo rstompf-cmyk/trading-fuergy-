@@ -873,7 +873,9 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
                     print(f"[append_extra_paper_trade #612] DOWNSCALE {profile} slot={slot} "
                           f"{_act_upper}: {_ax['note']}")
         except Exception as _e_audit:
-            print(f"[append_extra_paper_trade #612] audit zlyhal pre {profile}/{slot}: {_e_audit}")
+            # Bug #625-C (2026-06-09): fail-CLOSED — REJECT pri chybe auditu.
+            print(f"[append_extra_paper_trade #612+#625-C] audit zlyhal pre {profile}/{slot}: {_e_audit} → REJECT (fail-closed)")
+            return
 
     # 1) Načítaj existujúce riadky a odfiltruj duplikáty pre dnes
     existing_rows: list = []
@@ -1020,8 +1022,11 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
                               f"{_action_upper}: {_kwh_req:.2f}→{_allowed:.2f} kWh ({_ax['note']})")
                     # decision == "accept" → pokračuj bez zmeny
         except Exception as _e_audit:
-            print(f"[append_paper_trade #612] audit zlyhal pre {profile}/{slot}: {_e_audit}")
-            # pri chybe auditu pokračuj — fail-safe (legacy behaviour)
+            # Bug #625-C (2026-06-09): fail-CLOSED. Pri chybe auditu REJECT trade.
+            # Plán nesmie obsahovať nominácie ktoré neprešli kapacitnou kontrolou,
+            # inak vznikne pretek nad batt_kw_max → odchýlka voči realite = pokuta.
+            print(f"[append_paper_trade #612+#625-C] audit zlyhal pre {profile}/{slot}: {_e_audit} → REJECT (fail-closed)")
+            return
     # Fáza B.1: sandbox vyžaduje profile (per-profile CSV)
     path = paper_trades_csv_path(profile)
     os.makedirs(os.path.dirname(path), exist_ok=True)
