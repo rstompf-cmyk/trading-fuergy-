@@ -48,7 +48,20 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     _eff_soc_min_pct = float(soc_min_pct) + _soc_reserve_pct
     socmin, socmax = batt_kwh*_eff_soc_min_pct/100, batt_kwh*soc_max_pct/100
     soc0 = batt_kwh*soc_init_pct/100
-    term = soc0 if terminal_soc_pct is None else batt_kwh*terminal_soc_pct/100
+    # Bug #643 (2026-06-09): terminal_soc MUSÍ rešpektovať soc_reserve_pct.
+    # Predtým: ak používateľ zadal terminal_soc=5% (default = soc_min), LP smel pre
+    # posledný slot ísť až na 5% — pod eff_min=20%. To umožnilo plánovať vybíjanie
+    # do dna bez buffer-u → realita drift kvôli eff_d nepresnosti = pokuta.
+    # Fix: clamp terminal_soc na minimum eff_soc_min_pct.
+    if terminal_soc_pct is not None:
+        _term_pct_raw = float(terminal_soc_pct)
+        _term_pct_eff = max(_eff_soc_min_pct, min(float(soc_max_pct), _term_pct_raw))
+        if _term_pct_eff != _term_pct_raw:
+            print(f"[optimizer #643] terminal_soc clamp: {_term_pct_raw:.1f}% → {_term_pct_eff:.1f}% "
+                  f"(eff_min={_eff_soc_min_pct:.1f}%, soc_max={soc_max_pct:.1f}%)")
+        term = batt_kwh * _term_pct_eff / 100
+    else:
+        term = soc0
     # Bug #641 (2026-06-09): diagnostika použitých LP parametrov.
     # Bez toho je problém potichu nepropagovaných parametrov neviditeľný.
     print(f"[optimize_day] batt={batt_kw:.0f}kW/{batt_kwh:.0f}kWh, "
