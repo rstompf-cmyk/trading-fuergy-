@@ -1024,6 +1024,42 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _avail_for_chg = np.maximum(_ftv_r - _load_r, 0.0) + _grid_kw_import
                     # Fyzicky dostupný výkon na vybíjanie = grid export + load (po odpočítaní FTV)
                     _avail_for_dis = _grid_kw_export + np.maximum(_load_r - _ftv_r, 0.0)
+                    # Bug #613: capacity ledger constraint. _avail_for_chg/dis sa už ohraničuje
+                    # fyzicky (grid + FTV), ale RT engine môže pridať zásah ktorý prekročí
+                    # batt_kw_max alebo už zarezervovanú kapacitu D-1 + VDT. Tu ho dodatočne
+                    # ohraničíme cez ledger.available() per slot. Capacity ledger je single
+                    # source of truth pre poradie D-1 → VDT → RT.
+                    try:
+                        from core.capacity_ledger import available as _ledger_avail
+                        from core.profile_resolver import get_active as _ga_ledger
+                        _prof_ledger = _ga_ledger()
+                        _bkw_max_ledger = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
+                        if _prof_ledger and _bkw_max_ledger > 0:
+                            _day_iso = d.isoformat()
+                            # Pre každú minútu: nájdi slot_idx (15-min), získaj voľnú kapacitu
+                            # pre charge a discharge. Týmto sa rt zásah obmedzí na voľný zvyšok.
+                            _t_arr = pd.to_datetime(tr["time"], errors="coerce")
+                            _slot_arr = ((_t_arr.dt.hour * 60 + _t_arr.dt.minute) // 15).values
+                            # Cache slot_idx → (free_charge, free_discharge) pre rýchlosť
+                            _slot_cache = {}
+                            _free_chg = np.full(len(tr), _bkw_max_ledger, dtype=float)
+                            _free_dis = np.full(len(tr), _bkw_max_ledger, dtype=float)
+                            for _i, _sl in enumerate(_slot_arr):
+                                _sl_int = int(_sl)
+                                if _sl_int not in _slot_cache:
+                                    _slot_cache[_sl_int] = (
+                                        _ledger_avail(_prof_ledger, _day_iso, _sl_int,
+                                                       "charge", _bkw_max_ledger),
+                                        _ledger_avail(_prof_ledger, _day_iso, _sl_int,
+                                                       "discharge", _bkw_max_ledger),
+                                    )
+                                _free_chg[_i], _free_dis[_i] = _slot_cache[_sl_int]
+                            # Voľná kap obmedzuje aj fyzicky-dostupnú kap
+                            _avail_for_chg = np.minimum(_avail_for_chg, _free_chg)
+                            _avail_for_dis = np.minimum(_avail_for_dis, _free_dis)
+                    except Exception as _e_led:
+                        # Fail-safe: pri chybe ledger pokračuj s pôvodnou fyzikou
+                        pass
                     # Clipnúť plán na fyzicky možné
                     _chg_real = np.minimum(_plan_chg, _avail_for_chg)
                     _dis_real = np.minimum(_plan_dis, _avail_for_dis)
