@@ -1024,6 +1024,47 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _avail_for_chg = np.maximum(_ftv_r - _load_r, 0.0) + _grid_kw_import
                     # Fyzicky dostupný výkon na vybíjanie = grid export + load (po odpočítaní FTV)
                     _avail_for_dis = _grid_kw_export + np.maximum(_load_r - _ftv_r, 0.0)
+                    # Bug #614: D-1 SOC trajektória constraint. RT zásah nesmie posunúť
+                    # SOC mimo ±tolerance band D-1 plánu. Inak by RT za noci/ráno mohol
+                    # nabiť batt na 100% (kvôli sys_MW arbitráži) a poobede D-1 plán
+                    # by nemohol nabíjať pre lacný DT → odchýlka voči Obchodu.
+                    # Pre každú minútu: rt zásah (= _batt_p − plan_batt_d1) sa obmedzí
+                    # tak aby výsledný SOC zostal v bande.
+                    try:
+                        from core.capacity_ledger import (
+                            expected_soc as _expected_soc, constrain_rt_to_soc_band,
+                        )
+                        from core.profile_resolver import get_active as _ga_soc
+                        _prof_soc = _ga_soc()
+                        _bkwh_max_soc = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
+                        if _prof_soc and _bkwh_max_soc > 0:
+                            _day_iso2 = d.isoformat()
+                            _t_arr2 = pd.to_datetime(tr["time"], errors="coerce")
+                            _slot_arr2 = ((_t_arr2.dt.hour * 60 + _t_arr2.dt.minute) // 15).values
+                            _soc_pct_arr = pd.to_numeric(tr.get("soc_pct", 50),
+                                                          errors="coerce").fillna(50).values
+                            # Per-minute constraint
+                            _batt_p_constrained = _batt_p.copy()
+                            _n_constrained = 0
+                            for _i in range(len(tr)):
+                                _sl = int(_slot_arr2[_i])
+                                _current_soc = float(_soc_pct_arr[_i])
+                                _proposed = float(_batt_p[_i])
+                                _result = constrain_rt_to_soc_band(
+                                    _prof_soc, _day_iso2, _sl, _current_soc,
+                                    _proposed, _bkwh_max_soc, dt_h=1.0/60.0)
+                                if _result["decision"] in ("constrain_charge", "constrain_discharge"):
+                                    _batt_p_constrained[_i] = _result["allowed_kw"]
+                                    _n_constrained += 1
+                            if _n_constrained > 0:
+                                _batt_p = _batt_p_constrained
+                                print(f"[livesim.advance #614] {_prof_soc}/{_day_iso2}: "
+                                      f"{_n_constrained} minút constrained na SOC band")
+                    except Exception as _e_soc:
+                        pass   # fail-safe — bez constraint pokračuj
+                    # Rozdelíme plán znova (po SOC constraint)
+                    _plan_chg = np.maximum(-_batt_p, 0.0)
+                    _plan_dis = np.maximum(_batt_p, 0.0)
                     # Bug #613: capacity ledger constraint. _avail_for_chg/dis sa už ohraničuje
                     # fyzicky (grid + FTV), ale RT engine môže pridať zásah ktorý prekročí
                     # batt_kw_max alebo už zarezervovanú kapacitu D-1 + VDT. Tu ho dodatočne
