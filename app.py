@@ -767,6 +767,7 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
                 zco_bias_w: float = Form(default=None),
                 max_export_kwh_day: float = Form(default=None),
                 max_import_kwh_day: float = Form(default=None),
+                soc_reserve_pct: float = Form(default=None),
                 rt_freedom: str = Form(default=None),
                 purge_history: str = Form(default=None),
                 full_reset: str = Form(default=None)):
@@ -790,6 +791,7 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
         price_scale=price_scale, pv_scale=pv_scale, zco_bias_w=zco_bias_w,
         max_export_kwh_day=max_export_kwh_day,
         max_import_kwh_day=max_import_kwh_day,
+        soc_reserve_pct=soc_reserve_pct,
     ).items() if v is not None}
     # checkbox-y: prítomné v requeste len ak sú zaškrtnuté
     if allow_grid_charge is not None: _overrides["allow_grid_charge"] = bool(allow_grid_charge)
