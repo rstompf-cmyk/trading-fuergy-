@@ -202,7 +202,13 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
     _eff_soc_max_pct = max(_eff_soc_min_pct, float(soc_max_pct) - _soc_reserve_pct)
     socmin = batt_kwh * _eff_soc_min_pct / 100.0
     socmax = batt_kwh * _eff_soc_max_pct / 100.0
-    soc0 = batt_kwh * soc_init_pct / 100.0
+    # Bug #647: soc_init clamp na [eff_min, eff_max] — symetria k terminal_soc
+    _soc_init_raw = float(soc_init_pct)
+    _soc_init_eff = max(_eff_soc_min_pct, min(_eff_soc_max_pct, _soc_init_raw))
+    if _soc_init_eff != _soc_init_raw:
+        print(f"[joint_lp #647] soc_init clamp: {_soc_init_raw:.1f}% → {_soc_init_eff:.1f}% "
+              f"(eff_min={_eff_soc_min_pct:.1f}%, eff_max={_eff_soc_max_pct:.1f}%)")
+    soc0 = batt_kwh * _soc_init_eff / 100.0
     # Bug #643/#646: terminal_soc clamp na [eff_soc_min, eff_soc_max].
     if terminal_soc_pct is not None:
         _term_pct_raw = float(terminal_soc_pct)

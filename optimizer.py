@@ -49,7 +49,17 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     _eff_soc_min_pct = float(soc_min_pct) + _soc_reserve_pct
     _eff_soc_max_pct = max(_eff_soc_min_pct, float(soc_max_pct) - _soc_reserve_pct)
     socmin, socmax = batt_kwh*_eff_soc_min_pct/100, batt_kwh*_eff_soc_max_pct/100
-    soc0 = batt_kwh*soc_init_pct/100
+    # Bug #647 (2026-06-09): soc_init clamp na [eff_min, eff_max]. Profile.soc_init
+    # je často default (5%, = soc_min) ale s reserve buffer LP nemôže začať pod eff_min.
+    # Bez clampu: LP musí nabíjať v slot 0 = vizuálne mätúce (graf začína "stúpa rovno").
+    # S clampom: soc0=eff_min, graf začína plynulo + zachová deň-po-deň plynulosť
+    # (ak terminal=eff_min, ďalší deň soc_init=eff_min = bez slot 0 šoku).
+    _soc_init_raw = float(soc_init_pct)
+    _soc_init_eff = max(_eff_soc_min_pct, min(_eff_soc_max_pct, _soc_init_raw))
+    if _soc_init_eff != _soc_init_raw:
+        print(f"[optimizer #647] soc_init clamp: {_soc_init_raw:.1f}% → {_soc_init_eff:.1f}% "
+              f"(eff_min={_eff_soc_min_pct:.1f}%, eff_max={_eff_soc_max_pct:.1f}%)")
+    soc0 = batt_kwh*_soc_init_eff/100
     # Bug #643 (2026-06-09): terminal_soc MUSÍ rešpektovať soc_reserve_pct.
     # Predtým: ak používateľ zadal terminal_soc=5% (default = soc_min), LP smel pre
     # posledný slot ísť až na 5% — pod eff_min=20%. To umožnilo plánovať vybíjanie
