@@ -339,6 +339,23 @@ def job_vdt_advisor():
                     import vdt_extras as _vex_sched
                     import datetime as _dt_sched
                     _today_iso = _dt_sched.date.today().isoformat()
+                    # Bug #618: pred novým behom VDT advisora zmaž **predchádzajúce VDT
+                    # rezervácie** v capacity ledger pre tento profil + dnes. Inak
+                    # stale rezervácie z minulých 15-min cron tickov blokujú nové
+                    # návrhy — VDT advisor potom dostáva "REJECT ziadna voľná kapacita"
+                    # aj keď D-1 plán nebráni novému zásahu.
+                    # Trade_id má deterministický formát {profile}_{day}_{slot}_{action}_extras,
+                    # ale rôzny "action" medzi behmi (charge↔discharge) by vytváral
+                    # duplicitné rezervácie ktoré sa nikdy nemažú. release() vyrieši.
+                    try:
+                        from core.capacity_ledger import release as _release_vdt
+                        _n_rel = _release_vdt(prof_name, _today_iso, source="vdt")
+                        if _n_rel > 0:
+                            _log("vdt_advisor",
+                                 f"{prof_name}: reset {_n_rel} starých VDT rezervácií pred novým behom",
+                                 level="info")
+                    except Exception as _e_rel:
+                        pass   # fail-safe — pokračuj aj keď reset zlyhá
                     # Spustí greedy s tými istými parametrami (low cost — len 1 fn call)
                     _ob_df_full = res.get("snapshot_df")   # ak by sme to ukladali
                     # Snapshot nie je v cache, takže pre extras logging použijeme
