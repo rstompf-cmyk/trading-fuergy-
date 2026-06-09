@@ -228,7 +228,9 @@ def _load_vdt_realized(profile: str, today_iso: str) -> Dict[str, Any]:
     total_eur = 0.0
     try:
         import vdt_live_advisor as _vla
-        path = _vla.paper_trades_csv_path()
+        # Bug #620: musíme explicitne odovzdať profile, inak sandbox-aware path
+        # resolver vráti zlú cestu (default/legacy) a CSV nenájdeme.
+        path = _vla.paper_trades_csv_path(profile)
     except Exception:
         return {"kwh_batt_view": realized_kwh, "count": 0, "total_eur": 0.0,
                 "source": "vdt_paper_trades.csv neprístupný"}
@@ -292,7 +294,9 @@ def get_realized_prices_per_slot(profile: str, today_iso: str) -> list:
     sum_w = [0.0] * 96       # sum (weight)
     try:
         import vdt_live_advisor as _vla
-        path = _vla.paper_trades_csv_path()
+        # Bug #620: musíme explicitne odovzdať profile, inak sandbox-aware path
+        # resolver vráti zlú cestu (default/legacy) a CSV nenájdeme.
+        path = _vla.paper_trades_csv_path(profile)
     except Exception:
         return prices
     if not os.path.exists(path):
