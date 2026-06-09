@@ -325,6 +325,7 @@ def optimize_day_or_joint(
         eff_c=eff_c, eff_d=eff_d,
         soc_min_pct=soc_min_pct, soc_max_pct=soc_max_pct,
         soc_init_pct=soc_init_pct,
+        soc_reserve_pct=soc_reserve_pct,         # Bug #644: chýbalo
         terminal_soc_pct=terminal_soc_pct,
         grid_kw_import=grid_kw_import or grid_kw,
         grid_kw_export=grid_kw_export or grid_kw,

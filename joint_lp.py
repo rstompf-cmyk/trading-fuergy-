@@ -66,6 +66,7 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
                         eff_c: float = 0.95, eff_d: float = 0.95,
                         soc_min_pct: float = 5.0, soc_max_pct: float = 95.0,
                         soc_init_pct: float = 50.0,
+                        soc_reserve_pct: float = 0.0,
                         terminal_soc_pct: Optional[float] = None,
                         grid_kw_import: Optional[float] = None,
                         grid_kw_export: Optional[float] = None,
@@ -195,15 +196,33 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         mults = np.clip(mults, 0.0, 5.0)
 
     # SOC limity
-    socmin = batt_kwh * soc_min_pct / 100.0
+    # Bug #624: efektívne soc_min = soc_min + reserve buffer
+    _soc_reserve_pct = max(0.0, min(50.0, float(soc_reserve_pct or 0.0)))
+    _eff_soc_min_pct = float(soc_min_pct) + _soc_reserve_pct
+    socmin = batt_kwh * _eff_soc_min_pct / 100.0
     socmax = batt_kwh * soc_max_pct / 100.0
     soc0 = batt_kwh * soc_init_pct / 100.0
-    term = soc0 if terminal_soc_pct is None else batt_kwh * terminal_soc_pct / 100.0
+    # Bug #643: terminal_soc clamp na [eff_soc_min, soc_max]. Bez tohto LP smel
+    # ísť až po soc_min, ignorujúc reserve buffer.
+    if terminal_soc_pct is not None:
+        _term_pct_raw = float(terminal_soc_pct)
+        _term_pct_eff = max(_eff_soc_min_pct, min(float(soc_max_pct), _term_pct_raw))
+        if _term_pct_eff != _term_pct_raw:
+            print(f"[joint_lp #643] terminal_soc clamp: {_term_pct_raw:.1f}% → {_term_pct_eff:.1f}% "
+                  f"(eff_min={_eff_soc_min_pct:.1f}%, soc_max={soc_max_pct:.1f}%)")
+        term = batt_kwh * _term_pct_eff / 100.0
+    else:
+        term = soc0
     # Auto-adjust ak start je mimo limits (rovnaká logika ako vdt_optimizer)
     if soc0 < socmin:
         socmin = soc0
     if soc0 > socmax:
         socmax = soc0
+    # Bug #644: diagnostika joint_lp vstupu
+    print(f"[optimize_joint_day] batt={batt_kw:.0f}kW/{batt_kwh:.0f}kWh, "
+          f"soc_init={soc_init_pct:.1f}%, soc_min={soc_min_pct:.1f}%, "
+          f"soc_reserve={_soc_reserve_pct:.1f}% → eff_min={_eff_soc_min_pct:.1f}%, "
+          f"soc_max={soc_max_pct:.1f}%, term={terminal_soc_pct}")
 
     # Grid limits
     g_im = grid_kw_import if grid_kw_import is not None else 1e6
