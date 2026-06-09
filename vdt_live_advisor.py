@@ -847,6 +847,34 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
     today = dt.date.today().isoformat()
     ts_now = dt.datetime.now().isoformat(timespec="seconds")
 
+    # Bug #612: capacity audit pre extras (BUY/SELL/CHARGE/DISCHARGE).
+    # CURTAIL_FTV a LOAD_COVER nepoužívajú batt kapacitu → preskočia audit.
+    _act_upper = str(action or "").upper()
+    if _act_upper in ("CHARGE", "DISCHARGE", "BUY", "SELL"):
+        try:
+            from core.capacity_ledger import audit_vdt_order, slot_idx_from_time
+            import profiles as _ps_audit
+            _prof_obj = _ps_audit.load_profile(profile) or {}
+            _batt_kw_max = float((_prof_obj.get("plan") or {}).get("batt_kw", 0.0) or 0.0)
+            if _batt_kw_max > 0 and slot and ":" in str(slot):
+                _hh = int(str(slot)[:2]); _mm = int(str(slot)[3:5])
+                _slot_idx2 = slot_idx_from_time(_hh, _mm)
+                _direction = "discharge" if _act_upper in ("DISCHARGE", "SELL") else "charge"
+                _trade_id = f"{profile}_{today}_{slot}_{_act_upper}_extras"
+                _ax = audit_vdt_order(profile, today, _slot_idx2, _direction,
+                                        abs(float(kwh or 0)), _batt_kw_max, _trade_id)
+                if _ax["decision"] == "reject":
+                    print(f"[append_extra_paper_trade #612] REJECT {profile} slot={slot} "
+                          f"{_act_upper}: {_ax['note']}")
+                    return   # nezapisujeme
+                if _ax["decision"] == "downscale":
+                    _sign = -1.0 if kwh < 0 else 1.0
+                    kwh = _ax["allowed_kwh"] * _sign
+                    print(f"[append_extra_paper_trade #612] DOWNSCALE {profile} slot={slot} "
+                          f"{_act_upper}: {_ax['note']}")
+        except Exception as _e_audit:
+            print(f"[append_extra_paper_trade #612] audit zlyhal pre {profile}/{slot}: {_e_audit}")
+
     # 1) Načítaj existujúce riadky a odfiltruj duplikáty pre dnes
     existing_rows: list = []
     header: list = []
@@ -954,6 +982,46 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
     soc = result.get("soc") or {}
     slot = str(cur.get("slot", "") or "")
     action = str(cur.get("action", "") or "")
+
+    # Bug #612: capacity audit gate. VDT order musí prejsť cez ledger pred zápisom.
+    # Ak voľná kapacita (= batt_kw_max − Σ rezervácie) nestačí → downscale alebo reject.
+    # IDLE akcie sa nepasujú cez audit (žiadna rezervácia kapacity).
+    _action_upper = action.upper()
+    if _action_upper in ("CHARGE", "DISCHARGE", "BUY", "SELL", "BOTH"):
+        try:
+            from core.capacity_ledger import audit_vdt_order, slot_idx_from_time
+            import profiles as _ps_audit
+            _prof_obj = _ps_audit.load_profile(profile) or {}
+            _batt_kw_max = float((_prof_obj.get("plan") or {}).get("batt_kw", 0.0) or 0.0)
+            if _batt_kw_max > 0 and slot and ":" in slot:
+                _hh = int(slot[:2]); _mm = int(slot[3:5])
+                _slot_idx = slot_idx_from_time(_hh, _mm)
+                _today = dt.date.today().isoformat()
+                _kwh_req = float(cur.get("kwh_per_slot", 0) or 0)
+                _direction = "discharge" if _action_upper in ("DISCHARGE", "SELL") else "charge"
+                if _action_upper == "BOTH":
+                    # BOTH = nabíja aj vybíja v rovnakom slote — preskočíme audit (zložité)
+                    pass
+                elif abs(_kwh_req) > 0:
+                    _trade_id = f"{profile}_{_today}_{slot}_{_action_upper}"
+                    _ax = audit_vdt_order(profile, _today, _slot_idx, _direction,
+                                            abs(_kwh_req), _batt_kw_max, _trade_id)
+                    if _ax["decision"] == "reject":
+                        print(f"[append_paper_trade #612] REJECT {profile} slot={slot} "
+                              f"{_action_upper}: {_ax['note']}")
+                        return   # nezapisujeme nič
+                    if _ax["decision"] == "downscale":
+                        # Uprav kwh + kw na povolenú časť
+                        _allowed = _ax["allowed_kwh"]
+                        _sign = -1.0 if _kwh_req < 0 else 1.0
+                        cur["kwh_per_slot"] = _allowed * _sign
+                        cur["kw"] = _allowed * 4.0 * _sign   # 15-min → kW
+                        print(f"[append_paper_trade #612] DOWNSCALE {profile} slot={slot} "
+                              f"{_action_upper}: {_kwh_req:.2f}→{_allowed:.2f} kWh ({_ax['note']})")
+                    # decision == "accept" → pokračuj bez zmeny
+        except Exception as _e_audit:
+            print(f"[append_paper_trade #612] audit zlyhal pre {profile}/{slot}: {_e_audit}")
+            # pri chybe auditu pokračuj — fail-safe (legacy behaviour)
     # Fáza B.1: sandbox vyžaduje profile (per-profile CSV)
     path = paper_trades_csv_path(profile)
     os.makedirs(os.path.dirname(path), exist_ok=True)

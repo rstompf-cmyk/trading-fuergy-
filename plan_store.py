@@ -220,6 +220,52 @@ def save_plan(date_iso: str, step_min: int, kind: str, *,
     # DB write (dual storage)
     if _db_available():
         _db_save_plan(date_iso, step_min, kind, profile, body)
+    # Bug #611: rezervuj D-1 batt v capacity ledger.
+    # Tým VDT/RT vidia kapacitu zarezervovanú D-1 plánom a nemôžu ju prebiť.
+    # Iba pre kind='plan' (D-1) — dentrh a dam_d1 sú samostatné a delia kapacitu.
+    if kind == "plan":
+        try:
+            from core.capacity_ledger import reserve as _ledger_reserve, clear_day
+            _prof_for_ledger = resolve_profile(profile)
+            if _prof_for_ledger:
+                # Reset existujúce D-1 rezervácie pre tento deň (re-uloženie plánu)
+                clear_day(_prof_for_ledger, date_iso)
+                # Schedule batt_kw môže byť pod kľúčom 'batt_kw' alebo 'batt'
+                _batt_arr = schedule.get("batt_kw") or schedule.get("batt") or []
+                _step = int(step_min)
+                _slots_per_15 = max(1, 15 // _step) if _step <= 15 else 1
+                for _idx, _b_val in enumerate(_batt_arr):
+                    if _b_val is None:
+                        continue
+                    _bk = float(_b_val)
+                    if _bk == 0:
+                        continue
+                    # Mapuj index plánu na 15-min slot
+                    if _step == 15:
+                        _slot_idx = _idx
+                    elif _step == 60:
+                        # 1 hodina = 4 sloty (každý dostane rovnakú časť)
+                        for _q in range(4):
+                            _slot_idx_q = _idx * 4 + _q
+                            if _slot_idx_q > 95:
+                                break
+                            _direction = "discharge" if _bk > 0 else "charge"
+                            _ledger_reserve(_prof_for_ledger, date_iso, _slot_idx_q,
+                                              source="d1", direction=_direction,
+                                              kw=abs(_bk), trade_id=None,
+                                              note=f"D-1 plán (step={_step}min)")
+                        continue
+                    else:
+                        _slot_idx = (_idx * _step) // 15
+                        if _slot_idx > 95:
+                            continue
+                    _direction = "discharge" if _bk > 0 else "charge"
+                    _ledger_reserve(_prof_for_ledger, date_iso, _slot_idx,
+                                      source="d1", direction=_direction,
+                                      kw=abs(_bk), trade_id=None,
+                                      note=f"D-1 plán (step={_step}min)")
+        except Exception as _e_ledger:
+            print(f"[plan_store.save_plan #611] ledger reserve zlyhal: {_e_ledger}")
     return p
 
 
