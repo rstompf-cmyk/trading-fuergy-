@@ -548,6 +548,61 @@ def purge_history_range(date_start_iso: str, date_end_iso: str, *,
                 counts["ledger_rows"] += int(n or 0)
         except Exception as e:
             print(f"[purge_history_range] ledger clear zlyhal: {e}")
+    # ── 4. VDT live_advisor cache (out/sk/vdt/cache/*.json) ──────────────
+    # Bug #632-A: bez tohto chPlan stále zobrazuje VDT plán (extras nad DAM)
+    # zo starej cache aj po pregenerácii.
+    counts["vdt_cache"] = 0
+    if prof:
+        try:
+            from core.paths import vdt_advisor_cache_path
+            cache_p = vdt_advisor_cache_path(prof)
+            if os.path.exists(cache_p):
+                os.remove(cache_p)
+                counts["vdt_cache"] += 1
+            # Aj per-day cache súbory v rovnakom adresári (ak vznikajú s date suffixom)
+            cache_dir = os.path.dirname(cache_p)
+            if os.path.isdir(cache_dir):
+                import glob as _g
+                base = os.path.basename(cache_p).replace(".json", "")
+                for d in rng:
+                    d_iso = str(d.date())
+                    for cand in _g.glob(os.path.join(cache_dir, f"{base}*{d_iso}*.json")):
+                        try:
+                            os.remove(cand)
+                            counts["vdt_cache"] += 1
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[purge_history_range] VDT cache cleanup zlyhal: {e}")
+    # ── 5. auto_control_event log v DB ───────────────────────────────────
+    counts["auto_control_events"] = 0
+    if prof:
+        try:
+            if _db_available():
+                from db import get_session
+                from db.models import Profile as _DbProfile
+                try:
+                    from db.models import AutoControlEvent as _DbACE
+                except ImportError:
+                    _DbACE = None
+                if _DbACE is not None:
+                    with get_session() as sess:
+                        p_prof = sess.query(_DbProfile).filter_by(name=prof).one_or_none()
+                        if p_prof:
+                            # AutoControlEvent má timestamp (datetime), nie date string —
+                            # filtrujeme cez timestamp >= start_of_day and < end_of_day+1
+                            from datetime import datetime as _dt
+                            t_min = _dt.fromisoformat(str(rng[0].date()) + "T00:00:00")
+                            t_max = _dt.fromisoformat(str(rng[-1].date()) + "T23:59:59")
+                            qry = sess.query(_DbACE).filter(
+                                _DbACE.profile_id == p_prof.id,
+                                _DbACE.timestamp >= t_min,
+                                _DbACE.timestamp <= t_max,
+                            )
+                            counts["auto_control_events"] = qry.count()
+                            qry.delete(synchronize_session=False)
+        except Exception as e:
+            print(f"[purge_history_range] auto_control DB delete zlyhal: {e}")
     return counts
 
 

@@ -820,9 +820,11 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
             yield (f"<div style='background:#fff3e0;border-left:4px solid #FB8C00;"
                     f"padding:8px 12px;border-radius:6px;margin:8px 0'>"
                     f"🗑️ <b>Pred-cleanup hotový:</b> zmazaných "
-                    f"<b>{purge_counts['plans']}</b> plánov, "
-                    f"<b>{purge_counts['vdt_trades']}</b> VDT trade-ov, "
-                    f"<b>{purge_counts['ledger_rows']}</b> ledger rezervácií</div>")
+                    f"<b>{purge_counts.get('plans', 0)}</b> plánov, "
+                    f"<b>{purge_counts.get('vdt_trades', 0)}</b> VDT trade-ov, "
+                    f"<b>{purge_counts.get('vdt_cache', 0)}</b> VDT cache súborov, "
+                    f"<b>{purge_counts.get('auto_control_events', 0)}</b> auto_control eventov, "
+                    f"<b>{purge_counts.get('ledger_rows', 0)}</b> ledger rezervácií</div>")
         if already:
             ul = "".join(
                 f"<li><a href='/plan_view?date={d}&step={int(step_min)}&kind={kind}'>{d}</a></li>"
