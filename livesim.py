@@ -1024,20 +1024,12 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _avail_for_chg = np.maximum(_ftv_r - _load_r, 0.0) + _grid_kw_import
                     # Fyzicky dostupný výkon na vybíjanie = grid export + load (po odpočítaní FTV)
                     _avail_for_dis = _grid_kw_export + np.maximum(_load_r - _ftv_r, 0.0)
-                    # Bug #614 (v2 #615 fix): D-1 SOC trajektória constraint.
-                    # Filozofia: constraint je REDUKČNÝ, nie generujúci. Smie iba
-                    # vypnúť/zoslabiť RT zásah a vrátiť batt na D-1 plán. Nikdy
-                    # nepridáva výkon ktorý RT engine neprodukoval.
-                    #
-                    # Logika per minútu:
-                    #   rt_delta = _batt_p − plan_batt_d1     (RT zásah; + vybíja, − nabíja)
-                    #   • SOC > hi (nad bandom)  →  RT smie iba VYBÍJAŤ. Ak rt_delta < 0
-                    #                                (RT nabíja), znuluj ho.
-                    #   • SOC < lo (pod bandom)  →  RT smie iba NABÍJAŤ. Ak rt_delta > 0
-                    #                                (RT vybíja), znuluj ho.
-                    #   • SOC v bande            →  bez zmeny.
-                    # Tým sa SOC nikdy ďalej nevzďaľuje od D-1 trajektórie.
-                    # Optimalizácia: load-once-per-day cache trajektórie.
+                    # Bug #614: D-1 SOC trajektória constraint. RT zásah nesmie posunúť
+                    # SOC mimo ±tolerance band D-1 plánu. Inak by RT za noci/ráno mohol
+                    # nabiť batt na 100% (kvôli sys_MW arbitráži) a poobede D-1 plán
+                    # by nemohol nabíjať pre lacný DT → odchýlka voči Obchodu.
+                    # Optimalizácia: load-once-per-day. Načítame celú trajektóriu (96
+                    # slotov) jedným SQL dotazom, potom per-minute lookup v dict-u.
                     try:
                         from core.profile_resolver import get_active as _ga_soc
                         from db import get_session as _gs_soc
@@ -1046,6 +1038,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         _bkwh_max_soc = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
                         if _prof_soc and _bkwh_max_soc > 0:
                             _day_iso2 = d.isoformat()
+                            # Load 96 slotov per deň jediným query
                             _traj_cache = {}    # slot_idx -> (expected, lo, hi)
                             with _gs_soc() as _s_soc:
                                 _p_soc = _s_soc.query(_PrSoc).filter_by(name=_prof_soc).one_or_none()
@@ -1064,6 +1057,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                                               errors="coerce").fillna(50).values
                                 _batt_p_constrained = _batt_p.copy()
                                 _n_constrained = 0
+                                _dt_h_min = 1.0 / 60.0
                                 for _i in range(len(tr)):
                                     _sl = int(_slot_arr2[_i])
                                     _band = _traj_cache.get(_sl)
@@ -1071,23 +1065,26 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                         continue
                                     _exp, _lo, _hi = _band
                                     _current_soc = float(_soc_pct_arr[_i])
-                                    _d1 = float(_batt_p_d1[_i])
                                     _proposed = float(_batt_p[_i])
-                                    _rt_delta = _proposed - _d1   # RT zásah
-                                    if abs(_rt_delta) < 1e-6:
-                                        continue   # nie je RT zásah
-                                    if _current_soc > _hi and _rt_delta < 0:
-                                        # SOC nad band a RT nabíja → znuluj RT delta
-                                        _batt_p_constrained[_i] = _d1
-                                        _n_constrained += 1
-                                    elif _current_soc < _lo and _rt_delta > 0:
-                                        # SOC pod band a RT vybíja → znuluj RT delta
-                                        _batt_p_constrained[_i] = _d1
-                                        _n_constrained += 1
+                                    # Predikuj výsledný SOC ak by sa proposed_kw uplatnil za 1 min
+                                    _delta_kwh = _proposed * _dt_h_min
+                                    _soc_after = _current_soc - (_delta_kwh / _bkwh_max_soc) * 100.0
+                                    _soc_after = max(0.0, min(100.0, _soc_after))
+                                    if _lo <= _soc_after <= _hi:
+                                        continue   # v bande, žiadny constraint
+                                    # Mimo bandu → obmedz na hranicu bandu
+                                    if _soc_after > _hi:
+                                        _required_kwh = (_current_soc - _hi) * _bkwh_max_soc / 100.0
+                                        _allowed = _required_kwh / _dt_h_min
+                                    else:   # _soc_after < _lo
+                                        _required_kwh = (_current_soc - _lo) * _bkwh_max_soc / 100.0
+                                        _allowed = _required_kwh / _dt_h_min
+                                    _batt_p_constrained[_i] = _allowed
+                                    _n_constrained += 1
                                 if _n_constrained > 0:
                                     _batt_p = _batt_p_constrained
-                                    print(f"[livesim.advance #614v2] {_prof_soc}/{_day_iso2}: "
-                                          f"{_n_constrained}/{len(tr)} minút RT vypnuté (SOC mimo band)")
+                                    print(f"[livesim.advance #614] {_prof_soc}/{_day_iso2}: "
+                                          f"{_n_constrained}/{len(tr)} minút constrained na SOC band")
                     except Exception as _e_soc:
                         pass   # fail-safe — bez constraint pokračuj
                     # Rozdelíme plán znova (po SOC constraint)
