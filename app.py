@@ -6102,7 +6102,14 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _cur_prof_data_v = _pr_v2.load_profile(_cur_prof_real) if _cur_prof_real else None
             _cur_prof_mode = str((_cur_prof_data_v or {}).get("mode", "")).lower()
             _is_sim_profile = (_cur_prof_mode == "simulation")
-            _csv_p = _os_v2.path.join(_mk_v.data_dir(), "vdt_paper_trades.csv")
+            # Bug #619: chart musí čítať per-profile CSV cestu (sandbox layout),
+            # nie legacy market data_dir. paper_trades_csv_path resolvuje správnu
+            # cestu (out/profiles/<name>/vdt_paper_trades.csv).
+            try:
+                from vdt_live_advisor import paper_trades_csv_path as _pt_path
+                _csv_p = _pt_path(_cur_prof_real)
+            except Exception:
+                _csv_p = _os_v2.path.join(_mk_v.data_dir(), "vdt_paper_trades.csv")
             if _os_v2.path.exists(_csv_p) and _cur_prof_real:
                 with open(_csv_p, newline="") as _f_v2:
                     _rdr = _csv_v.DictReader(_f_v2)
