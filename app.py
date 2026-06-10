@@ -5973,9 +5973,16 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         _active_profile_eff = _ga_eff()
     except Exception:
         _active_profile_eff = None
+    # Bug #650: získaj joint LP flags aktívneho profilu pre filtrovaný RT
+    try:
+        import joint_lp_integration as _jli_eff_d
+        _eff_joint = _jli_eff_d.get_flags_from_profile(_active_profile_eff) if _active_profile_eff else None
+    except Exception:
+        _eff_joint = None
     if _agg_src is not None and not _agg_src.empty:
         try:
-            _t = _eff(_agg_src, profile=_active_profile_eff, day=view_day)
+            _t = _eff(_agg_src, profile=_active_profile_eff, day=view_day,
+                       joint_flags=_eff_joint)
             d_dt = _t["dt_eur"]; d_rt = _t["rt_eur"]
             # FTV: preferuj reálne meranie (realio overlay) pred plánom
             _ftv_col = ("ftv_min_real_kw"
@@ -5988,7 +5995,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _agg_src = None
     if _agg_src is None and dview is not None and not dview.empty:
         # Fallback: decimovaný dview (môže byť 2-3× podhodnotené)
-        _t = _eff(dview, profile=_active_profile, day=view_day)
+        _t = _eff(dview, profile=_active_profile, day=view_day, joint_flags=_eff_joint)
         d_dt = _t["dt_eur"]; d_rt = _t["rt_eur"]
         d_ftv = float(dview["ftv_kw"].fillna(0).sum()) / 60.0
 
@@ -6906,9 +6913,37 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     # --- kumulatívny zisk za celé obdobie ---
     if dfull is not None and not dfull.empty:
         L = "[" + ",".join(f"'{str(t)[5:16]}'" for t in dfull["time"]) + "]"
-        CT = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_total"].fillna(0)) + "]"
-        CD = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_dt"].fillna(0)) + "]"
-        CR = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_rt"].fillna(0)) + "]"
+        # Bug #650: prepočítaj cum_rt na fly s joint LP filtrom; cum_rt z CSV
+        # bol total (= bez filtra) → graf ukazoval staré hodnoty aj keď Excel filter funguje.
+        _cum_rt_series = None
+        try:
+            from core.effect import get_rt_eur_series as _get_rt_cum
+            if _eff_joint is not None:
+                _rt_pm_full = _get_rt_cum(dfull, joint_flags=_eff_joint)
+                _cum_rt_series = _rt_pm_full.fillna(0).cumsum()
+        except Exception as _e_cum:
+            print(f"[chC #650] cum_rt prepočet chyba: {_e_cum}")
+            _cum_rt_series = None
+        if _cum_rt_series is not None:
+            _cum_dt_arr = pd.to_numeric(dfull["cum_dt"], errors="coerce").fillna(0)
+            _cum_vdt_arr = pd.to_numeric(dfull.get("cum_vdt_arb", 0), errors="coerce").fillna(0)
+            _cum_total_series = _cum_dt_arr + _cum_rt_series + _cum_vdt_arr
+            CT = "[" + ",".join(f"{x:.2f}" for x in _cum_total_series) + "]"
+            CD = "[" + ",".join(f"{x:.2f}" for x in _cum_dt_arr) + "]"
+            CR = "[" + ",".join(f"{x:.2f}" for x in _cum_rt_series) + "]"
+            # Override aj kariet hore (r['cum_total'] a r['cum_rt'])
+            try:
+                _last_cum_rt = float(_cum_rt_series.iloc[-1])
+                _last_cum_total = float(_cum_total_series.iloc[-1])
+                if isinstance(r, dict):
+                    r["cum_rt"] = _last_cum_rt
+                    r["cum_total"] = _last_cum_total
+            except Exception:
+                pass
+        else:
+            CT = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_total"].fillna(0)) + "]"
+            CD = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_dt"].fillna(0)) + "]"
+            CR = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_rt"].fillna(0)) + "]"
         # ── BASELINE per minúta (kumulatívne) — z DECIMOVANÝCH dát len pre CHART display ──
         # Pre PRESNÉ agregáty (denné, total) používame dfull_full nižšie.
         _bl_per_min = None

@@ -176,7 +176,8 @@ def get_vdt_arb_series(df: pd.DataFrame, profile: Optional[str] = None,
 
 def compute_effect_totals(df: pd.DataFrame,
                             profile: Optional[str] = None,
-                            day: Optional[str] = None) -> Dict[str, float]:
+                            day: Optional[str] = None,
+                            joint_flags: Optional[Dict] = None) -> Dict[str, float]:
     """Vráti agregované zložky efektu za daný DataFrame.
 
     Returns: {
@@ -197,7 +198,9 @@ def compute_effect_totals(df: pd.DataFrame,
         return pd.Series([0.0] * len(df), index=df.index)
 
     dt_eur = float(_col_or_zeros("dt_rev_min").sum())
-    rt_series = get_rt_eur_series(df, warn_legacy=False)
+    # Bug #650: ak má profil joint_flags → filtruj RT na obchodované zložky
+    # (batt/FTV/load). Pre len-batt profil = batt drift × ZCO; ostatné ignored.
+    rt_series = get_rt_eur_series(df, warn_legacy=False, joint_flags=joint_flags)
     rt_eur = float(rt_series.sum())
     vdt_series = get_vdt_arb_series(df, profile=profile, day=day)
     vdt_arb_eur = float(vdt_series.sum())
