@@ -398,6 +398,27 @@ def compute_day_totals_from_df(df: pd.DataFrame) -> Dict[str, float]:
         "vdt_arb_eur": _s("vdt_arb_min"),
         "baseline_eur": _s("baseline_per_min_eur"),
     }
+    # Bug #650-B fallback: ak decomp stĺpce neexistujú v starom CSV, dopočítaj
+    # z primárnych stĺpcov (batt_kw_real, plan_batt_kw, ftv_*, load_*, zco_eur).
+    # Vzorec: rt_X = (real_X - plan_X)/60 × zco / 1000 (€/min) → sumarizovaný.
+    if out["rt_batt_eur"] == 0 and "zco_eur" in df.columns:
+        _zco = pd.to_numeric(df["zco_eur"], errors="coerce").fillna(0)
+        if ("batt_kw_realistic" in df.columns or "batt_kw" in df.columns) and "plan_batt_kw" in df.columns:
+            _br = pd.to_numeric(df.get("batt_kw_realistic", df.get("batt_kw")),
+                                 errors="coerce").fillna(0)
+            _bp = pd.to_numeric(df["plan_batt_kw"], errors="coerce").fillna(0)
+            out["rt_batt_eur"] = float(((_br - _bp) / 60.0 * _zco / 1000.0).sum())
+        if "ftv_min_real_kw" in df.columns and ("ftv_hour_plan_kw" in df.columns or "ftv_plan_kw" in df.columns):
+            _fr = pd.to_numeric(df["ftv_min_real_kw"], errors="coerce").fillna(0)
+            _fp_col = "ftv_hour_plan_kw" if "ftv_hour_plan_kw" in df.columns else "ftv_plan_kw"
+            _fp = pd.to_numeric(df[_fp_col], errors="coerce").fillna(0)
+            out["rt_ftv_eur"] = float(((_fr - _fp) / 60.0 * _zco / 1000.0).sum())
+        if "load_min_real_kw" in df.columns and ("load_plan_kw" in df.columns or "plan_load_kw" in df.columns):
+            _lr = pd.to_numeric(df["load_min_real_kw"], errors="coerce").fillna(0)
+            _lp_col = "load_plan_kw" if "load_plan_kw" in df.columns else "plan_load_kw"
+            _lp = pd.to_numeric(df[_lp_col], errors="coerce").fillna(0)
+            # +load = viac spotreby = under-export → záporná odchýlka
+            out["rt_load_eur"] = float(((-(_lr - _lp)) / 60.0 * _zco / 1000.0).sum())
     # FTV/Load kWh (× 1/60 lebo per-minute kW → kWh)
     if "ftv_min_real_kw" in df.columns:
         out["ftv_kwh"] = _s("ftv_min_real_kw") / 60.0
