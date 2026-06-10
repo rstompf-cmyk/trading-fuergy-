@@ -1101,11 +1101,46 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _zco = pd.to_numeric(tr.get("zco_eur",
                                                   pd.Series([np.nan]*len(tr))),
                                           errors="coerce").fillna(0.0).values
-                    # rt_rev_realistic = dev × ZCO (€/min)
+                    # rt_rev_realistic = dev × ZCO (€/min) — TOTAL settlement (= čo platí na trhu)
                     #   + dev = "long" (over-export, dodali viac než nominované) → ZCO > 0 → get paid
                     #   − dev = "short" (under-export / over-import) → ZCO > 0 → pay
                     _rt_rev_real = (_dev_kwh_min * _zco) / 1000.0
                     tr["rt_rev_realistic_min"] = _rt_rev_real.round(4)
+                    # Bug #649 (2026-06-09): rozklad dev na komponenty pre atribúciu efektu.
+                    # User: 'efekt by sa mal pocitat z komodity a odchylky len z toho co je v
+                    # grafe riadenie' — odchýlka RT z grafu Riadenie = LEN batt drift, nie
+                    # FTV+Load+Batt drift. Pridať dev_batt/dev_ftv/dev_load + ich € €.
+                    try:
+                        # Plánovaný batt v kW per minútu (D-1 plán + VDT realized po Bug X)
+                        _plan_batt_kw = np.asarray(tr["plan_batt_kw"].values, float)
+                        # FTV plánované = pv_plan_kw (hodinový plán PVF) — fallback na ftv_kw
+                        _plan_ftv_kw = (np.asarray(tr["ftv_hour_plan_kw"].values, float)
+                                          if "ftv_hour_plan_kw" in tr.columns
+                                          else np.asarray(tr["ftv_kw"].values, float))
+                        # Load plánované = load_plan_kw (priemer per perióda)
+                        _plan_load_kw = (np.asarray(tr["load_plan_kw"].values, float)
+                                          if "load_plan_kw" in tr.columns
+                                          else np.zeros(len(tr)))
+                        # Drift per komponenta (kW)
+                        _dev_batt_kw = _batt_real - _plan_batt_kw
+                        _dev_ftv_kw = _ftv_r - _plan_ftv_kw
+                        _dev_load_kw = _load_r - _plan_load_kw     # +load = viac spotreby = under-export
+                        # Curtail drift: orezanie znižuje export (= short dev)
+                        _dev_curtail_kw = -_excess                  # curtail je strata exportu
+                        # rt_rev per komponenta — atribučná RT odchýlka
+                        tr["rt_rev_batt_min"] = ((_dev_batt_kw / 60.0) * _zco / 1000.0).round(4)
+                        tr["rt_rev_ftv_min"] = ((_dev_ftv_kw / 60.0) * _zco / 1000.0).round(4)
+                        # POZOR: load_r vyšší ako plán = viac importu = SHORT dev (mínus)
+                        # preto −dev_load_kw vo formule
+                        tr["rt_rev_load_min"] = ((-_dev_load_kw / 60.0) * _zco / 1000.0).round(4)
+                        tr["rt_rev_curtail_min"] = ((_dev_curtail_kw / 60.0) * _zco / 1000.0).round(4)
+                        # Diagnostické stĺpce kW pre graf (Excel + chC)
+                        tr["dev_batt_kw"] = _dev_batt_kw.round(1)
+                        tr["dev_ftv_kw"] = _dev_ftv_kw.round(1)
+                        tr["dev_load_kw"] = _dev_load_kw.round(1)
+                        tr["dev_curtail_kw"] = _dev_curtail_kw.round(1)
+                    except Exception as _e_dev:
+                        print(f"[livesim #649] dev decomposition zlyhalo: {_e_dev}")
 
                     # Bug #608: VDT arbitráž = (VDT_cena - DT_clearing) × VDT_kwh / 1000
                     # VDT realized objemy sa pripočítavajú do plan_grid_kwh (Bug X), takže

@@ -3843,6 +3843,12 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         _rt_col_xl = _resolve_rt(df)
         # Bug #608: ak vdt_arb_min existuje, agreguj ho do vdt_arb_eur (samostatná zložka)
         _has_vdt_arb = "vdt_arb_min" in df.columns
+        # Bug #649 (2026-06-09): rozklad RT zisku na komponenty pre atribúciu efektu.
+        # User: 'efekt by sa mal pocitat z komodity a odchylky len z toho co je v
+        # grafe riadenie' — rt_batt_eur = LEN odchýlka z batt riadenia, nie z FTV/Load.
+        _has_dev_decomp = ("rt_rev_batt_min" in df.columns
+                           and "rt_rev_ftv_min" in df.columns
+                           and "rt_rev_load_min" in df.columns)
         def _agg(g):
             agg_args = dict(
                 dt_eur=("dt_rev_min", "sum"),
@@ -3862,6 +3868,11 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
             )
             if _has_vdt_arb:
                 agg_args["vdt_arb_eur"] = ("vdt_arb_min", "sum")
+            # Bug #649: pridať atribučné rt_batt/ftv/load € pre čitateľný rozklad RT zisku
+            if _has_dev_decomp:
+                agg_args["rt_batt_eur"] = ("rt_rev_batt_min", "sum")
+                agg_args["rt_ftv_eur"] = ("rt_rev_ftv_min", "sum")
+                agg_args["rt_load_eur"] = ("rt_rev_load_min", "sum")
             return g.agg(**agg_args).reset_index()
 
         def _finalize(agg_df):
@@ -3879,7 +3890,11 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
             "ts15":               ("Čas (15-min)",           None),
             "dni":                ("Dni",                    FMT_INT),
             "dt_eur":             ("Zisk D-1",               FMT_EUR),
-            "rt_eur":             ("Zisk RT",                FMT_EUR),
+            "rt_eur":             ("Zisk RT (total)",        FMT_EUR),
+            # Bug #649: atribučné komponenty RT (zisk z drift voči nominácii)
+            "rt_batt_eur":        ("Zisk RT batt",           FMT_EUR),
+            "rt_ftv_eur":         ("Zisk RT FTV",            FMT_EUR),
+            "rt_load_eur":        ("Zisk RT load",           FMT_EUR),
             "total_eur":          ("Zisk SPOLU",             FMT_EUR),
             "baseline_eur":       ("Baseline",               FMT_EUR),
             "prinos_bat_plan_eur":("Prínos batérie + plán",  FMT_EUR),
