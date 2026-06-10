@@ -108,6 +108,36 @@ def audit_rt_slot(profile: str,
     if rt_only_kwh < 0.5:
         return out
 
+    # Bug AUDIT-CAPACITY (2026-06-10): nový deterministický audit cez kapacitu
+    # v reserve pásme. Žiadna binárka, žiadne 96-slot simulácie. User postreh:
+    # "audit zrata maximalny mozny vykon pri ktorm je dodrzane podmienky uz
+    # zobchodvanych 15min. tolerancia by to mohla odfiltrovat".
+    try:
+        from core.soc_use_audit import audit_capacity as _cap_audit
+        import vdt_state as _vs
+        import datetime as _dt
+        import profiles as _pr
+        _d_obj = _dt.date.fromisoformat(day)
+        _today_state = _vs.compute_current_state(profile, today=_d_obj) or {}
+        _prof = _pr.load_profile(profile) or {}
+        _reserve = float((_prof.get("plan") or {}).get("soc_reserve_pct", 0.0) or 0.0)
+        _soc_use = current_soc_pct if current_soc_pct is not None else float(
+            _today_state.get("current_soc_pct") or 50.0)
+        cap_res = _cap_audit(_soc_use, plan_batt_kw, rt_intent_kw,
+                              today_state=_today_state,
+                              step_min=step_min,
+                              soc_reserve_pct=_reserve,
+                              si=int(slot_idx))
+        out["decision"] = cap_res["decision"]
+        out["allowed_rt_kw"] = cap_res["allowed_rt_kw"]
+        out["scale_factor"] = cap_res["scale_factor"]
+        out["reason"] = cap_res["reason"]
+        return out
+    except Exception as e:
+        out["reason"] = f"audit_capacity raised: {e}"
+        # fail-open — RT prejde
+        return out
+    # legacy audit_action zakomentovaný (zostáva pre VDT/auto_control)
     try:
         from core.soc_use_audit import audit_action as _soc_audit
         sa = _soc_audit(profile, day, int(slot_idx), rt_direction, rt_only_kwh,

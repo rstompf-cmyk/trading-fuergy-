@@ -111,6 +111,127 @@ def _scheduled_to_direction(scheduled_kwh: List[float]) -> List[str]:
     return out
 
 
+# ─────────────── Bug AUDIT-CAPACITY (2026-06-10) ───────────────
+# Deterministický výpočet max RT podľa kapacity v reserve pásme [eff_min, eff_max].
+# User: "audit zrata maximalny mozny vykon pri ktorm je dodrzane podmienky uz
+# zobchodvanych 15min. tolerancia by to mohla odfiltrovat".
+#
+# Rozdiel oproti audit_action():
+# - audit_action() robí binárku + 96-slot SOC simuláciu (drahé, oscile na hrane)
+# - audit_capacity() = jeden výpočet O(1) podľa headroom v reserve pásme:
+#     headroom_charge   = (eff_max - SOC_kwh) − Σ(future planned net charge)
+#     headroom_discharge = (SOC_kwh − eff_min) + Σ(future planned net charge)
+#   Plus eff_c/eff_d a dt_h prevedú na max RT v kW.
+#
+# Tým keď SOC narazí na hranu pásma → audit deterministicky vráti 0, žiadna píla.
+
+def audit_capacity(current_soc_pct: float,
+                    plan_kw_min: float,
+                    rt_intent_kw: float,
+                    *,
+                    today_state: Dict[str, Any],
+                    step_min: int = 15,
+                    soc_reserve_pct: float = 0.0,
+                    si: int = 0) -> Dict[str, Any]:
+    """Vráti max povolený RT (v rovnakom smere ako rt_intent_kw) podľa kapacity.
+
+    Args:
+        current_soc_pct: aktuálny SOC v %
+        plan_kw_min: plánovaný batt v tejto minúte (+ vybíja, − nabíja)
+        rt_intent_kw: navrhované RT navyše (+ vybíja, − nabíja)
+        today_state: dict s batt_kwh, eff_c, eff_d, soc_min_pct, soc_max_pct,
+                      dam_nomination_kwh (96 slotov), vdt_realized_kwh (96 slotov)
+        step_min: 15 alebo 60 (default 15)
+        soc_reserve_pct: rezerva pásma (typicky 15)
+        si: aktuálny 15-min slot index (0..95) — pre výpočet future planned
+
+    Returns:
+        {
+            "allowed_rt_kw": float (signed, rovnaký smer ako rt_intent_kw),
+            "scale_factor": float (0.0..1.0),
+            "decision": "accept"|"downscale"|"reject",
+            "headroom_charge_kwh": float,
+            "headroom_discharge_kwh": float,
+            "reason": str,
+        }
+    """
+    out = {"allowed_rt_kw": float(rt_intent_kw), "scale_factor": 1.0,
+           "decision": "accept", "headroom_charge_kwh": 0.0,
+           "headroom_discharge_kwh": 0.0, "reason": ""}
+    if abs(rt_intent_kw) < 1.0:
+        return out
+
+    cap = float(today_state.get("batt_kwh") or 1.0)
+    eff_c = float(today_state.get("eff_c") or 0.95)
+    eff_d = float(today_state.get("eff_d") or 0.95)
+    soc_min = float(today_state.get("soc_min_pct") or 5.0)
+    soc_max = float(today_state.get("soc_max_pct") or 100.0)
+    reserve = max(0.0, min(50.0, float(soc_reserve_pct or 0.0)))
+    eff_min = soc_min + reserve     # 20%
+    eff_max = soc_max - reserve     # 85%
+
+    dt_h = max(float(step_min), 1.0) / 60.0
+    soc_kwh = current_soc_pct / 100.0 * cap
+    eff_min_kwh = eff_min / 100.0 * cap
+    eff_max_kwh = eff_max / 100.0 * cap
+
+    # Future planned NET charge (signed kWh): + = vybíjanie, − = nabíjanie
+    # Pre headroom: nabíjanie spotrebuje "voľnú" hornu kapacitu, vybíjanie ju vráti.
+    dam_kwh = list(today_state.get("dam_nomination_kwh") or [0.0] * 96)
+    vdt_kwh = list(today_state.get("vdt_realized_kwh") or [0.0] * 96)
+    while len(dam_kwh) < 96: dam_kwh.append(0.0)
+    while len(vdt_kwh) < 96: vdt_kwh.append(0.0)
+    # NET future = Σ (DAM + VDT) od slotu si do konca dňa, vrátane si
+    # Konvencia: + = vybíjanie (zníži SOC), − = nabíjanie (zvýši SOC)
+    future_net_kwh = sum(dam_kwh[i] + vdt_kwh[i] for i in range(int(si), 96))
+    # SOC_end_planned = SOC_now - future_net (vybíjanie znižuje, nabíjanie zvyšuje)
+    # Future planned discharge = pozitív → SOC_now musí byť ≥ future_planned_discharge + eff_min
+    # Future planned charge = negat. → SOC_now musí byť ≤ eff_max - |future_planned_charge|
+
+    future_charge_kwh = -min(0.0, future_net_kwh)    # |nabíjanie|, max kapacity to vezme
+    future_discharge_kwh = max(0.0, future_net_kwh)  # vybíjanie, kapacity uvoľní
+
+    # Headroom pre RT charge (=nabíjanie navyše k plánu):
+    # SOC_now + RT_charge_kwh + plan_future_net_charge ≤ eff_max_kwh
+    # → RT_charge_kwh ≤ eff_max_kwh - SOC_now - future_charge_kwh
+    headroom_chg = max(0.0, eff_max_kwh - soc_kwh - future_charge_kwh)
+
+    # Headroom pre RT discharge (=vybíjanie navyše k plánu):
+    # SOC_now − RT_discharge_kwh − plan_future_net_discharge ≥ eff_min_kwh
+    # → RT_discharge_kwh ≤ SOC_now − eff_min_kwh − future_discharge_kwh
+    headroom_dis = max(0.0, soc_kwh - eff_min_kwh - future_discharge_kwh)
+
+    out["headroom_charge_kwh"] = headroom_chg
+    out["headroom_discharge_kwh"] = headroom_dis
+
+    # Max RT v kW (smerom rt_intent_kw)
+    if rt_intent_kw < 0:    # nabíjanie navyše
+        max_rt_abs_kwh = headroom_chg / max(eff_c, 0.01)  # AC→batt cez eff_c
+        max_rt_abs_kw = max_rt_abs_kwh / dt_h
+        allowed_signed = -min(abs(rt_intent_kw), max_rt_abs_kw)
+    else:                   # vybíjanie navyše
+        max_rt_abs_kwh = headroom_dis * eff_d              # batt→AC cez eff_d
+        max_rt_abs_kw = max_rt_abs_kwh / dt_h
+        allowed_signed = +min(abs(rt_intent_kw), max_rt_abs_kw)
+
+    out["allowed_rt_kw"] = allowed_signed
+    scale = (abs(allowed_signed) / abs(rt_intent_kw)) if abs(rt_intent_kw) > 0.01 else 0.0
+    out["scale_factor"] = scale
+    if scale >= 0.999:
+        out["decision"] = "accept"
+    elif scale < 0.01:
+        out["decision"] = "reject"
+        out["reason"] = (f"headroom={headroom_chg:.0f}/{headroom_dis:.0f} kWh "
+                          f"SOC={current_soc_pct:.1f}% [{eff_min:.0f}-{eff_max:.0f}], "
+                          f"future_net={future_net_kwh:.0f} kWh")
+    else:
+        out["decision"] = "downscale"
+        out["reason"] = (f"capacity limit: max_rt={max_rt_abs_kw:.0f} kW "
+                          f"vs intent {abs(rt_intent_kw):.0f} kW "
+                          f"(SOC={current_soc_pct:.1f}%, headroom={max_rt_abs_kwh:.0f} kWh)")
+    return out
+
+
 # ─────────────── Main API ───────────────
 
 def audit_action(profile: str,
