@@ -654,6 +654,19 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         raise ValueError(f"nesúlad step_min={step_min} a kind={kind}")
 
 
+@app.get("/version")
+def version_endpoint():
+    """Vráti git commit hash + build time z Docker image. Vždy ukáže ktorá
+    verzia kódu reálne beží v kontajneri (riešenie opakovaného problému že
+    docker build nevyzdvihne najnovší commit)."""
+    import os
+    return {
+        "git_commit": os.environ.get("GIT_COMMIT", "unknown"),
+        "build_time": os.environ.get("BUILD_TIME", "unknown"),
+        "started_at": _APP_START_TIME if "_APP_START_TIME" in globals() else None,
+    }
+
+
 @app.get("/plan_batch", response_class=HTMLResponse)
 def plan_batch_form(from_date: str = None, to_date: str = None, step_min: int = 60,
                     kind: str = "plan"):

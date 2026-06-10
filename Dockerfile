@@ -98,6 +98,13 @@ WORKDIR /app
 # Skopíruj aplikačný kód
 COPY . .
 
+# Build-time git commit hash (passed cez --build-arg GIT_COMMIT=$(git rev-parse --short HEAD))
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
+ENV GIT_COMMIT=${GIT_COMMIT}
+ENV BUILD_TIME=${BUILD_TIME}
+RUN echo "${GIT_COMMIT} ${BUILD_TIME}" > /app/VERSION.txt
+
 # Vytvor potrebné adresáre s default permissions
 RUN mkdir -p /app/out /app/db/data /app/okte_credentials
 
