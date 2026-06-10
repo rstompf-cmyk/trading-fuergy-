@@ -3233,9 +3233,12 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
         mult_action = "save_template"
     mult_msg, mult96, rt_mask96 = _handle_mult_action(date, 15, mult_arr, mult_action, rt_arr)
     # ui_settings.dentrh = polia z /dentrh formulára (bez FTV-balance — tie sú globálne v ui_settings.plan)
+    # Bug SOC-INIT-PERSIST-V2 (2026-06-10): používa soc_init_user (= user formulár),
+    # nie soc_init (= carried prepísaný v riadku 3226). Predtým sa do ui_settings.dentrh
+    # ukladal carried 16.86% namiesto user 5% → ďalšie otvorenie formuláru ho zobrazil ako 16.86.
     _ui_save("dentrh", dict(lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
                             batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
-                            soc_min=soc_min, soc_max=soc_max, soc_init=soc_init, terminal_soc=terminal_soc,
+                            soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
                             soc_reserve_pct=float(soc_reserve_pct or 0.0),
                             grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                             grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
