@@ -1042,6 +1042,60 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         _rt_dir_arr = pd.to_numeric(tr.get("rt_dir", 0), errors="coerce").fillna(0).values
                         _rt_pct_arr = pd.to_numeric(tr.get("rt_power_pct", 0), errors="coerce").fillna(0).values
                         _bkw_max_rt = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
+
+                        # Faza C Bug RT-PRE-AUDIT (2026-06-10): per-slot RT clip
+                        # User: 'baterka sa nabije s RT a ked sa ma nabijat z uz
+                        # zobchodovanej casti tak nema kam'. Riesenie: pred kazdym
+                        # 15-min slotom zavolat audit_rt_slot ktory simuluje SOC
+                        # trajektoriu cez VSETKY buduce zazmluvnene sloty (D-1+VDT)
+                        # a ak by RT minul SOC pre neskor, znizit rt_power_pct.
+                        try:
+                            from core.rt_audit import audit_rt_slot as _audit_rt
+                            from core.profile_resolver import get_active as _ga_rt
+                            _prof_rt = _ga_rt()
+                            if _prof_rt and _bkw_max_rt > 0:
+                                # ts15 = 15-min slot timestamp v tr
+                                _ts15_arr = tr["ts15"].values if "ts15" in tr.columns else None
+                                if _ts15_arr is not None and len(_ts15_arr) > 0:
+                                    _day_iso = day.isoformat()
+                                    # Per-15-min-slot priemer plan_batt_kw a rt_intent_kw
+                                    _slot_keys = pd.to_datetime(_ts15_arr).floor("15min")
+                                    _df_slot = pd.DataFrame({
+                                        "slot": _slot_keys,
+                                        "plan_kw": _batt_p_d1,
+                                        "rt_int_kw": _rt_dir_arr * _rt_pct_arr / 100.0 * _bkw_max_rt,
+                                    })
+                                    _slot_means = _df_slot.groupby("slot").mean()
+                                    # Per slot zavolaj audit, odlož scale_factor
+                                    _scale_map = {}
+                                    _dn_cnt = 0
+                                    for _slot_ts, _row in _slot_means.iterrows():
+                                        _h = _slot_ts.hour; _m = _slot_ts.minute
+                                        _sidx = _h * 4 + (_m // 15)
+                                        _ax = _audit_rt(_prof_rt, _day_iso, int(_sidx),
+                                                          float(_row["plan_kw"]),
+                                                          float(_row["rt_int_kw"]),
+                                                          step_min=15)
+                                        _sf = float(_ax.get("scale_factor", 1.0))
+                                        if _sf < 0.99:
+                                            _scale_map[_slot_ts] = _sf
+                                            _dn_cnt += 1
+                                            if _dn_cnt <= 5:   # log iba prvých 5
+                                                print(f"[RT-PRE-AUDIT] {_prof_rt} slot={_h:02d}:{_m:02d} "
+                                                      f"plan={_row['plan_kw']:.0f} rt_int={_row['rt_int_kw']:.0f} kW "
+                                                      f"scale={_sf:.2f} ({_ax.get('reason','')[:60]})")
+                                    # Aplikuj scale_factor per minúta
+                                    if _scale_map:
+                                        _per_min_scale = np.array([
+                                            _scale_map.get(_slot_keys[_i], 1.0)
+                                            for _i in range(len(_ts15_arr))
+                                        ], dtype=float)
+                                        _rt_pct_arr = _rt_pct_arr * _per_min_scale
+                                        print(f"[RT-PRE-AUDIT] {_prof_rt} {_day_iso}: "
+                                              f"clipnutých {_dn_cnt}/{len(_slot_means)} slotov")
+                        except Exception as _e_rta:
+                            print(f"[RT-PRE-AUDIT] zlyhal: {_e_rta} → pokračujem fail-open")
+
                         _batt_p_raw = _batt_p_d1 + _rt_dir_arr * _rt_pct_arr / 100.0 * _bkw_max_rt
                         # Bug #610 (bezpečnostný most do #611-#613): RT engine môže
                         # generovať rt_power_pct > 100% (proporcionálna reakcia na
