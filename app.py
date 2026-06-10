@@ -6188,24 +6188,32 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         _has_vdt_overlay = ("plan_batt_vdt_kw" in dview.columns
                             and pd.to_numeric(dview["plan_batt_vdt_kw"],
                                               errors="coerce").fillna(0).abs().sum() > 0.1)
+        # Bug SOC-DOUBLE-RT (2026-06-10): batt_kw_realistic JE výstup rt_controller PO
+        # aplikácii RT zásahov (vrátane plan+RT cap). Predtým sa k nemu PRIDÁVAL
+        # rt_dir × rt_power_pct/100 × bkw → DVOJITÉ ZAPOČÍTANIE RT v grafe.
+        # Dôsledok: zelená "Batéria PREDIKCIA (plán+RT)" ukazovala ±6000 kW peaky,
+        # ale SOC krivka (= integrácia skutočného batt_kw_realistic) zostala plochá
+        # lebo SOC integroval iba skutočné batt akcie (post-cap).
+        # Fix: ak batt_kw_realistic existuje → použiť priamo (zahŕňa všetky vrstvy).
+        #      inak (predikcia budúcich minút) → plan_batt_kw + RT intent (bez RT lebo
+        #      pre budúcnosť rt_dir=0).
         if "batt_kw_realistic" in dview.columns and not _has_vdt_overlay:
             _batt_base = dview["batt_kw_realistic"]
+            _add_rt_intent = False   # batt_kw_realistic už zahŕňa RT
         else:
             _batt_base = dview["plan_batt_kw"]
-        # Bug II (2026-06-07): vratit per-minute granularitu (Bug FF agregat vymazal RT korekcie
-        # ktore v slot-e maju charge aj discharge -> rusia sa; user nevidel kazdu zmenu batt).
-        # Plus pridany druhy dataset AC_AGG (15-min slot mean) ako paralelny stepped reference.
-        # Bug #610: clip predikciu na fyzické limity batt. RT engine môže
-        # generovať rt_power_pct >100% (proporcionálna reakcia na sys_MW),
-        # bez clip-u by graf "Riadenie batérie" ukazoval >batt_kw_max (napr.
-        # -15000 kW pre 6000 kW batt).
+            _add_rt_intent = True    # plan_batt_kw nezahŕňa RT
+        # Bug #610: clip predikciu na fyzické limity batt
         def _clip_to_batt(v):
             if bkw > 0:
                 if v > bkw: return bkw
                 if v < -bkw: return -bkw
             return v
-        _act_per_min = [_clip_to_batt(_nz(pb) + _nz(d) * _nz(p) / 100.0 * bkw)
-                          for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])]
+        if _add_rt_intent:
+            _act_per_min = [_clip_to_batt(_nz(pb) + _nz(d) * _nz(p) / 100.0 * bkw)
+                              for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])]
+        else:
+            _act_per_min = [_clip_to_batt(_nz(pb)) for pb in _batt_base]
         AC = "[" + ",".join(_js(float(x)) for x in _act_per_min) + "]"
         # 15-min agregat ako druhy dataset (transparentny prehlad)
         try:
