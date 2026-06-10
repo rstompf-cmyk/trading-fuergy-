@@ -1273,6 +1273,22 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     else:
                         cum_rt_done += float(pd.Series(_rt_real_col).fillna(0).sum())
                     done_through = day
+                    # DB unify F2 (2026-06-10): paralelný zápis do DB (effect_minute + effect_daily).
+                    # Jediný zdroj pravdy pre UI (karty, chC graf, Excel, PDF). CSV zostáva pre
+                    # interný incremental state. Fail-soft — DB chyba neblokuje livesim.
+                    try:
+                        from core import effect_db as _eff_db
+                        from core.profile_resolver import get_active as _ga_db
+                        import market as _mk_db
+                        _prof_db = _ga_db()
+                        _market_db = str(_mk_db.get_active_market()).lower()
+                        if _prof_db and not tr.empty:
+                            _eff_db.upsert_minute_batch(_prof_db, _market_db, tr)
+                            _day_iso = str(d)
+                            _totals = _eff_db.compute_day_totals_from_df(tr)
+                            _eff_db.upsert_daily(_prof_db, _day_iso, _market_db, _totals)
+                    except Exception as _e_dbup:
+                        print(f"[livesim DB F2] upsert pre {d} zlyhal: {_e_dbup}")
                 else:
                     # DNEŠOK = provizórny (odhad ZCO) → LEN zobrazenie, NEukladá sa
                     today_dt = float(tr["dt_rev_min"].sum())
