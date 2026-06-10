@@ -281,16 +281,16 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
         _soc_min_seen = float(np.min(sch["soc_pct"])) if "soc_pct" in sch and len(sch) else 0.0
         _soc_max_seen = float(np.max(sch["soc_pct"])) if "soc_pct" in sch and len(sch) else 0.0
         print(f"[optimize_day result] peak_batt={_peak_di:.0f}kW, peak_grid={_peak_ex:.0f}kWh/period, "
-              f"SOC range {_soc_min_seen:.0f}–{_soc_max_seen:.0f}% (eff_min was {_eff_soc_min_pct:.1f}%), "
+              f"SOC range {_soc_min_seen:.0f}–{_soc_max_seen:.0f}% (limit {soc_min_pct:.0f}–{soc_max_pct:.0f}%), "
               f"export={summary.get('trzba_export_EUR',0):.2f}€, import={summary.get('naklad_import_EUR',0):.2f}€")
         # Sanity: ak peak_batt > batt_kw → LP nominoval cez fyzický limit (bug)
         if _peak_di > batt_kw * 1.01:
             print(f"[optimize_day WARN] peak_batt {_peak_di:.0f} kW > batt_kw {batt_kw:.0f} kW "
                   f"(LP nominoval cez fyzický limit!)")
-        # Sanity: ak SOC klesol pod eff_min → LP porušil soc_reserve_pct
-        if _soc_min_seen < _eff_soc_min_pct - 0.5:
-            print(f"[optimize_day WARN] SOC min {_soc_min_seen:.1f}% < eff_min {_eff_soc_min_pct:.1f}% "
-                  f"(LP porušil soc_reserve_pct!)")
+        # Sanity: ak SOC klesol pod soc_min → LP porušil fyzický limit
+        if _soc_min_seen < float(soc_min_pct) - 0.5:
+            print(f"[optimize_day WARN] SOC min {_soc_min_seen:.1f}% < soc_min {float(soc_min_pct):.1f}% "
+                  f"(LP porušil fyzický limit!)")
     except Exception:
         pass
     # ── voliteľný post-process: ručné násobitele nad batt_kw (D-1 plán) ─────
