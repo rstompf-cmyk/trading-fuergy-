@@ -72,11 +72,30 @@ def audit_rt_slot(profile: str,
     if abs(rt_intent_kw) < 1.0:
         return out
 
-    # Total batt v tomto slote (plan + rt)
+    dt_h = max(float(step_min), 1.0) / 60.0
+
+    # Bug RT-AUDIT-OPPOSITE (2026-06-10): ak RT ide v opacnom smere nez plán,
+    # ZOSLABUJE celkovy batt zatazenie — to je vzdy bezpecnejsie pre SOC
+    # trajektoriu (assuming D-1 plán bol feasible). Auditovat netreba.
+    # Pred fixom: plán -3000 (charge) + RT +1000 (discharge) → total=-2000 →
+    # direction="charge" → audit povolí 2000 kW charge. allowed_rt_abs =
+    # max(0, 2000 - 3000) = 0 → RT vybíjanie orezané na 0!
+    # User report: "ignoruje aj vybijania ce RT len nabijania" — toto.
+    _plan_sign = 1.0 if plan_batt_kw > 0 else (-1.0 if plan_batt_kw < 0 else 0.0)
+    _rt_sign = 1.0 if rt_intent_kw > 0 else -1.0
+    if _plan_sign != 0.0 and _plan_sign != _rt_sign:
+        out["decision"] = "accept"
+        out["allowed_rt_kw"] = float(rt_intent_kw)
+        out["scale_factor"] = 1.0
+        out["reason"] = (f"fail-open: RT smer opacny voci planu "
+                          f"(plan={plan_batt_kw:.0f}, rt={rt_intent_kw:.0f}) "
+                          f"— zoslabuje zatazenie, audit netreba")
+        return out
+
+    # RT v rovnakom smere ako plán (alebo plán=0) → audituj total
     total_kw = float(plan_batt_kw) + float(rt_intent_kw)
     direction = "discharge" if total_kw > 0 else "charge"
     abs_total_kw = abs(total_kw)
-    dt_h = max(float(step_min), 1.0) / 60.0
     total_kwh = abs_total_kw * dt_h
 
     if total_kwh < 0.5:
