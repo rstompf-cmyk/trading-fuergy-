@@ -37,16 +37,24 @@ from core.paths import livesim_csv_path
 
 
 def _iter_profile_csvs(profile: str, market: str) -> List[Tuple[str, str]]:
-    """Vráti [(case, csv_path), ...] dostupné pre profil+market."""
+    """Vráti [(case, csv_path), ...] dostupné pre profil+market.
+
+    Skúša 3 varianty cesty: per-port (_8000.csv), bez portu (.csv), per-profile
+    podadresár — kvôli legacy variantom v rôznych deploy konfiguráciách.
+    """
     out = []
+    from core.paths import _data_dir
+    data_dir = _data_dir(market)
     for case in ("plan_d1", "dt_15min"):
-        # default port 8000
-        try:
-            csv = livesim_csv_path(case, port="8000", profile=profile, market=market)
-        except Exception:
-            continue
-        if os.path.exists(csv) and os.path.getsize(csv) > 100:
-            out.append((case, csv))
+        candidates = [
+            os.path.join(data_dir, f"livesim_{case}_8000.csv"),    # per-port
+            os.path.join(data_dir, f"livesim_{case}.csv"),         # shared (legacy)
+            os.path.join(data_dir, profile, f"livesim_{case}.csv"),# per-profile sandbox
+        ]
+        for csv in candidates:
+            if os.path.exists(csv) and os.path.getsize(csv) > 100:
+                out.append((case, csv))
+                break  # prvý nájdený stačí
     return out
 
 
