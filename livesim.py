@@ -1064,22 +1064,44 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                     _day_iso = day.isoformat()[:10]
                                     # Per-15-min-slot priemer plan_batt_kw a rt_intent_kw
                                     _slot_keys = pd.to_datetime(_ts15_arr).floor("15min")
+                                    # Bug SOC-AUDIT-START (2026-06-10): vytiahnut SOC tesne
+                                    # pred slotom z tr (aktualna realita po vsetkych
+                                    # predchadzajucich RT zasahoch). Audit musi simulovat
+                                    # od tohto SOC, nie od start_soc na 00:00 (= D-1 plan
+                                    # start, ignoruje historicke RT). Bez tohto audit
+                                    # zamietne RT vybijanie aj ked je SOC dostatočne nad eff_min.
+                                    _soc_arr = (pd.to_numeric(tr.get("soc_pct", 50.0),
+                                                                errors="coerce").fillna(50.0).values
+                                                if "soc_pct" in tr.columns else None)
                                     _df_slot = pd.DataFrame({
                                         "slot": _slot_keys,
                                         "plan_kw": _batt_p_d1,
                                         "rt_int_kw": _rt_dir_arr * _rt_pct_arr / 100.0 * _bkw_max_rt,
                                     })
                                     _slot_means = _df_slot.groupby("slot").mean()
+                                    # Per-slot prvy index v tr (= start slotu)
+                                    _df_slot["minute_idx"] = np.arange(len(_df_slot))
+                                    _slot_first_idx = _df_slot.groupby("slot")["minute_idx"].first()
                                     # Per slot zavolaj audit, odlož scale_factor
                                     _scale_map = {}
                                     _dn_cnt = 0
                                     for _slot_ts, _row in _slot_means.iterrows():
                                         _h = _slot_ts.hour; _m = _slot_ts.minute
                                         _sidx = _h * 4 + (_m // 15)
+                                        # SOC tesne pred slotom (na prvej minute slotu, ak
+                                        # neexistuje fallback na None — audit pouzije D-1 start)
+                                        _soc_at_si = None
+                                        if _soc_arr is not None and _slot_ts in _slot_first_idx.index:
+                                            _first_i = int(_slot_first_idx[_slot_ts])
+                                            if _first_i > 0:
+                                                _soc_at_si = float(_soc_arr[_first_i - 1])
+                                            else:
+                                                _soc_at_si = float(_soc_arr[0])
                                         _ax = _audit_rt(_prof_rt, _day_iso, int(_sidx),
                                                           float(_row["plan_kw"]),
                                                           float(_row["rt_int_kw"]),
-                                                          step_min=15)
+                                                          step_min=15,
+                                                          current_soc_pct=_soc_at_si)
                                         _sf = float(_ax.get("scale_factor", 1.0))
                                         if _sf < 0.99:
                                             _scale_map[_slot_ts] = _sf

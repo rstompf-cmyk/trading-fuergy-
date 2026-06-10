@@ -36,7 +36,8 @@ def audit_rt_slot(profile: str,
                    plan_batt_kw: float,
                    rt_intent_kw: float,
                    *,
-                   step_min: int = 15) -> Dict[str, Any]:
+                   step_min: int = 15,
+                   current_soc_pct: Optional[float] = None) -> Dict[str, Any]:
     """Audit RT zasahu pred aplikaciou.
 
     Args:
@@ -104,7 +105,8 @@ def audit_rt_slot(profile: str,
     try:
         from core.soc_use_audit import audit_action as _soc_audit
         sa = _soc_audit(profile, day, int(slot_idx), direction, total_kwh,
-                          source="rt", step_min=step_min)
+                          source="rt", step_min=step_min,
+                          current_soc_pct_at_si=current_soc_pct)
     except Exception as e:
         out["reason"] = f"audit_action raised: {e}"
         return out

@@ -121,7 +121,8 @@ def audit_action(profile: str,
                   *,
                   source: str = "vdt",
                   today_state: Optional[Dict[str, Any]] = None,
-                  step_min: int = 15) -> Dict[str, Any]:
+                  step_min: int = 15,
+                  current_soc_pct_at_si: Optional[float] = None) -> Dict[str, Any]:
     """Audit navrhovanej akcie pred zápisom.
 
     Args:
@@ -226,14 +227,32 @@ def audit_action(profile: str,
     proposed_sign = +1.0 if direction == "discharge" else -1.0
     proposed_kwh_signed = proposed_sign * kwh_req
 
+    # Bug SOC-AUDIT-START (2026-06-10): pôvodne audit simuloval SOC trajektoriu
+    # od slot 0 s `start_soc_pct` (= SOC na 00:00 dňa zo D-1 plánu). Ignoroval
+    # všetky historické RT zásahy z livesim — ak ráno RT nabilo z 5% na 42%,
+    # audit ďalej myslel že o 07:00 je SOC=20% a zamietol RT vybíjanie.
+    # Fix: ak volajúci pošle current_soc_pct_at_si, simuluj LEN budúce sloty
+    # (slot si vyššie) od tohto SOC. Minulosť sa nemení.
+    if current_soc_pct_at_si is not None:
+        _sim_start_soc = float(current_soc_pct_at_si)
+        # Sloty 0..si-1 → 0 kWh (nemení SOC, simulácia začína v si)
+        _sim_offset = si
+    else:
+        _sim_start_soc = float(today_state["start_soc_pct"])
+        _sim_offset = 0
+
     def _trial(kwh_try: float) -> Tuple[List[float], List[str]]:
         """Vráti soc_path + direction_per_slot s navrhovanou akciou kwh_try."""
         signed_try = proposed_sign * abs(kwh_try)
         trial_kwh = list(scheduled_kwh)
         trial_kwh[si] = trial_kwh[si] + signed_try
+        if _sim_offset > 0:
+            # Bypass minulosti — sloty 0..si-1 na 0 (start_soc reprezentuje stav v si)
+            sim_kwh = [0.0] * _sim_offset + list(trial_kwh[_sim_offset:])
+        else:
+            sim_kwh = trial_kwh
         soc_path = simulate_soc_unclipped(
-            float(today_state["start_soc_pct"]),
-            trial_kwh, cap, eff_c=eff_c, eff_d=eff_d)
+            _sim_start_soc, sim_kwh, cap, eff_c=eff_c, eff_d=eff_d)
         dirs = _scheduled_to_direction(trial_kwh)
         return soc_path, dirs
 
