@@ -5414,6 +5414,50 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             dview["plan_grid_kwh"] = (dview["plan_grid_dam_kwh"].fillna(0.0)
                                                        + dview["plan_grid_vdt_kwh"].fillna(0.0))
                         _vdt_diag["applied"] = int(sum(1 for v in _vdt_kw_per if abs(v) > 0.01))
+
+                        # Bug BATT-REAL-RECOMPUTE (2026-06-10): livesim CSV mohol zapísať
+                        # batt_kw_realistic PRED tým, ako sa VDT trade dopísal do paper trades
+                        # (= za behu sa neaktualizuje, ostáva stale). Plus pre future minúty
+                        # batt_kw_realistic vôbec neexistuje. Po Bug Z VDT prepise plan_batt_kw
+                        # prepočítaj batt_kw_realistic z aktuálneho plánu + grid+FTV clip
+                        # (identická logika ako livesim.py riadky ~1062-1086).
+                        try:
+                            import profiles as _pr_br
+                            _p_br = _pr_br.load_profile(_prof_load) or {}
+                            _pl_br = (_p_br.get("plan") or {})
+                            _gki = float(_pl_br.get("grid_kw_import", 0.0) or 0.0)
+                            _gke = float(_pl_br.get("grid_kw_export", 0.0) or 0.0)
+                            _bkw_max_br = float(_pl_br.get("batt_kw", 0.0) or 0.0)
+                            _ftv_arr_br = pd.to_numeric(
+                                dview.get("ftv_min_real_kw", pd.Series([0.0]*len(dview))),
+                                errors="coerce").fillna(0.0).values
+                            _load_arr_br = pd.to_numeric(
+                                dview.get("load_min_real_kw", pd.Series([0.0]*len(dview))),
+                                errors="coerce").fillna(0.0).values
+                            _pb_arr_br = pd.to_numeric(
+                                dview["plan_batt_kw"], errors="coerce").fillna(0.0).values
+                            _rd_arr_br = pd.to_numeric(
+                                dview.get("rt_dir", pd.Series([0.0]*len(dview))),
+                                errors="coerce").fillna(0.0).values
+                            _rp_arr_br = pd.to_numeric(
+                                dview.get("rt_power_pct", pd.Series([0.0]*len(dview))),
+                                errors="coerce").fillna(0.0).values
+                            _bp_br = _pb_arr_br + _rd_arr_br * _rp_arr_br / 100.0 * _bkw_max_br
+                            if _bkw_max_br > 0:
+                                _bp_br = np.clip(_bp_br, -_bkw_max_br, _bkw_max_br)
+                            _plan_chg_br = np.maximum(-_bp_br, 0.0)
+                            _plan_dis_br = np.maximum(_bp_br, 0.0)
+                            _avail_chg_br = np.maximum(_ftv_arr_br - _load_arr_br, 0.0) + _gki
+                            _avail_dis_br = _gke + np.maximum(_load_arr_br - _ftv_arr_br, 0.0)
+                            _chg_r_br = np.minimum(_plan_chg_br, _avail_chg_br)
+                            _dis_r_br = np.minimum(_plan_dis_br, _avail_dis_br)
+                            dview["batt_kw_realistic"] = np.round(_dis_r_br - _chg_r_br, 1)
+                            _vdt_diag["batt_real_recomputed"] = int(len(_pb_arr_br))
+                            _vdt_diag["gki"] = _gki
+                            _vdt_diag["gke"] = _gke
+                        except Exception as _e_br:
+                            print(f"[BATT-REAL-RECOMPUTE] zlyhal: {_e_br}")
+
                         # Bug Z: SOC trajektória musí reflektovať plan_batt_kw (D-1+VDT).
                         # Predtým: soc_pct z _run_physical_day = D-1 only → SOC nereaguje na VDT.
                         # Recompute: integruj plan_batt_kw cez čas (1-min step) + start SOC z prvého
@@ -5464,7 +5508,19 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             _soc_cur_kwh = max(_soc_min_kwh,
                                                 min(_soc_max_kwh,
                                                     _start_soc / 100.0 * _batt_kwh_cap))
-                            _pb_arr = dview["plan_batt_kw"].fillna(0.0).tolist()
+                            # Bug SOC-REALISTIC-SOURCE (2026-06-10): SOC musí integrovať
+                            # reálny výkon na batérii — `batt_kw_realistic` (= D-1 plán +
+                            # VDT + RT, post grid+FTV clip). Predtým integroval `plan_batt_kw`
+                            # (= D-1 + VDT BEZ RT) → graf nereagoval na RT zásahy.
+                            # Užívateľ: "spocita aktualny vykon na baterii (nezalezi ako vznikol)".
+                            _src_col = "plan_batt_kw"
+                            if "batt_kw_realistic" in dview.columns:
+                                _br_check = pd.to_numeric(
+                                    dview["batt_kw_realistic"], errors="coerce").fillna(0)
+                                if _br_check.abs().sum() > 0.1:
+                                    _src_col = "batt_kw_realistic"
+                            _vdt_diag["soc_src_col"] = _src_col
+                            _pb_arr = dview[_src_col].fillna(0.0).tolist()
                             for _pb in _pb_arr:
                                 _dkwh_req = float(_pb) / 60.0   # kW × 1/60 h (signed)
                                 if _dkwh_req > 0:
@@ -5490,7 +5546,38 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             dview["soc_pct"] = _socs
                             # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
                             # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
-                            dview["plan_batt_kw"] = _pb_realiz
+                            # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
+                            # Ak sme integrovali batt_kw_realistic, ten je už post-cap reality;
+                            # prepísanie plan_batt_kw by zamiešalo plán a realitu.
+                            if _src_col == "plan_batt_kw":
+                                dview["plan_batt_kw"] = _pb_realiz
+
+                            # Bug SOC-PLAN-PARALLEL (2026-06-10): paralelný SOC z plan_batt_kw
+                            # (= D-1 nominácia + VDT realized + plánované VDT). Užívateľ chce
+                            # vidieť aj full-day predikciu (vrátane budúcich zobchodovaných slotov),
+                            # nielen post-cap realitu. Reálne `soc_pct` ostáva z batt_kw_realistic.
+                            try:
+                                _soc_cur_plan = max(_soc_min_kwh,
+                                                    min(_soc_max_kwh,
+                                                        _start_soc / 100.0 * _batt_kwh_cap))
+                                _socs_plan = []
+                                _pb_plan_arr = dview["plan_batt_kw"].fillna(0.0).tolist()
+                                for _pbp in _pb_plan_arr:
+                                    _dkwh = float(_pbp) / 60.0
+                                    if _dkwh > 0:
+                                        _draw = _dkwh / max(0.01, _eff_d)
+                                        _avail = max(0.0, _soc_cur_plan - _soc_min_kwh)
+                                        _soc_cur_plan -= min(_draw, _avail)
+                                    elif _dkwh < 0:
+                                        _push = abs(_dkwh) * _eff_c
+                                        _room = max(0.0, _soc_max_kwh - _soc_cur_plan)
+                                        _soc_cur_plan += min(_push, _room)
+                                    _sp = (_soc_cur_plan / max(1.0, _batt_kwh_cap)) * 100.0
+                                    _sp = max(_soc_min_p, min(_soc_max_p, _sp))
+                                    _socs_plan.append(_sp)
+                                dview["soc_pct_plan"] = _socs_plan
+                            except Exception:
+                                pass
                             _vdt_diag["soc_recomputed"] = len(_socs)
                             _vdt_diag["plan_clipped"] = int(sum(
                                 1 for a, b in zip(_pb_arr, _pb_realiz)
@@ -6223,6 +6310,11 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         else:
             _act_per_min = [_clip_to_batt(_nz(pb)) for pb in _batt_base]
         AC = "[" + ",".join(_js(float(x)) for x in _act_per_min) + "]"
+        # PLÁN batérie (D-1 + VDT realized + planned) — referencia "čo malo byť".
+        # Rozdiel voči AC = odchýlka (typicky keď VDT plán prekročí grid_kw_import
+        # alebo FTV nedodá → batt_kw_realistic clipnutý na 0 a vznikne dev).
+        _plan_for_ref = dview["plan_batt_kw"].fillna(0.0).tolist() if "plan_batt_kw" in dview.columns else [0.0]*len(dview)
+        AP = "[" + ",".join(_js(float(x)) for x in _plan_for_ref) + "]"
         # 15-min agregat ako druhy dataset (transparentny prehlad)
         try:
             _act_df = pd.DataFrame({"_t": dview["time"].values, "_v": _act_per_min})
@@ -6233,6 +6325,12 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             AC_AGG = AC
         # SOC PREDIKCIA: z trace (plánovaný/projektovaný SOC, výsledok RT engine + plánu)
         SO = "[" + ",".join(_js(x) for x in dview["soc_pct"]) + "]"
+        # SOC PLÁN: full-day predikcia z plan_batt_kw (D-1 + VDT realized + plánované VDT)
+        # — ide cez celý deň, aj cez zobchodované budúce sloty.
+        if "soc_pct_plan" in dview.columns:
+            SOP = "[" + ",".join(_js(x) for x in dview["soc_pct_plan"]) + "]"
+        else:
+            SOP = "[" + ",".join(["null"] * len(dview)) + "]"
         # ── Realio realita pre SOC + batt (len v realio_overlay móde, paralelne k predikcii) ──
         if realio_overlay and "realio_batt_kw" in dview.columns:
             BATT_REAL = "[" + ",".join(_js(x) for x in dview["realio_batt_kw"]) + "]"
@@ -6728,11 +6826,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         chRiadenie = (f"<h2>Riadenie batérie — predikcia (plán+RT) vs realita + SOC (deň {view_day}){_export_btn}{_now_banner}</h2>"
                 f"<div style='height:360px'><canvas id='chRi'></canvas></div>"
                 f"<script>new Chart(document.getElementById('chRi'),{{type:'line',data:{{labels:{Ld},datasets:["
-                f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
+                f"{{label:'Plán batérie (D-1 + VDT, kW)',data:{AP},borderColor:'#37474F',borderWidth:1.4,borderDash:[2,3],fill:false,stepped:true,pointRadius:0,tension:.0}},"
+                f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min, post-cap)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
                 f"{{label:'Batéria PREDIKCIA kW (15-min agregát)',data:{AC_AGG},borderColor:'#1565C0',borderDash:[6,3],fill:false,stepped:true,pointRadius:0,borderWidth:2.2}},"
                 f"{{label:'🔴 Batéria REÁLNE MERANIE kW',data:{BATT_REAL},borderColor:'#C62828',backgroundColor:'rgba(198,40,40,.0)',fill:false,pointRadius:0,borderWidth:2.2,tension:.15}},"
                 f"{{label:'RT odchýlka kW',data:{RK},borderColor:'#7030A0',backgroundColor:'rgba(112,48,160,.12)',fill:true,stepped:true,pointRadius:0,borderWidth:1.2}},"
-                f"{{label:'SOC PREDIKCIA %',data:{SO},borderColor:'#C49000',borderWidth:1.6,borderDash:[5,3],pointRadius:0,yAxisID:'y2'}},"
+                f"{{label:'SOC PLÁN % (D-1 + VDT, full-day)',data:{SOP},borderColor:'#9E9E9E',borderWidth:1.4,borderDash:[2,3],pointRadius:0,yAxisID:'y2',tension:.1}},"
+                f"{{label:'SOC PREDIKCIA % (realita post-cap)',data:{SO},borderColor:'#C49000',borderWidth:1.8,borderDash:[5,3],pointRadius:0,yAxisID:'y2'}},"
                 f"{{label:'🔴 SOC REÁLNE MERANIE %',data:{SOC_REAL},borderColor:'#E65100',borderWidth:2.0,pointRadius:0,yAxisID:'y2',tension:.15}}"
                 f"]}},options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},"
                 f"elements:{{point:{{radius:0}}}},scales:{{y:{{title:{{display:true,text:'kW'}},grid:{{color:(c)=>c.tick.value===0?'#333':'#eee'}}}},"
