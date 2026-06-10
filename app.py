@@ -6926,7 +6926,10 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _cum_rt_series = None
         if _cum_rt_series is not None:
             _cum_dt_arr = pd.to_numeric(dfull["cum_dt"], errors="coerce").fillna(0)
-            _cum_vdt_arr = pd.to_numeric(dfull.get("cum_vdt_arb", 0), errors="coerce").fillna(0)
+            if "cum_vdt_arb" in dfull.columns:
+                _cum_vdt_arr = pd.to_numeric(dfull["cum_vdt_arb"], errors="coerce").fillna(0)
+            else:
+                _cum_vdt_arr = pd.Series([0.0] * len(dfull), index=dfull.index)
             _cum_total_series = _cum_dt_arr + _cum_rt_series + _cum_vdt_arr
             CT = "[" + ",".join(f"{x:.2f}" for x in _cum_total_series) + "]"
             CD = "[" + ",".join(f"{x:.2f}" for x in _cum_dt_arr) + "]"
