@@ -256,12 +256,35 @@ def audit_action(profile: str,
         dirs = _scheduled_to_direction(trial_kwh)
         return soc_path, dirs
 
+    # Bug SOC-AUDIT-DELTA (2026-06-10): audit kontroluje SOC trajektoriu na celých
+    # 24h dopredu (96 slotov od si). User: "audit sa nerobi na 24 hodinach" =
+    # audit sa MÁ robiť na 24h.
+    # ALE: porovnávame trajektoriu S RT vs BEZ RT (= len plán + scheduled).
+    # Violácia v slot X sa pripíše RT len ak ju RT spôsobil (nebola tam bez RT).
+    # Violácie ktoré existujú aj bez RT zásahu → vina plánu (D-1 LP), nie RT,
+    # ignoruj. Pre 04:00 RT nabíjanie ak plán už spôsobí violation v 20:45
+    # (lebo plán vybíja viac než SOC dovolí), RT 04:00 to nezhoršuje — naopak,
+    # RT nabíjanie pridáva SOC.
+    # Baseline: 96-slot soc_path s len scheduled (D-1 + VDT), žiadna RT akcia.
+    _base_path = simulate_soc_unclipped(
+        _sim_start_soc,
+        ([0.0]*_sim_offset + list(scheduled_kwh[_sim_offset:])) if _sim_offset > 0 else list(scheduled_kwh),
+        cap, eff_c=eff_c, eff_d=eff_d)
+    _base_dirs = _scheduled_to_direction(scheduled_kwh)
+    _base_viols_set = {(v[0], v[1]) for v in check_violations(
+        _base_path, _base_dirs,
+        soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
+        from_slot=si)}
+
     # Pokus s plnou požadovanou hodnotou
     soc_path_full, dirs_full = _trial(kwh_req)
-    violations_full = check_violations(
+    # Filter: ignoruj violácie ktoré existovali aj v baseline (= plán je infeasible,
+    # nie RT vina). RT prispel k violation len ak (slot, kind) nie je v baseline.
+    violations_full = [v for v in check_violations(
         soc_path_full, dirs_full,
         soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
-        from_slot=si)        # auditujeme len budúce sloty od slot_idx (vrátane)
+        from_slot=si)
+        if (v[0], v[1]) not in _base_viols_set]
     out["soc_path_proposed"] = soc_path_full
 
     if not violations_full:
@@ -276,10 +299,11 @@ def audit_action(profile: str,
         if mid <= 0.001:
             break
         soc_path_mid, dirs_mid = _trial(mid)
-        viol_mid = check_violations(
+        viol_mid = [v for v in check_violations(
             soc_path_mid, dirs_mid,
             soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
             from_slot=si)
+            if v[0] < _to_slot]
         if viol_mid:
             hi = mid
         else:
@@ -288,10 +312,11 @@ def audit_action(profile: str,
     # Re-eval final soc_path
     soc_path_final, dirs_final = _trial(allowed)
     out["soc_path_proposed"] = soc_path_final
-    out["violations"] = check_violations(
+    out["violations"] = [v for v in check_violations(
         soc_path_final, dirs_final,
         soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
         from_slot=si)
+        if v[0] < _to_slot]
     if allowed < 0.5:           # menej ako 0.5 kWh nemá zmysel
         out["decision"] = "reject"
         out["allowed_kwh"] = 0.0
