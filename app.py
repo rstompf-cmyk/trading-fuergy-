@@ -3187,9 +3187,10 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
     # nedosiahne (= odchýlka voči trhu = pokuta).
     _soc_init_carry, _soc_init_src = _resolve_soc_init_carryover(
         date, {"soc_init": soc_init, "soc_min": soc_min, "soc_max": soc_max}, case="dentrh")
+    soc_init_user = soc_init   # zachovaj manual pre ui_settings/profile zápis
     if _soc_init_src == "carried":
         print(f"[#622 /dentrh POST] {date}: soc_init={soc_init:.1f}% → "
-              f"carried {_soc_init_carry:.1f}%")
+              f"carried {_soc_init_carry:.1f}% (LP only, profile zostáva {soc_init_user:.1f}%)")
         soc_init = _soc_init_carry
     # asymetrické limity siete: ak prázdne, použiť grid_kw (backward compat)
     gki = float(grid_kw_import) if grid_kw_import is not None else float(grid_kw)
@@ -3216,7 +3217,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
     # hodnotu starou hodnotou z .plan (lebo _dentrh_form má .plan > .dentrh priority).
     _SHARED_SYNC = dict(lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
                           batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
-                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init, terminal_soc=terminal_soc,
+                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
                           soc_reserve_pct=float(soc_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
@@ -13703,11 +13704,17 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
     zbw = float(zco_bias_w or 0.0)
     # Bug #622 (Krok A): SOC carryover z livesim trace pre /plan POST.
     # Override user-vstupu `soc_init` reálnym SOC po predošlom dni.
+    # Bug SOC-INIT-PERSIST (2026-06-10): rozdeliť na 2 premenné — carried
+    # použiť LEN pre tento konkrétny LP beh, user manual hodnota zostane
+    # uložená v profile (= východisko pre buduce dni). Predtým sa carried
+    # zapisovala do profilu cez pr.save_profile → user nevidel svoju zadanú
+    # hodnotu po každom auto-tick-u.
     _soc_init_carry_p, _soc_init_src_p = _resolve_soc_init_carryover(
         date, {"soc_init": soc_init, "soc_min": soc_min, "soc_max": soc_max}, case="plan_d1")
+    soc_init_user = soc_init   # zachovaj user manual hodnotu pre save_profile
     if _soc_init_src_p == "carried":
         print(f"[#622 /plan POST] {date}: soc_init={soc_init:.1f}% → "
-              f"carried {_soc_init_carry_p:.1f}%")
+              f"carried {_soc_init_carry_p:.1f}% (LP only, profile zostáva {soc_init_user:.1f}%)")
         soc_init = _soc_init_carry_p
     rtf = bool(rt_freedom)
     aggr = bool(aggressive_rt)                                  # default False; ak True → RT bez cycle budgetu
@@ -13740,9 +13747,12 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
         "use_vdt": bool(joint_use_vdt),
         "optimize_distribution": bool(joint_optimize_dist),
     }
+    # Bug SOC-INIT-PERSIST: do ui_settings/profile sa zapisuje soc_init_user
+    # (= manuálna hodnota zo formulára), NIE carried po Bug #622 override.
+    # Carried platí iba pre tento konkrétny LP beh, profile zostáva s manualom.
     _ui_save("plan", dict(lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
                           batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
-                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init, terminal_soc=terminal_soc,
+                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
                           soc_reserve_pct=float(soc_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost,
@@ -13771,7 +13781,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
     # SYNC: shared parametre tiež do ui_settings.dentrh aby /plan a /dentrh ostali konzistentné
     _SHARED_SYNC = dict(lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
                           batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
-                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init, terminal_soc=terminal_soc,
+                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
                           soc_reserve_pct=float(soc_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
