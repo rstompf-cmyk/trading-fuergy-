@@ -5507,6 +5507,33 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             # prepísanie plan_batt_kw by zamiešalo plán a realitu.
                             if _src_col == "plan_batt_kw":
                                 dview["plan_batt_kw"] = _pb_realiz
+
+                            # Bug SOC-PLAN-PARALLEL (2026-06-10): paralelný SOC z plan_batt_kw
+                            # (= D-1 nominácia + VDT realized + plánované VDT). Užívateľ chce
+                            # vidieť aj full-day predikciu (vrátane budúcich zobchodovaných slotov),
+                            # nielen post-cap realitu. Reálne `soc_pct` ostáva z batt_kw_realistic.
+                            try:
+                                _soc_cur_plan = max(_soc_min_kwh,
+                                                    min(_soc_max_kwh,
+                                                        _start_soc / 100.0 * _batt_kwh_cap))
+                                _socs_plan = []
+                                _pb_plan_arr = dview["plan_batt_kw"].fillna(0.0).tolist()
+                                for _pbp in _pb_plan_arr:
+                                    _dkwh = float(_pbp) / 60.0
+                                    if _dkwh > 0:
+                                        _draw = _dkwh / max(0.01, _eff_d)
+                                        _avail = max(0.0, _soc_cur_plan - _soc_min_kwh)
+                                        _soc_cur_plan -= min(_draw, _avail)
+                                    elif _dkwh < 0:
+                                        _push = abs(_dkwh) * _eff_c
+                                        _room = max(0.0, _soc_max_kwh - _soc_cur_plan)
+                                        _soc_cur_plan += min(_push, _room)
+                                    _sp = (_soc_cur_plan / max(1.0, _batt_kwh_cap)) * 100.0
+                                    _sp = max(_soc_min_p, min(_soc_max_p, _sp))
+                                    _socs_plan.append(_sp)
+                                dview["soc_pct_plan"] = _socs_plan
+                            except Exception:
+                                pass
                             _vdt_diag["soc_recomputed"] = len(_socs)
                             _vdt_diag["plan_clipped"] = int(sum(
                                 1 for a, b in zip(_pb_arr, _pb_realiz)
@@ -6249,6 +6276,12 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             AC_AGG = AC
         # SOC PREDIKCIA: z trace (plánovaný/projektovaný SOC, výsledok RT engine + plánu)
         SO = "[" + ",".join(_js(x) for x in dview["soc_pct"]) + "]"
+        # SOC PLÁN: full-day predikcia z plan_batt_kw (D-1 + VDT realized + plánované VDT)
+        # — ide cez celý deň, aj cez zobchodované budúce sloty.
+        if "soc_pct_plan" in dview.columns:
+            SOP = "[" + ",".join(_js(x) for x in dview["soc_pct_plan"]) + "]"
+        else:
+            SOP = "[" + ",".join(["null"] * len(dview)) + "]"
         # ── Realio realita pre SOC + batt (len v realio_overlay móde, paralelne k predikcii) ──
         if realio_overlay and "realio_batt_kw" in dview.columns:
             BATT_REAL = "[" + ",".join(_js(x) for x in dview["realio_batt_kw"]) + "]"
@@ -6748,7 +6781,8 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"{{label:'Batéria PREDIKCIA kW (15-min agregát)',data:{AC_AGG},borderColor:'#1565C0',borderDash:[6,3],fill:false,stepped:true,pointRadius:0,borderWidth:2.2}},"
                 f"{{label:'🔴 Batéria REÁLNE MERANIE kW',data:{BATT_REAL},borderColor:'#C62828',backgroundColor:'rgba(198,40,40,.0)',fill:false,pointRadius:0,borderWidth:2.2,tension:.15}},"
                 f"{{label:'RT odchýlka kW',data:{RK},borderColor:'#7030A0',backgroundColor:'rgba(112,48,160,.12)',fill:true,stepped:true,pointRadius:0,borderWidth:1.2}},"
-                f"{{label:'SOC PREDIKCIA %',data:{SO},borderColor:'#C49000',borderWidth:1.6,borderDash:[5,3],pointRadius:0,yAxisID:'y2'}},"
+                f"{{label:'SOC PLÁN % (D-1 + VDT, full-day)',data:{SOP},borderColor:'#9E9E9E',borderWidth:1.4,borderDash:[2,3],pointRadius:0,yAxisID:'y2',tension:.1}},"
+                f"{{label:'SOC PREDIKCIA % (realita post-cap)',data:{SO},borderColor:'#C49000',borderWidth:1.8,borderDash:[5,3],pointRadius:0,yAxisID:'y2'}},"
                 f"{{label:'🔴 SOC REÁLNE MERANIE %',data:{SOC_REAL},borderColor:'#E65100',borderWidth:2.0,pointRadius:0,yAxisID:'y2',tension:.15}}"
                 f"]}},options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},"
                 f"elements:{{point:{{radius:0}}}},scales:{{y:{{title:{{display:true,text:'kW'}},grid:{{color:(c)=>c.tick.value===0?'#333':'#eee'}}}},"
