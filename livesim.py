@@ -1084,6 +1084,35 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _dis_real = np.minimum(_plan_dis, _avail_for_dis)
                     _batt_real = _dis_real - _chg_real                              # ±kW
                     tr["batt_kw_realistic"] = _batt_real.round(1)
+                    # Bug SOC-FROM-REALISTIC (2026-06-10): SOC musí integrovať
+                    # batt_kw_realistic (= post grid+FTV clip), NIE plán+RT z rt_controller.
+                    # rt_controller nemá info o grid_export/FTV/load → integruje nereálne
+                    # batt (napr. -6000 kW plán keď grid=200 → SOC padne na 0% za pár min).
+                    # Užívateľ: "vypocet soc nepocita to co je realita". Toto je oprava.
+                    try:
+                        _bkwh_cap = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
+                        _eff_d_real = float(getattr(cfg, "eff_d", 0.95) or 0.95)
+                        _eff_c_real = float(getattr(cfg, "eff_c", 0.95) or 0.95)
+                        # eff_d/eff_c môžu byť v % (95) alebo zlomku (0.95). Normalize.
+                        if _eff_d_real > 2: _eff_d_real /= 100.0
+                        if _eff_c_real > 2: _eff_c_real /= 100.0
+                        # Štartovacie SOC: prvý záznam v tr (kde rt_controller už začal)
+                        _soc_kwh_start = float(tr["soc_kwh"].iloc[0]) if "soc_kwh" in tr.columns else float(soc)
+                        _soc_run = _soc_kwh_start
+                        _soc_kwh_new = np.zeros(len(_batt_real))
+                        for _i, _k in enumerate(_batt_real):
+                            _kwh_min = float(_k) / 60.0   # +discharge / -charge
+                            if _kwh_min > 0:
+                                _soc_run -= _kwh_min / _eff_d_real
+                            else:
+                                _soc_run += -_kwh_min * _eff_c_real
+                            _soc_run = max(0.0, min(_bkwh_cap, _soc_run))
+                            _soc_kwh_new[_i] = _soc_run
+                        if _bkwh_cap > 0:
+                            tr["soc_kwh"] = _soc_kwh_new.round(1)
+                            tr["soc_pct"] = (_soc_kwh_new / _bkwh_cap * 100.0).round(1)
+                    except Exception as _e_soc:
+                        print(f"[SOC-FROM-REALISTIC] recompute zlyhal: {_e_soc}")
                     # Real grid flow (po batérii, pred curtailom)
                     _real_grid_kw_pre = _ftv_r - _load_r + _batt_real               # kW (+= export)
                     # CURTAIL: VÝLUČNE z reality. Plán curtail sa ignoruje.
