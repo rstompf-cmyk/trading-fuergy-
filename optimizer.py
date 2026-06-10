@@ -24,7 +24,8 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
                  grid_kw_export=None, grid_kw_import=None,
                  load_kwh=None,
                  max_export_kwh_day=None, max_import_kwh_day=None,
-                 soc_reserve_pct=0.0):
+                 soc_reserve_pct=0.0,
+                 rt_grid_reserve_pct=0.0):
     """`load_kwh` = spotreba zákazníka [kWh/perióda] (net-meter setup): pv + di + im − ex − ch − cu = load.
     Ak má profil naimportovanú spotrebu, predáva sa najprv self-consumption (zadarmo),
     zvyšok ide do siete/batérie. Pri load > pv treba import alebo battery discharge.
@@ -36,6 +37,18 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     # asymetrické limity siete: default = grid_kw (backward compat)
     grid_kw_export = float(grid_kw_export) if grid_kw_export is not None else float(grid_kw)
     grid_kw_import = float(grid_kw_import) if grid_kw_import is not None else float(grid_kw)
+    # Bug #661: rt_grid_reserve_pct = headroom v grid kapacite pre RT zásahy.
+    # D-1 LP nominuje na max (1 - reserve/100) × grid_kw, takže RT engine môže
+    # zvýšiť/znížiť import/export bez prekročenia siete (analógia k soc_reserve_pct).
+    _rt_grid_reserve = max(0.0, min(50.0, float(rt_grid_reserve_pct or 0.0)))
+    _gki_eff = grid_kw_import * (1.0 - _rt_grid_reserve / 100.0)
+    _gke_eff = grid_kw_export * (1.0 - _rt_grid_reserve / 100.0)
+    if _rt_grid_reserve > 0:
+        print(f"[optimizer Bug #661] rt_grid_reserve={_rt_grid_reserve:.1f}% → "
+              f"eff_im={_gki_eff:.0f} (raw {grid_kw_import:.0f}), "
+              f"eff_ex={_gke_eff:.0f} (raw {grid_kw_export:.0f})")
+    grid_kw_export = _gke_eff
+    grid_kw_import = _gki_eff
     pv = np.asarray(pv_kwh, float)
     pr = np.asarray(price_eur, float)
     T = len(pv)
