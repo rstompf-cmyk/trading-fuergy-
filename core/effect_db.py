@@ -29,7 +29,7 @@ import pandas as pd
 from sqlalchemy import select, func, and_, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from db.session import SessionLocal
+from db.session import SessionFactory as SessionLocal
 from db.models import EffectMinute, EffectDaily, Profile
 
 
