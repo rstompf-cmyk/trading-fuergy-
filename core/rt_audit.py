@@ -131,15 +131,14 @@ def audit_rt_slot(profile: str,
     # accept (žiadny clip), nech aspoň base RT engine bežia s plnou silou.
     # Užívateľ uvidí v logu "[RT-PRE-AUDIT] ... fail-open" že audit nemohol
     # rozhodnúť, ale RT sa neumelo zablokuje.
+    # Bug RT-AUDIT-FAILOPEN-STRICTER (2026-06-10): odstránené "aj 0 kWh by" a
+    # "infeasible" z fail-open. Po SOC-AUDIT-DELTA logike audit_action ignoruje
+    # violácie z plánu — vráti "downscale" alebo "reject" LEN keď RT pridáva
+    # NOVÚ violation. Ak audit povie reject → musíme reject, nie fail-open.
+    # Fail-open keywords ostávajú LEN pre skutočné runtime chyby (exception,
+    # compute_current_state crash, atď).
     _fail_keywords = ("zlyhalo", "raised", "exception", "Error",
-                       "not ok", "compute_current_state",
-                       # Plán už je infeasible — audit hovorí "aj 0 kWh by
-                       # porušilo SOC". To znamená že D-1 plán + current SOC
-                       # sú nekonzistentné. RT nemá ako pomôcť pri tom, čo už
-                       # bolo zle naplánované. Lepšie nechať RT bežať
-                       # (rt_controller má per-minute SOC clip ako safety net).
-                       "aj 0 kWh by",
-                       "infeasible")
+                       "not ok", "compute_current_state")
     if any(k in reason for k in _fail_keywords):
         out["decision"] = "accept"
         out["allowed_rt_kw"] = float(rt_intent_kw)
