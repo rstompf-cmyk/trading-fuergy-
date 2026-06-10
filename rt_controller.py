@@ -391,17 +391,23 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
         #      (kontrakt voči trhu = obchod, MW arbitrage nesmie znegovať planovaný zisk).
         if rt_no_worsen_dev and _has_plan_action:
             if abs(pre_dev) > 1e-3:
-                # vetva A — FTV/load odchýlka
+                # vetva A — FTV/load odchýlka (LEGITIMNA: RT nesmie zhorsit
+                # already-existing threshold odchylku spôsobenú FTV/load driftom)
                 if pre_dev > 0 and rt_action > 0:
                     rt_action = 0.0
                 elif pre_dev < 0 and rt_action < 0:
                     rt_action = 0.0
-            else:
-                # vetva B — bez FTV odchýlky, RT nesmie ísť proti smeru plánu
-                if plan_kw > 0 and rt_action < 0:
-                    rt_action = 0.0
-                elif plan_kw < 0 and rt_action > 0:
-                    rt_action = 0.0
+            # Bug RT-OPPOSITE-PLAN (2026-06-10): vetva B (RT nesmie ist proti
+            # smeru planu pri pre_dev≈0) ODSTRANENA. User report: "implementacia
+            # auditu je zal teraz sa len nabija a nevybija". Vetva B blokovala
+            # RT vybijanie kedykolvek plán nabija (aj pri vysokom MW signali).
+            # Povodne pridana v task #222 ako "obrana zmluveneho obchodu", ale:
+            # 1. RT signál (sys_MW) je výrazne ne-arbitrárny — sluzi balansovaniu
+            #    systému + RT je platený cez ZCO. Blokovat ho je strata.
+            # 2. Capacity ledger + rt_audit už chránia SOC trajektoriu pred preplnením.
+            # 3. Pri pre_dev≈0 znamená že trhova nominacia ide podla planu, takze
+            #    RT zásah v opacnom smere len mení batt timing — settlement cez ZCO
+            #    si poradí (a typicky zarobi keď ide so signálom).
         # Lookahead a persistencia spracujú aj rt_action=0 (no-op) bezpečne. Tot však treba vždy
         # rekonštruovať, aby no-worsen nulovanie skutočne zrušilo RT zásah.
         # POZOR: ak strict_plan fire batt_extra, NEDOTÝKAME sa rt_action — plán dnes > rezerva zajtra.
