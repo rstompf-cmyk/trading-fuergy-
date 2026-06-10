@@ -5464,7 +5464,19 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             _soc_cur_kwh = max(_soc_min_kwh,
                                                 min(_soc_max_kwh,
                                                     _start_soc / 100.0 * _batt_kwh_cap))
-                            _pb_arr = dview["plan_batt_kw"].fillna(0.0).tolist()
+                            # Bug SOC-REALISTIC-SOURCE (2026-06-10): SOC musí integrovať
+                            # reálny výkon na batérii — `batt_kw_realistic` (= D-1 plán +
+                            # VDT + RT, post grid+FTV clip). Predtým integroval `plan_batt_kw`
+                            # (= D-1 + VDT BEZ RT) → graf nereagoval na RT zásahy.
+                            # Užívateľ: "spocita aktualny vykon na baterii (nezalezi ako vznikol)".
+                            _src_col = "plan_batt_kw"
+                            if "batt_kw_realistic" in dview.columns:
+                                _br_check = pd.to_numeric(
+                                    dview["batt_kw_realistic"], errors="coerce").fillna(0)
+                                if _br_check.abs().sum() > 0.1:
+                                    _src_col = "batt_kw_realistic"
+                            _vdt_diag["soc_src_col"] = _src_col
+                            _pb_arr = dview[_src_col].fillna(0.0).tolist()
                             for _pb in _pb_arr:
                                 _dkwh_req = float(_pb) / 60.0   # kW × 1/60 h (signed)
                                 if _dkwh_req > 0:
@@ -5490,7 +5502,11 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             dview["soc_pct"] = _socs
                             # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
                             # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
-                            dview["plan_batt_kw"] = _pb_realiz
+                            # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
+                            # Ak sme integrovali batt_kw_realistic, ten je už post-cap reality;
+                            # prepísanie plan_batt_kw by zamiešalo plán a realitu.
+                            if _src_col == "plan_batt_kw":
+                                dview["plan_batt_kw"] = _pb_realiz
                             _vdt_diag["soc_recomputed"] = len(_socs)
                             _vdt_diag["plan_clipped"] = int(sum(
                                 1 for a, b in zip(_pb_arr, _pb_realiz)
