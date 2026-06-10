@@ -93,18 +93,24 @@ def audit_rt_slot(profile: str,
                           f"— zoslabuje zatazenie, audit netreba")
         return out
 
-    # RT v rovnakom smere ako plán (alebo plán=0) → audituj total
+    # Bug RT-AUDIT-DOUBLECOUNT (2026-06-10): pôvodne sa do audit_action posielal
+    # total_kwh = |plan+RT|, ale audit_action ho pripočítava k scheduled_kwh
+    # ktoré UŽ obsahuje plán → trial[si] = plan + (plan+RT) = 2×plan + RT.
+    # User report: "11:00 plán -3000 + RT -3000 ide na -6000 max ale na grafe
+    # SOC ide na 95% napriek plánu 52%".
+    # Fix: posielaj LEN RT zložku (= |rt_intent|), nie total. Audit ju spočíta
+    # k scheduled[si] sám.
     total_kw = float(plan_batt_kw) + float(rt_intent_kw)
     direction = "discharge" if total_kw > 0 else "charge"
-    abs_total_kw = abs(total_kw)
-    total_kwh = abs_total_kw * dt_h
+    rt_only_kwh = abs(float(rt_intent_kw)) * dt_h    # iba RT zložka, nie total
+    rt_direction = "charge" if float(rt_intent_kw) < 0 else "discharge"
 
-    if total_kwh < 0.5:
+    if rt_only_kwh < 0.5:
         return out
 
     try:
         from core.soc_use_audit import audit_action as _soc_audit
-        sa = _soc_audit(profile, day, int(slot_idx), direction, total_kwh,
+        sa = _soc_audit(profile, day, int(slot_idx), rt_direction, rt_only_kwh,
                           source="rt", step_min=step_min,
                           current_soc_pct_at_si=current_soc_pct)
     except Exception as e:
@@ -192,14 +198,10 @@ def audit_rt_slot(profile: str,
     except Exception:
         pass
 
-    # downscale alebo reject — spočítaj povolenu časť RT navyše k planu
-    allowed_total_kwh = float(sa.get("allowed_kwh", 0.0))
-    allowed_total_kw = allowed_total_kwh / max(dt_h, 0.01)
-    abs_plan_kw = abs(float(plan_batt_kw))
-
-    # Plan ostáva chranenz (audit_action garantuje že plan sam je feasible —
-    # ak nie, ide o sirsi bug v D-1 LP). Tu obmedzime LEN RT zložku.
-    allowed_rt_abs = max(0.0, allowed_total_kw - abs_plan_kw)
+    # downscale alebo reject — audit_action vratil koľko RT zložky je povolene
+    # (audit dostal LEN rt_only_kwh, nie total). Premenovat na kW.
+    allowed_rt_kwh_audit = float(sa.get("allowed_kwh", 0.0))
+    allowed_rt_abs = allowed_rt_kwh_audit / max(dt_h, 0.01)
 
     # Sign preserve: RT v rovnakom smere ako original
     sign_rt = 1.0 if rt_intent_kw > 0 else -1.0
