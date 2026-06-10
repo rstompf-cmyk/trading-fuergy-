@@ -70,6 +70,7 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
                         terminal_soc_pct: Optional[float] = None,
                         grid_kw_import: Optional[float] = None,
                         grid_kw_export: Optional[float] = None,
+                        rt_grid_reserve_pct: float = 0.0,
                         grid_fee: float = 22.0, cycle_cost: float = 2.0,
                         vdt_buy_price: Optional[np.ndarray] = None,
                         vdt_sell_price: Optional[np.ndarray] = None,
@@ -243,9 +244,18 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
           f"soc_max={soc_max_pct:.1f}%, term={terminal_soc_pct}, "
           f"socmin_kwh={socmin:.0f}, term_kwh={term:.0f}")
 
-    # Grid limits
-    g_im = grid_kw_import if grid_kw_import is not None else 1e6
-    g_ex = grid_kw_export if grid_kw_export is not None else 1e6
+    # Grid limits — Bug #661: rt_grid_reserve_pct headroom pre RT (analógia k soc_reserve_pct).
+    # D-1 LP nominuje max (1 - reserve/100) × grid_kw → RT engine má voľný priestor
+    # na korekciu odchýlky bez fyzického prekročenia siete.
+    _rt_grid_reserve = max(0.0, min(50.0, float(rt_grid_reserve_pct or 0.0)))
+    _g_im_raw = grid_kw_import if grid_kw_import is not None else 1e6
+    _g_ex_raw = grid_kw_export if grid_kw_export is not None else 1e6
+    g_im = _g_im_raw * (1.0 - _rt_grid_reserve / 100.0)
+    g_ex = _g_ex_raw * (1.0 - _rt_grid_reserve / 100.0)
+    if _rt_grid_reserve > 0:
+        print(f"[joint_lp Bug #661] rt_grid_reserve={_rt_grid_reserve:.1f}% → "
+              f"eff_im={g_im:.0f} (raw {_g_im_raw:.0f}), "
+              f"eff_ex={g_ex:.0f} (raw {_g_ex_raw:.0f})")
     g_im_kwh = g_im * dt
     g_ex_kwh = g_ex * dt
     batt_kwh_per_slot = batt_kw * dt
