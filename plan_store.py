@@ -916,6 +916,7 @@ def _db_save_plan(date_iso: str, step_min: int, kind: str,
     try:
         from db import get_session
         from db.models import Plan as _DbPlan, PlanSlot as _DbPlanSlot
+        from sqlalchemy import delete as _sa_delete
         prof_name = body.get("profile") or resolve_profile(profile)
         mkt = _current_market()
         pid = _db_get_profile_id(prof_name)
@@ -937,11 +938,6 @@ def _db_save_plan(date_iso: str, step_min: int, kind: str,
                 existing.block_planned_discharge = bool(body.get("block_planned_discharge", False))
                 existing.zco_bias_w = float(body.get("zco_bias_w") or 0.0)
                 existing.rt_freedom = bool(body.get("rt_freedom", True))
-                # Vymaž staré sloty (synchronize_session='fetch' + flush, inak
-                # nasledovný INSERT zlyhá na UNIQUE constraint plan_slot.plan_id+slot_idx)
-                s.query(_DbPlanSlot).filter_by(plan_id=existing.id).delete(
-                    synchronize_session='fetch')
-                s.flush()
                 plan_id = existing.id
             else:
                 p = _DbPlan(
@@ -958,6 +954,14 @@ def _db_save_plan(date_iso: str, step_min: int, kind: str,
                 s.add(p)
                 s.flush()
                 plan_id = p.id
+            # Bug PLAN-SLOT-UNIQUE (2026-06-10): scheduler batch generation zlyhal
+            # cyklicky na UNIQUE constraint plan_slot.plan_id+slot_idx — staré sloty
+            # ostali v DB (orphans z padlých starých runs alebo identity map cache).
+            # Riešenie: pre OBE vetvy (existing aj new) explicit DELETE cez SQL core
+            # (žiadny ORM cache), flush, expire_all → nový INSERT vidí čistú DB.
+            s.execute(_sa_delete(_DbPlanSlot).where(_DbPlanSlot.plan_id == plan_id))
+            s.flush()
+            s.expire_all()
             # Vlož sloty
             schedule = body.get("schedule") or {}
             n = max((len(schedule.get(k, [])) for k in _SLOT_COLUMNS), default=0)
