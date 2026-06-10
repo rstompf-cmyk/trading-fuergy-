@@ -6197,12 +6197,20 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # Fix: ak batt_kw_realistic existuje → použiť priamo (zahŕňa všetky vrstvy).
         #      inak (predikcia budúcich minút) → plan_batt_kw + RT intent (bez RT lebo
         #      pre budúcnosť rt_dir=0).
-        if "batt_kw_realistic" in dview.columns and not _has_vdt_overlay:
+        # Bug SOC-DOUBLE-RT-v2: po Bug BB (#560 sch.batt_kw += VDT PRED rt_controller)
+        # batt_kw_realistic už zahŕňa aj VDT, nielen D-1 plán. Legacy Bug KK komentár
+        # bol pre starý code path. Odstránené `not _has_vdt_overlay` aby fix platil
+        # AJ pre use_vdt=True profily (VW_simulacia_2). Skontroluj že stĺpec má aspoň
+        # jednu nenulovú hodnotu (= rt_controller skutočne zbehol).
+        _batt_real_col = dview.get("batt_kw_realistic") if "batt_kw_realistic" in dview.columns else None
+        _has_real = (_batt_real_col is not None
+                      and pd.to_numeric(_batt_real_col, errors="coerce").fillna(0).abs().sum() > 0.1)
+        if _has_real:
             _batt_base = dview["batt_kw_realistic"]
-            _add_rt_intent = False   # batt_kw_realistic už zahŕňa RT
+            _add_rt_intent = False   # batt_kw_realistic už zahŕňa plán+VDT+RT post-cap
         else:
             _batt_base = dview["plan_batt_kw"]
-            _add_rt_intent = True    # plan_batt_kw nezahŕňa RT
+            _add_rt_intent = True    # fallback pre staré CSV bez batt_kw_realistic
         # Bug #610: clip predikciu na fyzické limity batt
         def _clip_to_batt(v):
             if bkw > 0:
