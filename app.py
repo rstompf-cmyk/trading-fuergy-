@@ -5968,16 +5968,24 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     # Karty hore (cum_*), chC graf (kumulatív/po dňoch/15-min), Excel kľúčové ukazovatele
     # — všetko cez ten istý SQL agregát. Žiadne paralelné výpočty.
     from core.effect import compute_effect_totals as _eff
+    # F4 fix: použiť pr.get_active() (rovnaký zdroj ako Excel + chC daily) namiesto
+    # core.profile_resolver.get_active(). Resolver vracal iný/None profil → DEFAULT_FLAGS
+    # (všetky toggles True) → filter no-op → RT karta == total.
     try:
-        from core.profile_resolver import get_active as _ga_eff
-        _active_profile_eff = _ga_eff()
+        import profiles as _pr_eff
+        _active_profile_eff = _pr_eff.get_active()
     except Exception:
-        _active_profile_eff = None
+        try:
+            from core.profile_resolver import get_active as _ga_eff
+            _active_profile_eff = _ga_eff()
+        except Exception:
+            _active_profile_eff = None
     try:
         import joint_lp_integration as _jli_eff_d
         _eff_joint = _jli_eff_d.get_flags_from_profile(_active_profile_eff) if _active_profile_eff else None
     except Exception:
         _eff_joint = None
+    print(f"[livesim F4 diag] profile={_active_profile_eff} joint_flags={_eff_joint}")
     # DB unify F4: získaj obdobie z dfull (min/max time) a volaj jediný SQL agregát.
     # Override r['cum_total/cum_rt/cum_dt/cum_vdt_arb'] z DB → karty + chC ukážu konzistentné čísla.
     _eff_db_period = None
