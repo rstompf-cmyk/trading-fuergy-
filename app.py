@@ -5414,6 +5414,50 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             dview["plan_grid_kwh"] = (dview["plan_grid_dam_kwh"].fillna(0.0)
                                                        + dview["plan_grid_vdt_kwh"].fillna(0.0))
                         _vdt_diag["applied"] = int(sum(1 for v in _vdt_kw_per if abs(v) > 0.01))
+
+                        # Bug BATT-REAL-RECOMPUTE (2026-06-10): livesim CSV mohol zapísať
+                        # batt_kw_realistic PRED tým, ako sa VDT trade dopísal do paper trades
+                        # (= za behu sa neaktualizuje, ostáva stale). Plus pre future minúty
+                        # batt_kw_realistic vôbec neexistuje. Po Bug Z VDT prepise plan_batt_kw
+                        # prepočítaj batt_kw_realistic z aktuálneho plánu + grid+FTV clip
+                        # (identická logika ako livesim.py riadky ~1062-1086).
+                        try:
+                            import profiles as _pr_br
+                            _p_br = _pr_br.load_profile(_prof_load) or {}
+                            _pl_br = (_p_br.get("plan") or {})
+                            _gki = float(_pl_br.get("grid_kw_import", 0.0) or 0.0)
+                            _gke = float(_pl_br.get("grid_kw_export", 0.0) or 0.0)
+                            _bkw_max_br = float(_pl_br.get("batt_kw", 0.0) or 0.0)
+                            _ftv_arr_br = pd.to_numeric(
+                                dview.get("ftv_min_real_kw", pd.Series([0.0]*len(dview))),
+                                errors="coerce").fillna(0.0).values
+                            _load_arr_br = pd.to_numeric(
+                                dview.get("load_min_real_kw", pd.Series([0.0]*len(dview))),
+                                errors="coerce").fillna(0.0).values
+                            _pb_arr_br = pd.to_numeric(
+                                dview["plan_batt_kw"], errors="coerce").fillna(0.0).values
+                            _rd_arr_br = pd.to_numeric(
+                                dview.get("rt_dir", pd.Series([0.0]*len(dview))),
+                                errors="coerce").fillna(0.0).values
+                            _rp_arr_br = pd.to_numeric(
+                                dview.get("rt_power_pct", pd.Series([0.0]*len(dview))),
+                                errors="coerce").fillna(0.0).values
+                            _bp_br = _pb_arr_br + _rd_arr_br * _rp_arr_br / 100.0 * _bkw_max_br
+                            if _bkw_max_br > 0:
+                                _bp_br = np.clip(_bp_br, -_bkw_max_br, _bkw_max_br)
+                            _plan_chg_br = np.maximum(-_bp_br, 0.0)
+                            _plan_dis_br = np.maximum(_bp_br, 0.0)
+                            _avail_chg_br = np.maximum(_ftv_arr_br - _load_arr_br, 0.0) + _gki
+                            _avail_dis_br = _gke + np.maximum(_load_arr_br - _ftv_arr_br, 0.0)
+                            _chg_r_br = np.minimum(_plan_chg_br, _avail_chg_br)
+                            _dis_r_br = np.minimum(_plan_dis_br, _avail_dis_br)
+                            dview["batt_kw_realistic"] = np.round(_dis_r_br - _chg_r_br, 1)
+                            _vdt_diag["batt_real_recomputed"] = int(len(_pb_arr_br))
+                            _vdt_diag["gki"] = _gki
+                            _vdt_diag["gke"] = _gke
+                        except Exception as _e_br:
+                            print(f"[BATT-REAL-RECOMPUTE] zlyhal: {_e_br}")
+
                         # Bug Z: SOC trajektória musí reflektovať plan_batt_kw (D-1+VDT).
                         # Predtým: soc_pct z _run_physical_day = D-1 only → SOC nereaguje na VDT.
                         # Recompute: integruj plan_batt_kw cez čas (1-min step) + start SOC z prvého
