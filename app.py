@@ -408,21 +408,45 @@ def _carried_soc_banner(date: str, soc_init_pct: float, case: str = "plan_d1") -
 
 def _resolve_soc_init_carryover(date_iso: str, fp: dict,
                                    case: str = "plan_d1") -> tuple:
-    """Bug #622: vráti (soc_init_pct, source_label) pre D-1 plán.
+    """Bug #622 + SOC-CONT: SOC kontinuita cez dni.
 
-    Hľadá poradí:
-      1. `lsim.carried_soc_for_date(case, port, date)` — koniec dňa D-1 zo
-         simulácie / realnej trajektórie. Použije sa ak je v rozumnom rozsahu
-         [soc_min, soc_max].
-      2. fallback na fp["soc_init"] (alebo DEF["soc_init"]).
+    Užívateľ: "soc nemoze kazdy den zacat od nuli alebo nastavenej hodnoty
+    ale pokracovat. delenie na dni je len logicka vec".
 
-    Cieľ: D-1 plán začne s reálnym SOC po predošlom dni, nie ideálnym z form.
-    Tým sa znížia nereálne nominácie ktoré spôsobujú odchýlku v evening peakoch.
+    Priorita zdrojov SOC pre začiatok dňa N:
+      1. **plan_store**: posledný `soc_pct` plánu pre deň N-1 (deterministický
+         LP výsledok z D-1 plánu). Použije sa AJ keď livesim ešte nezbehol.
+      2. **livesim trace**: `lsim.carried_soc_for_date` — koniec realizácie
+         dňa N-1 po RT zásahoch. Použije sa ak je plan_store fallback.
+      3. **manual** (`fp["soc_init"]`): IBA pre prvý deň simulácie, alebo
+         keď nič iné nie je k dispozícii (žiadny plán + žiadne livesim CSV).
 
     Returns:
-        (soc_pct, source) — source ∈ {"carried", "manual_fallback", "manual_clamped"}
+        (soc_pct, source) — source ∈ {"plan_store", "carried", "manual_fallback",
+                                         "manual_clamped"}
     """
     manual_soc = float(fp.get("soc_init", DEF["soc_init"]))
+    soc_min = float(fp.get("soc_min", DEF["soc_min"]))
+    soc_max = float(fp.get("soc_max", DEF["soc_max"]))
+    # Krok 1: plan_store — posledný soc_pct plánu pre deň N-1
+    try:
+        import plan_store as _ps_carry
+        import datetime as _dt
+        _prev_day = (_dt.date.fromisoformat(date_iso) - _dt.timedelta(days=1)).isoformat()
+        _step_min = 60 if case == "plan_d1" else 15
+        _kind = "plan" if case == "plan_d1" else "dentrh"
+        _prev_plan = _ps_carry.load_plan_safe(_prev_day, _step_min, kind=_kind)
+        if _prev_plan and isinstance(_prev_plan, dict):
+            _slots = _prev_plan.get("slots") or _prev_plan.get("plan") or []
+            if _slots and isinstance(_slots, list):
+                _last = _slots[-1]
+                if isinstance(_last, dict) and "soc_pct" in _last:
+                    _last_soc = float(_last["soc_pct"])
+                    if soc_min <= _last_soc <= soc_max:
+                        return (_last_soc, "plan_store")
+    except Exception as _e_ps:
+        print(f"[SOC-CONT plan_store] {date_iso}: {_e_ps}")
+    # Krok 2: livesim trace carried
     try:
         info = lsim.carried_soc_for_date(case, port=_PORT, date=date_iso)
     except Exception:
@@ -433,11 +457,7 @@ def _resolve_soc_init_carryover(date_iso: str, fp: dict,
         carried_pct = float(info["soc_pct"])
     except (KeyError, TypeError, ValueError):
         return (manual_soc, "manual_fallback")
-    # Sanity: SOC musi byt v batt rozsahu [soc_min, soc_max]
-    soc_min = float(fp.get("soc_min", DEF["soc_min"]))
-    soc_max = float(fp.get("soc_max", DEF["soc_max"]))
     if not (soc_min <= carried_pct <= soc_max):
-        # mimo rozsahu (corrupted CSV alebo prvy beh) -> manual
         print(f"[#622 carryover] {date_iso}: carried={carried_pct:.1f}% mimo "
               f"[{soc_min:.0f}, {soc_max:.0f}], fallback na manual {manual_soc:.1f}%")
         return (manual_soc, "manual_clamped")
