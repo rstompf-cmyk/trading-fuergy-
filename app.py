@@ -14308,7 +14308,12 @@ a{{color:#1F4E78}}</style></head><body>
             ("date", date), ("lat", lat), ("lon", lon), ("kwp", kwp), ("tilt", tilt),
             ("azimuth", azimuth), ("eff", eff), ("batt_kw", batt_kw), ("batt_kwh", batt_kwh),
             ("eff_c", eff_c), ("eff_d", eff_d), ("soc_min", soc_min), ("soc_max", soc_max),
-            ("soc_init", soc_init), ("terminal_soc", terminal_soc), ("grid_kw", grid_kw),
+            # Bug SOC-INIT-PERSIST-V3 (2026-06-10): hidden form posielal carried hodnotu.
+            # Pri klik "Uložiť šablónu" / "Uložiť plán" sa hidden POST nesie soc_init.
+            # soc_init premenná tu je už carried (prepísané v riadku 13869). Hidden musí
+            # niesť soc_init_user (= user manual z formulára) inak ďalší POST uloží carried
+            # do profilu/ui_settings → reload formuláru zobrazí 16.86%.
+            ("soc_init", soc_init_user), ("terminal_soc", terminal_soc), ("grid_kw", grid_kw),
             ("grid_fee", grid_fee), ("cycle_cost", cycle_cost), ("min_spread", min_spread),
             ("min_trade", min_trade), ("price_scale", price_scale), ("pv_scale", pv_scale),
         ])
