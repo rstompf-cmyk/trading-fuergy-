@@ -1062,47 +1062,66 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                     # date.fromisoformat() v stášom Pythone to nezvládne.
                                     # Orezať na YYYY-MM-DD.
                                     _day_iso = day.isoformat()[:10]
-                                    # Bug AUDIT-PER-MINUTE (2026-06-10): predchádzajúce volanie
-                                    # auditu používalo per-15-min priemer rt_intent a aplikovalo
-                                    # scale rovnako pre všetkých 15 minút slotu. User postreh:
-                                    # "ci audit obmedzje RT aj v konkretnom case v ktorom sa
-                                    # regulacia vykonava". Per-slot priemer ignoroval že SOC
-                                    # behom slotu rastie/klesá → ďalšie minúty by mali byť
-                                    # clipnuté agresívnejšie. Fix: volať audit per minútu so
-                                    # SOC z trace pre tú minútu.
+                                    # Bug AUDIT-RUNNING-SOC (2026-06-10): audit per minutu so
+                                    # *running* SOC. User postreh: "treba to otocit ked pride
+                                    # poziadavk z RT najprv ju prevri audit az potom ide na
+                                    # vystup. audit ju moxe orezat potom to nebude robit pilu".
+                                    # Predchádzajúca verzia brala SOC z trace (vypočítane
+                                    # rt_controllerom s NEorezaným RT) → audit dostával
+                                    # nereálne (nafúknuté) SOC. Fix: integrovať SOC sami za
+                                    # behu, brať predchádzajúce orezané RT do úvahy. Per minútu:
+                                    # 1) navrhnuté RT prejde auditom so SOC ktoré vzniklo
+                                    #    z UŽ orezaných predchádzajúcich minút
+                                    # 2) audit vráti scale → RT sa orezáva
+                                    # 3) update running_soc už s orezaným RT
+                                    # Tým žiadna píla — každá ďalšia minúta vidí reálny SOC.
                                     _soc_arr = (pd.to_numeric(tr.get("soc_pct", 50.0),
                                                                 errors="coerce").fillna(50.0).values
                                                 if "soc_pct" in tr.columns else None)
+                                    _bkwh_run = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
+                                    _eff_c_run = float(getattr(cfg, "eff_c", 0.95) or 0.95)
+                                    _eff_d_run = float(getattr(cfg, "eff_d", 0.95) or 0.95)
+                                    _dt_min_h = 1.0 / 60.0   # 1 minúta v hodinách
                                     _ts_min_arr = pd.to_datetime(_ts15_arr)
+                                    # Štartovací SOC z trace (prvá minúta)
+                                    _running_soc = (float(_soc_arr[0]) if _soc_arr is not None
+                                                      else 50.0)
                                     _per_min_scale = np.ones(len(_ts15_arr), dtype=float)
                                     _dn_cnt = 0
                                     for _i in range(len(_ts15_arr)):
-                                        _rt_kw_min = float(_rt_dir_arr[_i] * _rt_pct_arr[_i] / 100.0 * _bkw_max_rt)
-                                        if abs(_rt_kw_min) < 1.0:
-                                            continue   # žiadne RT v tejto minúte
+                                        _rt_kw_proposed = float(_rt_dir_arr[_i] * _rt_pct_arr[_i] / 100.0 * _bkw_max_rt)
                                         _plan_kw_min = float(_batt_p_d1[_i])
                                         _ts_min = _ts_min_arr[_i]
-                                        _h = _ts_min.hour; _m = _ts_min.minute
-                                        _sidx = _h * 4 + (_m // 15)
-                                        _soc_at_i = (float(_soc_arr[_i - 1]) if _i > 0
-                                                       else float(_soc_arr[0])) if _soc_arr is not None else None
-                                        _ax = _audit_rt(_prof_rt, _day_iso, int(_sidx),
-                                                          _plan_kw_min, _rt_kw_min,
-                                                          step_min=15,
-                                                          current_soc_pct=_soc_at_i)
-                                        _sf = float(_ax.get("scale_factor", 1.0))
-                                        if _sf < 0.99:
-                                            _per_min_scale[_i] = _sf
-                                            _dn_cnt += 1
-                                            if _dn_cnt <= 5:
-                                                print(f"[RT-PRE-AUDIT min] {_prof_rt} "
-                                                      f"{_ts_min.strftime('%H:%M')} "
-                                                      f"SOC={_soc_at_i:.1f}% plan={_plan_kw_min:.0f} "
-                                                      f"rt={_rt_kw_min:.0f} kW scale={_sf:.2f}")
+                                        _sidx = _ts_min.hour * 4 + (_ts_min.minute // 15)
+                                        _scale_i = 1.0
+                                        if abs(_rt_kw_proposed) >= 1.0:
+                                            _ax = _audit_rt(_prof_rt, _day_iso, int(_sidx),
+                                                              _plan_kw_min, _rt_kw_proposed,
+                                                              step_min=15,
+                                                              current_soc_pct=_running_soc)
+                                            _scale_i = float(_ax.get("scale_factor", 1.0))
+                                            if _scale_i < 0.99:
+                                                _per_min_scale[_i] = _scale_i
+                                                _dn_cnt += 1
+                                                if _dn_cnt <= 5:
+                                                    print(f"[RT-PRE-AUDIT min] {_prof_rt} "
+                                                          f"{_ts_min.strftime('%H:%M')} "
+                                                          f"SOC={_running_soc:.1f}% plan={_plan_kw_min:.0f} "
+                                                          f"rt={_rt_kw_proposed:.0f} kW scale={_scale_i:.2f}")
+                                        # Update running SOC s ORZANÝM batt (plán + orezané RT)
+                                        # eff: pri nabíjaní (záporné batt) eff_c, pri vybíjaní (kladné) /eff_d
+                                        if _bkwh_run > 0:
+                                            _rt_kw_actual = _rt_kw_proposed * _scale_i
+                                            _batt_kw_total = _plan_kw_min + _rt_kw_actual
+                                            if _batt_kw_total < 0:   # nabíjanie
+                                                _delta_pct = (-_batt_kw_total) * _dt_min_h * _eff_c_run / _bkwh_run * 100.0
+                                            else:                    # vybíjanie
+                                                _delta_pct = -(_batt_kw_total / max(_eff_d_run, 0.01)) * _dt_min_h / _bkwh_run * 100.0
+                                            _running_soc = max(0.0, min(100.0, _running_soc + _delta_pct))
                                     if _dn_cnt > 0:
                                         _rt_pct_arr = _rt_pct_arr * _per_min_scale
                                         print(f"[RT-PRE-AUDIT] {_prof_rt} {_day_iso}: "
-                                              f"clipnutých {_dn_cnt}/{len(_ts15_arr)} minút (per-minute audit)")
+                                              f"clipnutých {_dn_cnt}/{len(_ts15_arr)} minút (running SOC)")
                         except Exception as _e_rta:
                             print(f"[RT-PRE-AUDIT] zlyhal: {_e_rta} → pokračujem fail-open")
 
