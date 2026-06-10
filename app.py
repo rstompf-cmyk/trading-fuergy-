@@ -428,7 +428,30 @@ def _resolve_soc_init_carryover(date_iso: str, fp: dict,
     manual_soc = float(fp.get("soc_init", DEF["soc_init"]))
     soc_min = float(fp.get("soc_min", DEF["soc_min"]))
     soc_max = float(fp.get("soc_max", DEF["soc_max"]))
-    # Krok 1: plan_store — posledný soc_pct plánu pre deň N-1
+    # Bug SOC-CONT-V2 (2026-06-10): poradie zmenené na carried → plan_store → manual.
+    # Predtým bolo plan_store prvé, ale ten vracia LP-nominovaný terminal_soc
+    # (typicky 50%), nie reálny SOC po RT zásahoch včera. Tým každý deň začínal
+    # od 50% napriek tomu že realita včera skončila inde.
+    # Carried (livesim CSV koniec dňa N-1) = pravdivá história po RT.
+    # Plan_store fallback len ak livesim ešte nezbehol pre N-1 (= prvý deň).
+    # Krok 1: livesim trace carried — REÁLNY koniec dňa N-1
+    try:
+        info = lsim.carried_soc_for_date(case, port=_PORT, date=date_iso)
+    except Exception:
+        info = None
+    if info:
+        try:
+            carried_pct = float(info["soc_pct"])
+            if soc_min <= carried_pct <= soc_max:
+                print(f"[SOC-CONT-V2] {date_iso}: carried={carried_pct:.1f}% "
+                      f"({info.get('note','')})")
+                return (carried_pct, "carried")
+            else:
+                print(f"[SOC-CONT-V2] {date_iso}: carried={carried_pct:.1f}% mimo "
+                      f"[{soc_min:.0f}, {soc_max:.0f}], skúsim plan_store fallback")
+        except (KeyError, TypeError, ValueError):
+            pass
+    # Krok 2: plan_store fallback — posledný soc_pct plánu pre deň N-1
     try:
         import plan_store as _ps_carry
         import datetime as _dt
@@ -443,25 +466,14 @@ def _resolve_soc_init_carryover(date_iso: str, fp: dict,
                 if isinstance(_last, dict) and "soc_pct" in _last:
                     _last_soc = float(_last["soc_pct"])
                     if soc_min <= _last_soc <= soc_max:
+                        print(f"[SOC-CONT-V2] {date_iso}: plan_store fallback "
+                              f"slots[-1].soc_pct={_last_soc:.1f}%")
                         return (_last_soc, "plan_store")
     except Exception as _e_ps:
-        print(f"[SOC-CONT plan_store] {date_iso}: {_e_ps}")
-    # Krok 2: livesim trace carried
-    try:
-        info = lsim.carried_soc_for_date(case, port=_PORT, date=date_iso)
-    except Exception:
-        info = None
-    if not info:
-        return (manual_soc, "manual_fallback")
-    try:
-        carried_pct = float(info["soc_pct"])
-    except (KeyError, TypeError, ValueError):
-        return (manual_soc, "manual_fallback")
-    if not (soc_min <= carried_pct <= soc_max):
-        print(f"[#622 carryover] {date_iso}: carried={carried_pct:.1f}% mimo "
-              f"[{soc_min:.0f}, {soc_max:.0f}], fallback na manual {manual_soc:.1f}%")
-        return (manual_soc, "manual_clamped")
-    return (carried_pct, "carried")
+        print(f"[SOC-CONT-V2 plan_store] {date_iso}: {_e_ps}")
+    # Krok 3: manual fallback (prvý deň, žiadny livesim CSV, žiadny D-1 plán)
+    print(f"[SOC-CONT-V2] {date_iso}: manual fallback {manual_soc:.1f}%")
+    return (manual_soc, "manual_fallback")
 
 
 def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
