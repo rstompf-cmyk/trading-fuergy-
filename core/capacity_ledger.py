@@ -223,7 +223,9 @@ def clear_day(profile: str, day: str) -> int:
 
 def audit_vdt_order(profile: str, day: str, slot_idx: int,
                       direction: str, kwh: float,
-                      batt_kw_max: float, trade_id: str) -> Dict[str, Any]:
+                      batt_kw_max: float, trade_id: str,
+                      grid_kw_import: float = None,
+                      grid_kw_export: float = None) -> Dict[str, Any]:
     """Audit gate pre VDT order pred zápisom do paper_trades.
 
     Args:
@@ -231,6 +233,8 @@ def audit_vdt_order(profile: str, day: str, slot_idx: int,
         kwh: požadované množstvo (kWh za 15-min slot)
         batt_kw_max: fyzický limit batt (kW)
         trade_id: link na budúci paper trade
+        grid_kw_import: limit nákupu zo siete kW (None = neaplikovať, back-compat)
+        grid_kw_export: limit predaja do siete kW (None = neaplikovať)
 
     Returns: dict:
         {
@@ -238,27 +242,50 @@ def audit_vdt_order(profile: str, day: str, slot_idx: int,
             "requested_kwh": float,
             "allowed_kwh": float,
             "free_kw": float,
+            "grid_cap_kw": float (= grid limit pre tento direction, alebo inf),
             "note": str (vysvetlenie)
         }
 
     Konverzia: 15-min slot, kwh → kw pre porovnanie s kapacitou (kw = kwh * 4).
+    Effective free_kw = min(batt_available_kw, grid_cap_kw).
+        - direction="charge" (batt nabíja zo siete) → grid_cap = grid_kw_import
+        - direction="discharge" (batt vybíja do siete) → grid_cap = grid_kw_export
     Ak vystačí kapacita → accept + automaticky reserve(kwh*4).
     Ak nestačí ale je nejaká voľná → downscale na voľnú + reserve.
     Ak nestačí žiadna → reject (BEZ rezervácie).
+
+    Bug GRID-AUDIT (2026-06-10): predtým sa kontroloval len batt kapacita.
+    VDT advisor mohol uzavrieť 5980 kW nákup pri grid_kw_import=200 kW →
+    fyzicky neprejde sieťou → odchýlka + ZCO pokuta. Teraz aj grid clip.
     """
     if kwh <= 0:
         return {"decision": "reject", "requested_kwh": kwh, "allowed_kwh": 0.0,
-                "free_kw": 0.0, "note": "kwh <= 0"}
+                "free_kw": 0.0, "grid_cap_kw": float("inf"), "note": "kwh <= 0"}
     requested_kw = abs(float(kwh) * 4.0)   # 15-min slot → kW
-    free_kw = available(profile, day, slot_idx, direction, batt_kw_max)
+    batt_free_kw = available(profile, day, slot_idx, direction, batt_kw_max)
+
+    # Bug GRID-AUDIT: grid kapacita podľa smeru
+    _dir_low = (direction or "").lower().strip()
+    if _dir_low in ("charge",) and grid_kw_import is not None:
+        grid_cap_kw = float(grid_kw_import or 0.0)
+    elif _dir_low in ("discharge",) and grid_kw_export is not None:
+        grid_cap_kw = float(grid_kw_export or 0.0)
+    else:
+        grid_cap_kw = float("inf")
+
+    # Effective free = min(batt available, grid cap)
+    free_kw = min(batt_free_kw, grid_cap_kw)
 
     if free_kw <= 0:
+        _which = ("batt" if batt_free_kw <= 0 else "grid")
         return {
             "decision": "reject",
             "requested_kwh": kwh,
             "allowed_kwh": 0.0,
             "free_kw": free_kw,
-            "note": f"slot {slot_time(slot_idx)} {direction}: žiadna voľná kapacita (existujúce rezervácie obsadili plnú batt_kw={batt_kw_max:.0f})",
+            "grid_cap_kw": grid_cap_kw,
+            "note": f"slot {slot_time(slot_idx)} {direction}: žiadna voľná kapacita "
+                    f"({_which}=0; batt_free={batt_free_kw:.0f} kW, grid_cap={grid_cap_kw:.0f} kW)",
         }
 
     if requested_kw <= free_kw:
@@ -271,7 +298,9 @@ def audit_vdt_order(profile: str, day: str, slot_idx: int,
             "requested_kwh": kwh,
             "allowed_kwh": kwh,
             "free_kw": free_kw,
-            "note": f"slot {slot_time(slot_idx)} {direction}: prijaté plne",
+            "grid_cap_kw": grid_cap_kw,
+            "note": f"slot {slot_time(slot_idx)} {direction}: prijaté plne "
+                    f"(batt_free={batt_free_kw:.0f} kW, grid_cap={grid_cap_kw:.0f} kW)",
         }
 
     # downscale na voľnú kapacitu
@@ -281,12 +310,21 @@ def audit_vdt_order(profile: str, day: str, slot_idx: int,
              kw=allowed_kw, trade_id=trade_id,
              note=f"VDT trade {trade_id} downscale {kwh:.2f}→{allowed_kwh:.2f} kWh "
                   f"(voľná kap {free_kw:.0f} kW pre {direction})")
+    # Identifikovať či downscale spôsobil batt limit alebo grid limit (alebo oba)
+    _bind = []
+    if batt_free_kw <= grid_cap_kw + 0.5:
+        _bind.append(f"batt {batt_free_kw:.0f} kW")
+    if grid_cap_kw <= batt_free_kw + 0.5 and grid_cap_kw != float("inf"):
+        _bind.append(f"grid {grid_cap_kw:.0f} kW")
+    _bind_str = " a ".join(_bind) if _bind else f"{free_kw:.0f} kW"
     return {
         "decision": "downscale",
         "requested_kwh": kwh,
         "allowed_kwh": allowed_kwh,
         "free_kw": free_kw,
-        "note": f"slot {slot_time(slot_idx)} {direction}: požiadané {kwh:.2f} kWh ({requested_kw:.0f} kW), voľné {free_kw:.0f} kW",
+        "grid_cap_kw": grid_cap_kw,
+        "note": f"slot {slot_time(slot_idx)} {direction}: požiadané {kwh:.2f} kWh "
+                f"({requested_kw:.0f} kW), limit {_bind_str}",
     }
 
 

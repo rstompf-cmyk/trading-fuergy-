@@ -855,14 +855,21 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
             from core.capacity_ledger import audit_vdt_order, slot_idx_from_time
             import profiles as _ps_audit
             _prof_obj = _ps_audit.load_profile(profile) or {}
-            _batt_kw_max = float((_prof_obj.get("plan") or {}).get("batt_kw", 0.0) or 0.0)
+            _plan_au = (_prof_obj.get("plan") or {})
+            _batt_kw_max = float(_plan_au.get("batt_kw", 0.0) or 0.0)
+            # Bug GRID-AUDIT (2026-06-10): clip aj na grid kapacitu
+            _gki_au = _plan_au.get("grid_kw_import")
+            _gke_au = _plan_au.get("grid_kw_export")
+            _gki_au = float(_gki_au) if _gki_au is not None else None
+            _gke_au = float(_gke_au) if _gke_au is not None else None
             if _batt_kw_max > 0 and slot and ":" in str(slot):
                 _hh = int(str(slot)[:2]); _mm = int(str(slot)[3:5])
                 _slot_idx2 = slot_idx_from_time(_hh, _mm)
                 _direction = "discharge" if _act_upper in ("DISCHARGE", "SELL") else "charge"
                 _trade_id = f"{profile}_{today}_{slot}_{_act_upper}_extras"
                 _ax = audit_vdt_order(profile, today, _slot_idx2, _direction,
-                                        abs(float(kwh or 0)), _batt_kw_max, _trade_id)
+                                        abs(float(kwh or 0)), _batt_kw_max, _trade_id,
+                                        grid_kw_import=_gki_au, grid_kw_export=_gke_au)
                 if _ax["decision"] == "reject":
                     print(f"[append_extra_paper_trade #612] REJECT {profile} slot={slot} "
                           f"{_act_upper}: {_ax['note']}")
@@ -1011,7 +1018,13 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
             from core.capacity_ledger import audit_vdt_order, slot_idx_from_time
             import profiles as _ps_audit
             _prof_obj = _ps_audit.load_profile(profile) or {}
-            _batt_kw_max = float((_prof_obj.get("plan") or {}).get("batt_kw", 0.0) or 0.0)
+            _plan_au2 = (_prof_obj.get("plan") or {})
+            _batt_kw_max = float(_plan_au2.get("batt_kw", 0.0) or 0.0)
+            # Bug GRID-AUDIT (2026-06-10): clip aj na grid kapacitu
+            _gki_au2 = _plan_au2.get("grid_kw_import")
+            _gke_au2 = _plan_au2.get("grid_kw_export")
+            _gki_au2 = float(_gki_au2) if _gki_au2 is not None else None
+            _gke_au2 = float(_gke_au2) if _gke_au2 is not None else None
             if _batt_kw_max > 0 and slot and ":" in slot:
                 _hh = int(slot[:2]); _mm = int(slot[3:5])
                 _slot_idx = slot_idx_from_time(_hh, _mm)
@@ -1024,7 +1037,8 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
                 elif abs(_kwh_req) > 0:
                     _trade_id = f"{profile}_{_today}_{slot}_{_action_upper}"
                     _ax = audit_vdt_order(profile, _today, _slot_idx, _direction,
-                                            abs(_kwh_req), _batt_kw_max, _trade_id)
+                                            abs(_kwh_req), _batt_kw_max, _trade_id,
+                                            grid_kw_import=_gki_au2, grid_kw_export=_gke_au2)
                     if _ax["decision"] == "reject":
                         print(f"[append_paper_trade #612] REJECT {profile} slot={slot} "
                               f"{_action_upper}: {_ax['note']}")
