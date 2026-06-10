@@ -430,6 +430,92 @@ class BattCapacityReservation(Base):
     profile: Mapped["Profile"] = relationship()
 
 
+class EffectMinute(Base):
+    """Bug #650 / DB unify F1: per-minute € hodnoty livesim výpočtu.
+
+    Jediný zdroj pravdy pre všetky agregácie efektu. UI (karty, chC graf,
+    Excel, PDF) číta z tejto tabuľky (= effect_daily pre obdobie alebo
+    effect_minute pre 15-min detail dňa). Žiadne paralelné výpočty
+    v core/effect.py compute_effect_totals() — všetko cez SQL agregát.
+
+    Atribučný rozklad (Bug #649): rt_batt + rt_ftv + rt_load + rt_curtail
+    samostatné stĺpce, joint LP toggle aplikovaný v UI query (NOT v zápise).
+    """
+    __tablename__ = "effect_minute"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"),
+                                              nullable=False, index=True)
+    time_iso: Mapped[str] = mapped_column(String(20), nullable=False)        # 'YYYY-MM-DD HH:MM:SS' local
+    time_ms: Mapped[int] = mapped_column(Integer, nullable=False, index=True)  # epoch ms UTC pre fast range
+    market: Mapped[str] = mapped_column(String(2), nullable=False)            # 'cz'|'sk'
+
+    # € hodnoty per minútu (1-min cadence)
+    dt_rev_eur: Mapped[float] = mapped_column(Float, default=0.0)             # D-1 trh settle
+    rt_batt_eur: Mapped[float] = mapped_column(Float, default=0.0)            # batt drift × ZCO
+    rt_ftv_eur: Mapped[float] = mapped_column(Float, default=0.0)             # FTV drift × ZCO
+    rt_load_eur: Mapped[float] = mapped_column(Float, default=0.0)            # load drift × ZCO
+    rt_curtail_eur: Mapped[float] = mapped_column(Float, default=0.0)         # curtail kompenzácia
+    vdt_arb_eur: Mapped[float] = mapped_column(Float, default=0.0)            # VDT arbitráž (Bug #608)
+    baseline_eur: Mapped[float] = mapped_column(Float, default=0.0)           # bez batt+plánu reference
+
+    # Pomocné stĺpce pre Excel "Vsetky_15min" sheet (kW + ceny)
+    batt_kw_real: Mapped[Optional[float]] = mapped_column(Float)              # realita
+    plan_batt_kw: Mapped[Optional[float]] = mapped_column(Float)              # D-1 plán
+    ftv_kw_real: Mapped[Optional[float]] = mapped_column(Float)
+    load_kw_real: Mapped[Optional[float]] = mapped_column(Float)
+    soc_pct: Mapped[Optional[float]] = mapped_column(Float)
+    zco_eur: Mapped[Optional[float]] = mapped_column(Float)                   # €/MWh
+    dt_eur_mwh: Mapped[Optional[float]] = mapped_column(Float)                # €/MWh
+
+    __table_args__ = (
+        UniqueConstraint("profile_id", "time_ms", name="uq_effect_minute_ptime"),
+        Index("idx_effect_minute_range", "profile_id", "time_ms"),
+        CheckConstraint("market IN ('cz','sk')", name="ck_effect_minute_market"),
+    )
+
+    profile: Mapped["Profile"] = relationship()
+
+
+class EffectDaily(Base):
+    """Bug #650 / DB unify F1: denný agregát z effect_minute pre rýchle obdobie queries.
+
+    Aktualizovaný UPSERT-om po každom dokončenom dni v livesim.advance.
+    UI karty + chC graf "Po dňoch" čítajú odtiaľto (jediný query namiesto
+    sumarizácie 1440 riadkov × N dní z effect_minute).
+    """
+    __tablename__ = "effect_daily"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"),
+                                              nullable=False, index=True)
+    day: Mapped[str] = mapped_column(String(10), nullable=False, index=True)  # YYYY-MM-DD
+    market: Mapped[str] = mapped_column(String(2), nullable=False)
+
+    # Denné € agregáty
+    dt_rev_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    rt_batt_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    rt_ftv_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    rt_load_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    rt_curtail_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    vdt_arb_eur: Mapped[float] = mapped_column(Float, default=0.0)
+    baseline_eur: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Denné kWh/SOC agregáty pre Excel + chC "FTV výroba za deň"
+    ftv_kwh: Mapped[Optional[float]] = mapped_column(Float)
+    load_kwh: Mapped[Optional[float]] = mapped_column(Float)
+    soc_end_pct: Mapped[Optional[float]] = mapped_column(Float)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)       # ISO timestamp
+
+    __table_args__ = (
+        UniqueConstraint("profile_id", "day", name="uq_effect_daily_pday"),
+        Index("idx_effect_daily_range", "profile_id", "day"),
+        CheckConstraint("market IN ('cz','sk')", name="ck_effect_daily_market"),
+    )
+
+    profile: Mapped["Profile"] = relationship()
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # SYSTEM — UI settings, Cases, Realio config
 # ════════════════════════════════════════════════════════════════════════════
