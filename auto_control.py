@@ -404,14 +404,35 @@ def compute_setpoint_for_now(profile: Optional[str] = None,
     try:
         import profiles as _pr
         p = _pr.load_profile(prof)
-        batt_kw_max = float((p or {}).get("batt_kw", 500.0))
+        _pl_p = (p or {}).get("plan") or {}
+        batt_kw_max = float(_pl_p.get("batt_kw", 500.0))
+        # Faza B Bug GRID-CLIP-AUTOCTRL (2026-06-10): aj grid kapacita
+        _gki_ac = _pl_p.get("grid_kw_import")
+        _gke_ac = _pl_p.get("grid_kw_export")
+        grid_kw_import_ac = float(_gki_ac) if _gki_ac is not None else None
+        grid_kw_export_ac = float(_gke_ac) if _gke_ac is not None else None
     except Exception:
         batt_kw_max = 500.0
+        grid_kw_import_ac = None
+        grid_kw_export_ac = None
 
     clipped = False
     if setpoint_kw is not None:
         if abs(setpoint_kw) > batt_kw_max:
             setpoint_kw = max(-batt_kw_max, min(batt_kw_max, setpoint_kw))
+            clipped = True
+        # Faza B: clip aj na grid kapacitu
+        # setpoint_kw > 0 = discharge (batt → grid = export) → limit grid_kw_export
+        # setpoint_kw < 0 = charge   (grid → batt = import) → limit grid_kw_import
+        if setpoint_kw > 0 and grid_kw_export_ac is not None and setpoint_kw > grid_kw_export_ac:
+            print(f"[auto_control GRID-CLIP] {prof} slot={slot_label} discharge: "
+                  f"setpoint {setpoint_kw:.1f} kW > grid_kw_export {grid_kw_export_ac:.1f} kW → clip")
+            setpoint_kw = float(grid_kw_export_ac)
+            clipped = True
+        elif setpoint_kw < 0 and grid_kw_import_ac is not None and abs(setpoint_kw) > grid_kw_import_ac:
+            print(f"[auto_control GRID-CLIP] {prof} slot={slot_label} charge: "
+                  f"setpoint {setpoint_kw:.1f} kW < -grid_kw_import {-grid_kw_import_ac:.1f} kW → clip")
+            setpoint_kw = -float(grid_kw_import_ac)
             clipped = True
 
     # Bug #637 (2026-06-09): SOC-use audit pred odoslaním setpointu do batt.
