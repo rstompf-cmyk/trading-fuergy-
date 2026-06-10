@@ -3849,6 +3849,30 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         _has_dev_decomp = ("rt_rev_batt_min" in df.columns
                            and "rt_rev_ftv_min" in df.columns
                            and "rt_rev_load_min" in df.columns)
+        # Bug #650 (2026-06-09): Zisk RT filtrovaný podľa joint LP toggles profilu.
+        # User insight: 'ked je zaskrtnuta v sablone len baterka, pocita sa odchylka
+        # len z baterie. ked aj FTV obchod, tak aj FTV. ked aj load, tak aj load.'
+        # Tým "Zisk RT" v Excel odrazí len tie komponenty ktoré profil OBCHODUJE
+        # (= sú v plan_grid_kwh nominácii). Drift inych je 'šum prostredia' a nepatrí
+        # do atribúcie efektu systému.
+        try:
+            import joint_lp_integration as _jli_eff
+            _xl_prof = pr.get_active() if pr is not None else None
+            _xl_joint = _jli_eff.get_flags_from_profile(_xl_prof) if _xl_prof else None
+        except Exception:
+            _xl_joint = None
+        if _xl_joint is not None:
+            # Použi get_rt_eur_series ktorá vie aj runtime fallback (Bug #650-B)
+            # — pre staré CSVky bez rt_rev_batt_min dopočíta z batt_kw/plan_batt_kw × zco
+            from core.effect import get_rt_eur_series as _get_rt_xl
+            df = df.copy()
+            df["_rt_filtered_min"] = _get_rt_xl(df, joint_flags=_xl_joint)
+            _rt_col_xl = "_rt_filtered_min"   # použi filtrovaný stĺpec namiesto total
+            _tb_xl = bool(_xl_joint.get("trade_batt", True))
+            _tf_xl = bool(_xl_joint.get("trade_ftv", False))
+            _tl_xl = bool(_xl_joint.get("trade_load", False))
+            print(f"[Excel #650] joint_flags filter: batt={_tb_xl} ftv={_tf_xl} load={_tl_xl} "
+                  f"has_decomp={_has_dev_decomp} → Zisk RT z {_rt_col_xl}")
         def _agg(g):
             agg_args = dict(
                 dt_eur=("dt_rev_min", "sum"),
@@ -6940,9 +6964,19 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _src_for_daily = dfull.copy()
             _src_for_daily["_bl"] = _bl_per_min if _bl_per_min is not None else 0.0
         # Konsolidácia: rt stĺpec cez core.effect (single source of truth)
-        from core.effect import resolve_rt_col as _resolve_rt_d
+        # Bug #650: filter RT podľa joint_lp toggles profilu (trade_batt/ftv/load)
+        from core.effect import resolve_rt_col as _resolve_rt_d, get_rt_eur_series as _get_rt_d
+        try:
+            import joint_lp_integration as _jli_chc
+            _chc_prof = pr.get_active() if pr is not None else None
+            _chc_joint = _jli_chc.get_flags_from_profile(_chc_prof) if _chc_prof else None
+        except Exception:
+            _chc_joint = None
         _rt_col_d = _resolve_rt_d(_src_for_daily)
-        _daily = _src_for_daily.groupby("date").agg(dt=("dt_rev_min", "sum"), rt=(_rt_col_d, "sum"),
+        # Použiť filtrovaný RT ak má joint_lp flags + decomp stĺpce
+        _src_for_daily = _src_for_daily.copy()
+        _src_for_daily["_rt_eff"] = _get_rt_d(_src_for_daily, joint_flags=_chc_joint)
+        _daily = _src_for_daily.groupby("date").agg(dt=("dt_rev_min", "sum"), rt=("_rt_eff", "sum"),
                                                       bl=("_bl", "sum")).reset_index()
         _daily["total"] = _daily["dt"].fillna(0) + _daily["rt"].fillna(0)
         DL = "[" + ",".join(f"'{str(x)}'" for x in _daily["date"]) + "]"
@@ -6981,9 +7015,12 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             except Exception:
                 _det_with_bl["_bl"] = 0.0
             # Konsolidácia: detail dňa rt cez core.effect (single source of truth)
-            from core.effect import resolve_rt_col as _resolve_rt_de
-            _rt_col_de = _resolve_rt_de(_det_with_bl)
-            _det = (_det_with_bl.groupby("ts15").agg(dt=("dt_rev_min", "sum"), rt=(_rt_col_de, "sum"),
+            # Bug #650: filtered RT podľa joint_lp toggles (rovnaké pre 15-min detail)
+            from core.effect import (resolve_rt_col as _resolve_rt_de,
+                                       get_rt_eur_series as _get_rt_de)
+            _det_with_bl = _det_with_bl.copy()
+            _det_with_bl["_rt_eff"] = _get_rt_de(_det_with_bl, joint_flags=_chc_joint)
+            _det = (_det_with_bl.groupby("ts15").agg(dt=("dt_rev_min", "sum"), rt=("_rt_eff", "sum"),
                                                        bl=("_bl", "sum"))
                     .reset_index().sort_values("ts15"))
             _det["total"] = _det["dt"].fillna(0) + _det["rt"].fillna(0)

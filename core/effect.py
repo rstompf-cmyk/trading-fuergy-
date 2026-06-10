@@ -62,13 +62,78 @@ def resolve_rt_col(df: pd.DataFrame) -> str:
     return "rt_rev_min"
 
 
-def get_rt_eur_series(df: pd.DataFrame, *, warn_legacy: bool = False) -> pd.Series:
+def get_rt_eur_series(df: pd.DataFrame, *, warn_legacy: bool = False,
+                       joint_flags: Optional[Dict] = None) -> pd.Series:
     """Vráti pd.Series s RT efektom v €/min indexovanú podľa df.
 
-    Ak je `rt_rev_realistic_min` k dispozícii → použije sa priamo.
-    Inak fallback na `rt_rev_min` (legacy) — vráti seriu, ale loguje warning
-    do stdout ak `warn_legacy=True`.
+    Bug #650 (2026-06-09): ak `joint_flags` zadané a df má atribučné stĺpce
+    (rt_rev_batt_min, rt_rev_ftv_min, rt_rev_load_min) → vráti **filtrovaný**
+    súčet len tých komponentov ktoré profil reálne obchoduje:
+      - trade_batt=True → zahrň rt_rev_batt_min
+      - trade_ftv=True  → zahrň rt_rev_ftv_min
+      - trade_load=True → zahrň rt_rev_load_min
+    Pre profil len-batt (Simulacia_Coop) tak Zisk RT odráža LEN efekt riadenia
+    batt vs plán, nie FTV/Load drift (= šum prostredia, nie systému).
+
+    Pre joint_flags=None alebo bez atribučných stĺpcov: backward compat,
+    vráti `rt_rev_realistic_min` (total trh settlement = cash flow ČEPS/OKTE).
     """
+    # Bug #650: filtrovaný súčet podľa joint LP toggles ak sú dostupné komponenty
+    has_decomp = ("rt_rev_batt_min" in df.columns and
+                   "rt_rev_ftv_min" in df.columns and
+                   "rt_rev_load_min" in df.columns)
+    # Bug #650-B (2026-06-10): runtime fallback pre staré CSVky bez decomp stĺpcov.
+    # Historické dni (pred Bug #649) sa neprepočítavajú; effect.py musí vedieť
+    # dopočítať komponenty z primárnych stĺpcov ktoré CSV vždy obsahuje:
+    #   batt_kw / batt_kw_realistic + plan_batt_kw + zco_eur + ftv_*_kw + load_*_kw
+    if joint_flags is not None and not has_decomp:
+        # Skontroluj že máme základné stĺpce na runtime decomp
+        _need_batt = ("batt_kw_realistic" in df.columns or "batt_kw" in df.columns) \
+                      and "plan_batt_kw" in df.columns
+        _need_ftv = ("ftv_min_real_kw" in df.columns) \
+                     and ("ftv_hour_plan_kw" in df.columns or "ftv_plan_kw" in df.columns)
+        _need_load = ("load_min_real_kw" in df.columns) \
+                      and ("load_plan_kw" in df.columns or "plan_load_kw" in df.columns)
+        _need_zco = "zco_eur" in df.columns
+        # Stačí ak vieme aspoň batt komponentu (najčastejší prípad — len-batt profil)
+        if _need_zco and (_need_batt or _need_ftv or _need_load):
+            _tb = bool(joint_flags.get("trade_batt", True))
+            _tf = bool(joint_flags.get("trade_ftv", False))
+            _tl = bool(joint_flags.get("trade_load", False))
+            _zco = pd.to_numeric(df["zco_eur"], errors="coerce").fillna(0.0)
+            s = pd.Series([0.0] * len(df), index=df.index)
+            if _tb and _need_batt:
+                _br = pd.to_numeric(df.get("batt_kw_realistic", df.get("batt_kw")),
+                                     errors="coerce").fillna(0.0)
+                _bp = pd.to_numeric(df["plan_batt_kw"], errors="coerce").fillna(0.0)
+                s = s + ((_br - _bp) / 60.0) * _zco / 1000.0
+            if _tf and _need_ftv:
+                _fr = pd.to_numeric(df["ftv_min_real_kw"], errors="coerce").fillna(0.0)
+                _fp_col = "ftv_hour_plan_kw" if "ftv_hour_plan_kw" in df.columns else "ftv_plan_kw"
+                _fp = pd.to_numeric(df[_fp_col], errors="coerce").fillna(0.0)
+                s = s + ((_fr - _fp) / 60.0) * _zco / 1000.0
+            if _tl and _need_load:
+                _lr = pd.to_numeric(df["load_min_real_kw"], errors="coerce").fillna(0.0)
+                _lp_col = "load_plan_kw" if "load_plan_kw" in df.columns else "plan_load_kw"
+                _lp = pd.to_numeric(df[_lp_col], errors="coerce").fillna(0.0)
+                # +load = viac spotreby = under-export = záporná odchýlka pre exportujúceho
+                s = s + ((-(_lr - _lp)) / 60.0) * _zco / 1000.0
+            return s
+    if joint_flags is not None and has_decomp:
+        # Default trade_batt=True (batt je vždy obchodované cez D-1 plán),
+        # trade_ftv/load default False (vstup do trhu len ak je explicit toggle).
+        _tb = bool(joint_flags.get("trade_batt", True))
+        _tf = bool(joint_flags.get("trade_ftv", False))
+        _tl = bool(joint_flags.get("trade_load", False))
+        s = pd.Series([0.0] * len(df), index=df.index)
+        if _tb:
+            s = s + pd.to_numeric(df["rt_rev_batt_min"], errors="coerce").fillna(0.0)
+        if _tf:
+            s = s + pd.to_numeric(df["rt_rev_ftv_min"], errors="coerce").fillna(0.0)
+        if _tl:
+            s = s + pd.to_numeric(df["rt_rev_load_min"], errors="coerce").fillna(0.0)
+        return s
+    # Backward compat: total dev × ZCO (= trh settlement)
     col = resolve_rt_col(df)
     if col in df.columns:
         s = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
