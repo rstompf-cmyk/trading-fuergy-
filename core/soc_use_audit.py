@@ -303,7 +303,7 @@ def audit_action(profile: str,
             soc_path_mid, dirs_mid,
             soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
             from_slot=si)
-            if v[0] < _to_slot]
+            if (v[0], v[1]) not in _base_viols_set]   # DELTA: ignoruj plán-spôsobené
         if viol_mid:
             hi = mid
         else:
@@ -316,7 +316,7 @@ def audit_action(profile: str,
         soc_path_final, dirs_final,
         soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
         from_slot=si)
-        if v[0] < _to_slot]
+        if (v[0], v[1]) not in _base_viols_set]   # DELTA: ignoruj plán-spôsobené
     if allowed < 0.5:           # menej ako 0.5 kWh nemá zmysel
         out["decision"] = "reject"
         out["allowed_kwh"] = 0.0
