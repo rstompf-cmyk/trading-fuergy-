@@ -555,6 +555,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             soc_max_pct=float(fp.get("soc_max", DEF["soc_max"])),
             soc_init_pct=_soc_init_use,
             soc_reserve_pct=float(fp.get("soc_reserve_pct", 0.0) or 0.0),
+            rt_grid_reserve_pct=float(fp.get("rt_grid_reserve_pct", 0.0) or 0.0),
             terminal_soc_pct=float(fp.get("terminal_soc", DEF["terminal_soc"])),
             grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
             grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
@@ -644,6 +645,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                                   soc_max_pct=float(fp.get("soc_max", DEF["soc_max"])),
                                   soc_init_pct=_soc_init_use15,
                                   soc_reserve_pct=float(fp.get("soc_reserve_pct", 0.0) or 0.0),
+                                  rt_grid_reserve_pct=float(fp.get("rt_grid_reserve_pct", 0.0) or 0.0),
                                   terminal_soc_pct=float(fp.get("terminal_soc", DEF["terminal_soc"])),
                                   grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
                                   grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
@@ -811,6 +813,7 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
                 max_export_kwh_day: float = Form(default=None),
                 max_import_kwh_day: float = Form(default=None),
                 soc_reserve_pct: float = Form(default=None),
+                rt_grid_reserve_pct: float = Form(default=None),
                 rt_freedom: str = Form(default=None),
                 purge_history: str = Form(default=None),
                 full_reset: str = Form(default=None)):
@@ -835,6 +838,7 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
         max_export_kwh_day=max_export_kwh_day,
         max_import_kwh_day=max_import_kwh_day,
         soc_reserve_pct=soc_reserve_pct,
+        rt_grid_reserve_pct=rt_grid_reserve_pct,
     ).items() if v is not None}
     # checkbox-y: prítomné v requeste len ak sú zaškrtnuté
     if allow_grid_charge is not None: _overrides["allow_grid_charge"] = bool(allow_grid_charge)
@@ -2063,7 +2067,7 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 {_field("Výkon batérie [kW]","batt_kw",f['batt_kw'])}{_field("Kapacita [kWh]","batt_kwh",f['batt_kwh'])}
 {_field("Účinnosť nabíjania","eff_c",f['eff_c'])}{_field("Účinnosť vybíjania","eff_d",f['eff_d'])}
 {_field("SOC min [%]","soc_min",f['soc_min'])}{_field("SOC max [%]","soc_max",f['soc_max'])}
-{_field("SOC začiatok [%]","soc_init",f['soc_init'])}{_field("SOC koniec [%]","terminal_soc",f['terminal_soc'])}{_field("SOC rezerva [%]","soc_reserve_pct",f.get('soc_reserve_pct', 0.0))}
+{_field("SOC začiatok [%]","soc_init",f['soc_init'])}{_field("SOC koniec [%]","terminal_soc",f['terminal_soc'])}{_field("SOC rezerva [%]","soc_reserve_pct",f.get('soc_reserve_pct', 0.0))}{_field("Sieť rezerva pre RT [%]","rt_grid_reserve_pct",f.get('rt_grid_reserve_pct', 0.0))}
 {_field("Limit dodávky do siete [kW]","grid_kw_export",f.get('grid_kw_export', f['grid_kw']))}{_field("Limit odberu zo siete [kW]","grid_kw_import",f.get('grid_kw_import', f['grid_kw']))}
 {(
   f'<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">'
@@ -3108,7 +3112,7 @@ Ak zvolíš <b>dnešný deň</b>, dole uvidíš aj odporúčanie pre aktuálny 1
 {_field("Výkon batérie [kW]","batt_kw",f['batt_kw'])}{_field("Kapacita [kWh]","batt_kwh",f['batt_kwh'])}
 {_field("Účinnosť nabíjania","eff_c",f['eff_c'])}{_field("Účinnosť vybíjania","eff_d",f['eff_d'])}
 {_field("SOC min [%]","soc_min",f['soc_min'])}{_field("SOC max [%]","soc_max",f['soc_max'])}
-{_field("SOC začiatok [%]","soc_init",f['soc_init'])}{_field("SOC koniec [%]","terminal_soc",f['terminal_soc'])}{_field("SOC rezerva [%]","soc_reserve_pct",f.get('soc_reserve_pct', 0.0))}
+{_field("SOC začiatok [%]","soc_init",f['soc_init'])}{_field("SOC koniec [%]","terminal_soc",f['terminal_soc'])}{_field("SOC rezerva [%]","soc_reserve_pct",f.get('soc_reserve_pct', 0.0))}{_field("Sieť rezerva pre RT [%]","rt_grid_reserve_pct",f.get('rt_grid_reserve_pct', 0.0))}
 {_field("Limit dodávky do siete [kW]","grid_kw_export",f.get('grid_kw_export', f['grid_kw']))}{_field("Limit odberu zo siete [kW]","grid_kw_import",f.get('grid_kw_import', f['grid_kw']))}
 {(
   f'<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">'
@@ -3179,6 +3183,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
            batt_kw: float = Form(...), batt_kwh: float = Form(...), eff_c: float = Form(...), eff_d: float = Form(...),
            soc_min: float = Form(...), soc_max: float = Form(...), soc_init: float = Form(...),
            soc_reserve_pct: float = Form(default=0.0),
+           rt_grid_reserve_pct: float = Form(default=0.0),
            terminal_soc: float = Form(...), grid_kw: float = Form(...),
            grid_kw_import: float = Form(default=None), grid_kw_export: float = Form(default=None),
            grid_fee: float = Form(...),
@@ -3225,6 +3230,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                             batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                             soc_min=soc_min, soc_max=soc_max, soc_init=soc_init, terminal_soc=terminal_soc,
                             soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                            rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                             grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                             grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
                             allow_grid_charge=agc, allow_curtail=acu, block_neg_import=bni,
@@ -3239,6 +3245,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                           batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                           soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
                           soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                          rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
                           max_export_kwh_day=float(max_export_kwh_day or 0),
@@ -3307,6 +3314,7 @@ a{{color:#1F4E78}}</style></head><body>
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
                                  soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                 rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
                                  allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
@@ -3323,6 +3331,7 @@ a{{color:#1F4E78}}</style></head><body>
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
                                  soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                 rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
                                  allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
@@ -3349,6 +3358,7 @@ a{{color:#1F4E78}}</style></head><body>
                                   batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                   soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
                                   soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                  rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                                   terminal_soc_pct=terminal_soc, grid_kw=grid_kw,
                                   grid_kw_import=gki, grid_kw_export=gke,
                                   grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread_eur=min_spread,
@@ -13793,6 +13803,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          batt_kw: float = Form(...), batt_kwh: float = Form(...), eff_c: float = Form(...), eff_d: float = Form(...),
          soc_min: float = Form(...), soc_max: float = Form(...), soc_init: float = Form(...),
          soc_reserve_pct: float = Form(default=0.0),
+         rt_grid_reserve_pct: float = Form(default=0.0),
          terminal_soc: float = Form(...), grid_kw: float = Form(...),
          grid_kw_import: float = Form(default=None), grid_kw_export: float = Form(default=None),
          grid_fee: float = Form(...),
@@ -13890,6 +13901,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
                           batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                           soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
                           soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                          rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost,
                           min_spread=min_spread, min_trade=min_trade,
@@ -13919,6 +13931,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
                           batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                           soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
                           soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                          rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
                           max_export_kwh_day=float(max_export_kwh_day or 0),
@@ -14014,6 +14027,7 @@ a{{color:#1F4E78}}</style></head><body>
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
                                  soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                 rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
                                  allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
@@ -14033,6 +14047,7 @@ a{{color:#1F4E78}}</style></head><body>
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
                                  soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                                 rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
                                  allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
@@ -14050,6 +14065,7 @@ a{{color:#1F4E78}}</style></head><body>
                 batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                 soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
                 soc_reserve_pct=float(soc_reserve_pct or 0.0),
+                rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                 grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                 grid_fee=grid_fee, cycle_cost=cycle_cost,
                 allow_grid_charge=agc, terminal_soc_pct=terminal_soc, allow_curtail=acu,
