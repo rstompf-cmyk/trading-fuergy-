@@ -5964,21 +5964,41 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 _agg_src = _df_day
         except Exception:
             _agg_src = None
-    # Konsolidácia (2026-06-08): efekt sa všade ráta cez core.effect.compute_effect_totals.
-    # Jediný zdroj pravdy pre DT/RT/VDT-arb/baseline/total.
+    # DB unify F4 (2026-06-10): JEDINÝ zdroj pravdy pre €-hodnoty = core/effect_db.py.
+    # Karty hore (cum_*), chC graf (kumulatív/po dňoch/15-min), Excel kľúčové ukazovatele
+    # — všetko cez ten istý SQL agregát. Žiadne paralelné výpočty.
     from core.effect import compute_effect_totals as _eff
-    # _active_profile nie je v scope _livesim_body — získaj cez profile_resolver
     try:
         from core.profile_resolver import get_active as _ga_eff
         _active_profile_eff = _ga_eff()
     except Exception:
         _active_profile_eff = None
-    # Bug #650: získaj joint LP flags aktívneho profilu pre filtrovaný RT
     try:
         import joint_lp_integration as _jli_eff_d
         _eff_joint = _jli_eff_d.get_flags_from_profile(_active_profile_eff) if _active_profile_eff else None
     except Exception:
         _eff_joint = None
+    # DB unify F4: získaj obdobie z dfull (min/max time) a volaj jediný SQL agregát.
+    # Override r['cum_total/cum_rt/cum_dt/cum_vdt_arb'] z DB → karty + chC ukážu konzistentné čísla.
+    _eff_db_period = None
+    _eff_db_from = None
+    _eff_db_to = None
+    if dfull is not None and not dfull.empty and _active_profile_eff:
+        try:
+            from core import effect_db as _eff_db_mod
+            _eff_db_from = pd.Timestamp(dfull["time"].min()).strftime("%Y-%m-%d")
+            _eff_db_to = pd.Timestamp(dfull["time"].max()).strftime("%Y-%m-%d")
+            _eff_db_period = _eff_db_mod.get_period_effect(
+                _active_profile_eff, _eff_db_from, _eff_db_to,
+                joint_flags=_eff_joint)
+            if _eff_db_period.get("days_count", 0) > 0 and isinstance(r, dict):
+                r["cum_total"] = _eff_db_period["total_eur"]
+                r["cum_dt"] = _eff_db_period["dt_eur"]
+                r["cum_rt"] = _eff_db_period["rt_eur"]
+                r["cum_vdt_arb"] = _eff_db_period["vdt_arb_eur"]
+        except Exception as _e_dbf4:
+            print(f"[livesim F4] effect_db.get_period_effect zlyhal: {_e_dbf4}")
+            _eff_db_period = None
     if _agg_src is not None and not _agg_src.empty:
         try:
             _t = _eff(_agg_src, profile=_active_profile_eff, day=view_day,
@@ -6912,38 +6932,27 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         chSEPSMW = ""                                                  # SK-only chart, no data → empty
     # --- kumulatívny zisk za celé obdobie ---
     if dfull is not None and not dfull.empty:
-        L = "[" + ",".join(f"'{str(t)[5:16]}'" for t in dfull["time"]) + "]"
-        # Bug #650: prepočítaj cum_rt na fly s joint LP filtrom; cum_rt z CSV
-        # bol total (= bez filtra) → graf ukazoval staré hodnoty aj keď Excel filter funguje.
-        _cum_rt_series = None
+        # DB unify F4: chC kumulatív X-axis = denný grid z effect_db (1 SQL query).
+        # Predtým: minútový grid s 60000+ bodmi a 3 paralelné výpočty.
+        # Teraz: denná granularita, jediný SQL filter joint LP, zhoda s kartami.
+        _cum_df_db = None
         try:
-            from core.effect import get_rt_eur_series as _get_rt_cum
-            if _eff_joint is not None:
-                _rt_pm_full = _get_rt_cum(dfull, joint_flags=_eff_joint)
-                _cum_rt_series = _rt_pm_full.fillna(0).cumsum()
+            if _active_profile_eff and _eff_db_from and _eff_db_to:
+                from core import effect_db as _eff_db_cum
+                _cum_df_db = _eff_db_cum.get_period_cum_series(
+                    _active_profile_eff, _eff_db_from, _eff_db_to,
+                    joint_flags=_eff_joint)
         except Exception as _e_cum:
-            print(f"[chC #650] cum_rt prepočet chyba: {_e_cum}")
-            _cum_rt_series = None
-        if _cum_rt_series is not None:
-            _cum_dt_arr = pd.to_numeric(dfull["cum_dt"], errors="coerce").fillna(0)
-            if "cum_vdt_arb" in dfull.columns:
-                _cum_vdt_arr = pd.to_numeric(dfull["cum_vdt_arb"], errors="coerce").fillna(0)
-            else:
-                _cum_vdt_arr = pd.Series([0.0] * len(dfull), index=dfull.index)
-            _cum_total_series = _cum_dt_arr + _cum_rt_series + _cum_vdt_arr
-            CT = "[" + ",".join(f"{x:.2f}" for x in _cum_total_series) + "]"
-            CD = "[" + ",".join(f"{x:.2f}" for x in _cum_dt_arr) + "]"
-            CR = "[" + ",".join(f"{x:.2f}" for x in _cum_rt_series) + "]"
-            # Override aj kariet hore (r['cum_total'] a r['cum_rt'])
-            try:
-                _last_cum_rt = float(_cum_rt_series.iloc[-1])
-                _last_cum_total = float(_cum_total_series.iloc[-1])
-                if isinstance(r, dict):
-                    r["cum_rt"] = _last_cum_rt
-                    r["cum_total"] = _last_cum_total
-            except Exception:
-                pass
+            print(f"[chC F4] get_period_cum_series zlyhal: {_e_cum}")
+            _cum_df_db = None
+        if _cum_df_db is not None and not _cum_df_db.empty:
+            L = "[" + ",".join(f"'{d}'" for d in _cum_df_db["date"]) + "]"
+            CT = "[" + ",".join(f"{x:.2f}" for x in _cum_df_db["cum_total"]) + "]"
+            CD = "[" + ",".join(f"{x:.2f}" for x in _cum_df_db["cum_dt"]) + "]"
+            CR = "[" + ",".join(f"{x:.2f}" for x in _cum_df_db["cum_rt"]) + "]"
         else:
+            # Fallback: minútový grid z CSV (legacy, pre profily bez DB záznamov)
+            L = "[" + ",".join(f"'{str(t)[5:16]}'" for t in dfull["time"]) + "]"
             CT = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_total"].fillna(0)) + "]"
             CD = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_dt"].fillna(0)) + "]"
             CR = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_rt"].fillna(0)) + "]"
@@ -7001,21 +7010,39 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         else:
             _src_for_daily = dfull.copy()
             _src_for_daily["_bl"] = _bl_per_min if _bl_per_min is not None else 0.0
-        # Konsolidácia: rt stĺpec cez core.effect (single source of truth)
-        # Bug #650: filter RT podľa joint_lp toggles profilu (trade_batt/ftv/load)
-        from core.effect import resolve_rt_col as _resolve_rt_d, get_rt_eur_series as _get_rt_d
+        # DB unify F4: chC "Po dňoch" cez effect_db.get_daily_series (1 SQL).
+        # Fallback na CSV agregát ak DB nemá dáta (žiadny backfill spustený).
+        _daily_db = None
         try:
-            import joint_lp_integration as _jli_chc
-            _chc_prof = pr.get_active() if pr is not None else None
-            _chc_joint = _jli_chc.get_flags_from_profile(_chc_prof) if _chc_prof else None
-        except Exception:
-            _chc_joint = None
-        _rt_col_d = _resolve_rt_d(_src_for_daily)
-        # Použiť filtrovaný RT ak má joint_lp flags + decomp stĺpce
-        _src_for_daily = _src_for_daily.copy()
-        _src_for_daily["_rt_eff"] = _get_rt_d(_src_for_daily, joint_flags=_chc_joint)
-        _daily = _src_for_daily.groupby("date").agg(dt=("dt_rev_min", "sum"), rt=("_rt_eff", "sum"),
-                                                      bl=("_bl", "sum")).reset_index()
+            if _active_profile_eff and _eff_db_from and _eff_db_to:
+                from core import effect_db as _eff_db_d
+                _ddf = _eff_db_d.get_daily_series(
+                    _active_profile_eff, _eff_db_from, _eff_db_to,
+                    joint_flags=_eff_joint)
+                if not _ddf.empty:
+                    _daily_db = _ddf
+        except Exception as _e_d:
+            print(f"[chC F4] get_daily_series zlyhal: {_e_d}")
+            _daily_db = None
+        if _daily_db is not None:
+            # Pripoj baseline z CSV agregátu (DB má len lokálny effect_daily baseline)
+            _bl_by_day = (_src_for_daily.groupby("date")["_bl"].sum().reset_index()
+                           if "_bl" in _src_for_daily.columns else pd.DataFrame())
+            _daily = _daily_db.rename(columns={"date": "date"})[["date", "dt", "rt"]].copy()
+            if not _bl_by_day.empty:
+                _daily["date"] = _daily["date"].astype(str)
+                _bl_by_day["date"] = _bl_by_day["date"].astype(str)
+                _daily = _daily.merge(_bl_by_day.rename(columns={"_bl": "bl"}),
+                                       on="date", how="left")
+            else:
+                _daily["bl"] = 0.0
+        else:
+            from core.effect import resolve_rt_col as _resolve_rt_d, get_rt_eur_series as _get_rt_d
+            _rt_col_d = _resolve_rt_d(_src_for_daily)
+            _src_for_daily = _src_for_daily.copy()
+            _src_for_daily["_rt_eff"] = _get_rt_d(_src_for_daily, joint_flags=_eff_joint)
+            _daily = _src_for_daily.groupby("date").agg(dt=("dt_rev_min", "sum"), rt=("_rt_eff", "sum"),
+                                                          bl=("_bl", "sum")).reset_index()
         _daily["total"] = _daily["dt"].fillna(0) + _daily["rt"].fillna(0)
         DL = "[" + ",".join(f"'{str(x)}'" for x in _daily["date"]) + "]"
         DD = "[" + ",".join(f"{x:.2f}" for x in _daily["dt"].fillna(0)) + "]"
