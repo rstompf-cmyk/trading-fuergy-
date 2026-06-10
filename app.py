@@ -6006,7 +6006,16 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 r["cum_vdt_arb"] = _eff_db_period["vdt_arb_eur"]
         except Exception as _e_dbf4:
             print(f"[livesim F4] effect_db.get_period_effect zlyhal: {_e_dbf4}")
-            _eff_db_period = None
+            _eff_db_period = {"_error": str(_e_dbf4)}
+    # F4 DIAG banner — viditeľný v HTML, ukáže prečo override nezbehol
+    _f4_diag_banner = (
+        f"<div style='background:#fff3cd;border:1px solid #ffe399;padding:8px 12px;"
+        f"margin:8px 0;font-size:11px;font-family:monospace'>"
+        f"<b>F4 diag:</b> profile=<code>{_active_profile_eff}</code> "
+        f"joint_flags=<code>{_eff_joint}</code> "
+        f"period=<code>{_eff_db_from}..{_eff_db_to}</code> "
+        f"db_result=<code>{_eff_db_period}</code></div>"
+    )
     if _agg_src is not None and not _agg_src.empty:
         try:
             _t = _eff(_agg_src, profile=_active_profile_eff, day=view_day,
@@ -6069,6 +6078,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     except Exception:
         pass
     cards = (
+        f"{_f4_diag_banner}"
         f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin:10px 0'>"
         f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{r['cum_total']:.1f} €</div></div>"
         f"<div class='card'><div class='l'>z toho DT</div><div class='v'>{r['cum_dt']:.1f} €</div></div>"
