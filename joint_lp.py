@@ -197,52 +197,31 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         mults = np.clip(mults, 0.0, 5.0)
 
     # SOC limity
-    # Bug #624 + #646: efektívne soc_min/max = soc_min/max ± reserve buffer
+    # Bug SOC-RESERVE-AUDIT-ONLY (2026-06-10): reserve sa NEAPLIKUJE na LP plánovanie.
+    # User: "ak je pouzite pravido 15% rezerva, tak to ma sluzit pre audit nie pre
+    # realitu tam sa bateria ma vybijat a nabijat podla nastavenia s ty pocita aj plan".
+    # Plán pracuje s celou kapacitou [soc_min, soc_max] (typicky 5%-100%).
+    # Reserve ostáva aktívna IBA v core/soc_use_audit.py pre RT/VDT/auto_control audit
+    # (eff_min=soc_min+reserve, eff_max=soc_max-reserve), kde slúži ako bezpečnostný
+    # buffer pred preplnením/podvybitím cez RT zásahy.
     _soc_reserve_pct = max(0.0, min(50.0, float(soc_reserve_pct or 0.0)))
-    _eff_soc_min_pct = float(soc_min_pct) + _soc_reserve_pct
-    _eff_soc_max_pct = max(_eff_soc_min_pct, float(soc_max_pct) - _soc_reserve_pct)
-    socmin = batt_kwh * _eff_soc_min_pct / 100.0
-    socmax = batt_kwh * _eff_soc_max_pct / 100.0
-    # Bug #647: soc_init clamp na [eff_min, eff_max] — symetria k terminal_soc
-    _soc_init_raw = float(soc_init_pct)
-    _soc_init_eff = max(_eff_soc_min_pct, min(_eff_soc_max_pct, _soc_init_raw))
-    if _soc_init_eff != _soc_init_raw:
-        print(f"[joint_lp #647] soc_init clamp: {_soc_init_raw:.1f}% → {_soc_init_eff:.1f}% "
-              f"(eff_min={_eff_soc_min_pct:.1f}%, eff_max={_eff_soc_max_pct:.1f}%)")
-    soc0 = batt_kwh * _soc_init_eff / 100.0
-    # Bug #643/#646: terminal_soc clamp na [eff_soc_min, eff_soc_max].
+    socmin = batt_kwh * float(soc_min_pct) / 100.0
+    socmax = batt_kwh * float(soc_max_pct) / 100.0
+    soc0 = batt_kwh * float(soc_init_pct) / 100.0
     if terminal_soc_pct is not None:
-        _term_pct_raw = float(terminal_soc_pct)
-        _term_pct_eff = max(_eff_soc_min_pct, min(_eff_soc_max_pct, _term_pct_raw))
-        if _term_pct_eff != _term_pct_raw:
-            print(f"[joint_lp #643] terminal_soc clamp: {_term_pct_raw:.1f}% → {_term_pct_eff:.1f}% "
-                  f"(eff_min={_eff_soc_min_pct:.1f}%, eff_max={_eff_soc_max_pct:.1f}%)")
-        term = batt_kwh * _term_pct_eff / 100.0
+        term = batt_kwh * float(terminal_soc_pct) / 100.0
     else:
         term = soc0
-    # Bug #645 (2026-06-09): auto-adjust SOC bound IBA pre prípady BEZ reserve buffer.
-    # Predtým: keď soc_init < socmin (vrátane reserve), znížil sa socmin → Bug #624/#643
-    # constraint sa zmazal a LP plánoval vybíjanie po soc_min (=5%) namiesto eff_min (=20%).
-    # Fix: ak má profile reserve>0, NESPUSTIŤ auto-adjust — LP musí nabíjať na začiatok
-    # aby SOC[0] dosiahlo eff_min. Pre legacy bez reserve necháme pôvodnú logiku.
-    if _soc_reserve_pct <= 0:
-        if soc0 < socmin:
-            socmin = soc0
-        if soc0 > socmax:
-            socmax = soc0
-    else:
-        # Diag log keď reserve aktívne — vidíme či LP zvládne nabiť na začiatok
-        if soc0 < socmin:
-            print(f"[joint_lp #645] soc_init={soc_init_pct:.1f}% < eff_min={_eff_soc_min_pct:.1f}% "
-                  f"— LP musí v prvých slotoch nabiť (žiadny auto-adjust kvôli reserve)")
-        if soc0 > socmax:
-            print(f"[joint_lp #645] soc_init={soc_init_pct:.1f}% > soc_max={soc_max_pct:.1f}%")
-    # Bug #644: diagnostika joint_lp vstupu
+    # Auto-adjust SOC bound ak soc_init mimo [soc_min, soc_max] (krajný fail-safe)
+    if soc0 < socmin:
+        socmin = soc0
+    if soc0 > socmax:
+        socmax = soc0
     print(f"[optimize_joint_day] batt={batt_kw:.0f}kW/{batt_kwh:.0f}kWh, "
           f"soc_init={soc_init_pct:.1f}%, soc_min={soc_min_pct:.1f}%, "
-          f"soc_reserve={_soc_reserve_pct:.1f}% → eff_min={_eff_soc_min_pct:.1f}%, "
           f"soc_max={soc_max_pct:.1f}%, term={terminal_soc_pct}, "
-          f"socmin_kwh={socmin:.0f}, term_kwh={term:.0f}")
+          f"socmin_kwh={socmin:.0f}, term_kwh={term:.0f} "
+          f"[reserve {_soc_reserve_pct:.0f}% IBA pre audit, NIE pre plán]")
 
     # Grid limits — Bug #661: rt_grid_reserve_pct headroom pre RT (analógia k soc_reserve_pct).
     # D-1 LP nominuje max (1 - reserve/100) × grid_kw → RT engine má voľný priestor
