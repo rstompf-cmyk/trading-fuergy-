@@ -132,22 +132,27 @@ def audit_rt_slot(profile: str,
         # eff_min/eff_max fallback — ak audit_action nevratil tieto polia,
         # citaj priamo z profile.plan (soc_min_pct + soc_reserve_pct).
         # Hard-coded 20/80 by bol bug (uzivatelovo nastavenie sa stratí).
+        # Bug SOC-NULL-KEY (2026-06-10): dict.get(k, default) NEvrati default
+        # ked key existuje s hodnotou None. Treba "or" pattern. Plus start_soc
+        # hard-coded 50% bol bug — citaj soc_init z profile.
+        _soc_init_default = 5.0  # posledny safety net ak profile zlyha
         try:
             import profiles as _pr_au
             _prof_au = _pr_au.load_profile(profile) or {}
             _pl_au = _prof_au.get("plan") or {}
-            _soc_min_raw = float(_pl_au.get("soc_min_pct", _pl_au.get("soc_min", 5.0)))
-            _soc_max_raw = float(_pl_au.get("soc_max_pct", _pl_au.get("soc_max", 100.0)))
-            _soc_res = float(_pl_au.get("soc_reserve_pct", 0.0) or 0.0)
+            _soc_min_raw = float(_pl_au.get("soc_min_pct") or _pl_au.get("soc_min") or 5.0)
+            _soc_max_raw = float(_pl_au.get("soc_max_pct") or _pl_au.get("soc_max") or 100.0)
+            _soc_res = float(_pl_au.get("soc_reserve_pct") or 0.0)
             _soc_res = max(0.0, min(50.0, _soc_res))
             _eff_min_default = _soc_min_raw + _soc_res
             _eff_max_default = max(_eff_min_default, _soc_max_raw - _soc_res)
+            _soc_init_default = float(_pl_au.get("soc_init_pct") or _pl_au.get("soc_init") or _soc_min_raw)
         except Exception:
             _eff_min_default = 5.0
             _eff_max_default = 100.0
-        _start_soc = float(sa.get("current_soc_pct", 50.0))
-        _eff_min = float(sa.get("soc_min_eff_pct", _eff_min_default))
-        _eff_max = float(sa.get("soc_max_eff_pct", _eff_max_default))
+        _start_soc = float(sa.get("current_soc_pct") or _soc_init_default)
+        _eff_min = float(sa.get("soc_min_eff_pct") or _eff_min_default)
+        _eff_max = float(sa.get("soc_max_eff_pct") or _eff_max_default)
         _is_charge = (rt_intent_kw < 0)
         if _start_soc < _eff_min and _is_charge:
             out["decision"] = "accept"

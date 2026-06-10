@@ -136,12 +136,21 @@ def _get_start_soc_default(profile: str) -> Dict[str, Any]:
         import profiles as _pr
         p = _pr.load_profile(profile) or {}
         plan = p.get("plan") or {}
-        # Priorita: soc_init_pct (D-1 plánovací default), potom fallback_soc_pct (VDT advisor fallback)
-        if "soc_init_pct" in plan:
-            soc = float(plan["soc_init_pct"])
+        # Priorita: soc_init_pct → soc_init → fallback_soc_pct → _PLAN_VDT_DEFAULTS
+        # Bug SOC-NULL-KEY (2026-06-10): "in plan" je True aj pre null hodnoty
+        # (napr. config.json má {"soc_init_pct": null}). float(None) → TypeError
+        # → exception → hard fail-safe 50%. Riešenie: kontrolovať is not None.
+        _v_init_pct = plan.get("soc_init_pct")
+        _v_init = plan.get("soc_init")
+        _v_fallback = plan.get("fallback_soc_pct")
+        if _v_init_pct is not None:
+            soc = float(_v_init_pct)
             src = f"profile.plan.soc_init_pct ({soc:.0f}%)"
-        elif "fallback_soc_pct" in plan:
-            soc = float(plan["fallback_soc_pct"])
+        elif _v_init is not None:
+            soc = float(_v_init)
+            src = f"profile.plan.soc_init ({soc:.0f}%)"
+        elif _v_fallback is not None:
+            soc = float(_v_fallback)
             src = f"profile.plan.fallback_soc_pct ({soc:.0f}%)"
         else:
             # Posledná instancia — _PLAN_VDT_DEFAULTS (single source of truth)
