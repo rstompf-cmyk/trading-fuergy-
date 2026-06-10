@@ -6266,6 +6266,11 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         else:
             _act_per_min = [_clip_to_batt(_nz(pb)) for pb in _batt_base]
         AC = "[" + ",".join(_js(float(x)) for x in _act_per_min) + "]"
+        # PLÁN batérie (D-1 + VDT realized + planned) — referencia "čo malo byť".
+        # Rozdiel voči AC = odchýlka (typicky keď VDT plán prekročí grid_kw_import
+        # alebo FTV nedodá → batt_kw_realistic clipnutý na 0 a vznikne dev).
+        _plan_for_ref = dview["plan_batt_kw"].fillna(0.0).tolist() if "plan_batt_kw" in dview.columns else [0.0]*len(dview)
+        AP = "[" + ",".join(_js(float(x)) for x in _plan_for_ref) + "]"
         # 15-min agregat ako druhy dataset (transparentny prehlad)
         try:
             _act_df = pd.DataFrame({"_t": dview["time"].values, "_v": _act_per_min})
@@ -6777,7 +6782,8 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         chRiadenie = (f"<h2>Riadenie batérie — predikcia (plán+RT) vs realita + SOC (deň {view_day}){_export_btn}{_now_banner}</h2>"
                 f"<div style='height:360px'><canvas id='chRi'></canvas></div>"
                 f"<script>new Chart(document.getElementById('chRi'),{{type:'line',data:{{labels:{Ld},datasets:["
-                f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
+                f"{{label:'Plán batérie (D-1 + VDT, kW)',data:{AP},borderColor:'#37474F',borderWidth:1.4,borderDash:[2,3],fill:false,stepped:true,pointRadius:0,tension:.0}},"
+                f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min, post-cap)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
                 f"{{label:'Batéria PREDIKCIA kW (15-min agregát)',data:{AC_AGG},borderColor:'#1565C0',borderDash:[6,3],fill:false,stepped:true,pointRadius:0,borderWidth:2.2}},"
                 f"{{label:'🔴 Batéria REÁLNE MERANIE kW',data:{BATT_REAL},borderColor:'#C62828',backgroundColor:'rgba(198,40,40,.0)',fill:false,pointRadius:0,borderWidth:2.2,tension:.15}},"
                 f"{{label:'RT odchýlka kW',data:{RK},borderColor:'#7030A0',backgroundColor:'rgba(112,48,160,.12)',fill:true,stepped:true,pointRadius:0,borderWidth:1.2}},"
