@@ -1308,9 +1308,36 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                                 end_day - pd.Timedelta(minutes=1), freq="1min")
                         if len(fut_idx):
                             pj = [min(len(dtprof)-1, max(0, _period_index(t, day, step))) for t in fut_idx]
+                            # Bug SOC-V (2026-06-10): SOC projekcia musí použiť SKUTOČNÝ
+                            # plánovaný batt_kw (D-1 + VDT realized + clip), nie len sch["batt_kw"]
+                            # z D-1. Pre profil s use_vdt=True boli VDT trades v plan_batt_kw
+                            # stĺpci CSV ale SOC ich ignoroval → graf SOC bol roztiahnutý.
+                            # Tu načítame _fut_plan_batt VOPRED (rovnaký kód ako nižšie ale skôr).
+                            _fut_dam_socpre = [float(sch["batt_kw"].values[i]) for i in pj]
+                            _fut_vdt_socpre = [0.0] * len(_fut_dam_socpre)
+                            try:
+                                import vdt_state as _vs_socpre
+                                from core.profile_resolver import get_active as _ga_socpre
+                                _prof_socpre = _ga_socpre()
+                                if _prof_socpre:
+                                    _vdt_kw_arr_pre = _vs_socpre.get_realized_batt_kw(
+                                        _prof_socpre, today_iso=day.isoformat(), dt_h=0.25)
+                                    if isinstance(_vdt_kw_arr_pre, list) and len(_vdt_kw_arr_pre) >= 96:
+                                        _pidx15_pre = [min(95, max(0, _period_index(t, day, 15)))
+                                                        for t in fut_idx]
+                                        _fut_vdt_socpre = [float(_vdt_kw_arr_pre[j] or 0.0)
+                                                            for j in _pidx15_pre]
+                            except Exception:
+                                pass
+                            _bkw_max_socpre = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
+                            _fut_plan_batt_socpre = [d + v for d, v in zip(_fut_dam_socpre,
+                                                                              _fut_vdt_socpre)]
+                            if _bkw_max_socpre > 0:
+                                _fut_plan_batt_socpre = [max(-_bkw_max_socpre, min(_bkw_max_socpre, x))
+                                                          for x in _fut_plan_batt_socpre]
                             soc_proj = soc; socs = []; socs_kwh = []
-                            for i in pj:
-                                soc_proj = min(bkwh, max(0.0, soc_proj - float(sch["batt_kw"].values[i])/60.0))
+                            for k, _eff_batt_kw in enumerate(_fut_plan_batt_socpre):
+                                soc_proj = min(bkwh, max(0.0, soc_proj - _eff_batt_kw / 60.0))
                                 socs.append(soc_proj/bkwh*100.0); socs_kwh.append(soc_proj)
                             last_cum_dt = float(tr["cum_dt"].iloc[-1]) if not tr.empty else cum_dt_done
                             last_cum_rt = float(tr["cum_rt"].iloc[-1]) if not tr.empty else cum_rt_done
