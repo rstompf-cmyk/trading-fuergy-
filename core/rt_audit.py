@@ -105,13 +105,50 @@ def audit_rt_slot(profile: str,
     # Užívateľ uvidí v logu "[RT-PRE-AUDIT] ... fail-open" že audit nemohol
     # rozhodnúť, ale RT sa neumelo zablokuje.
     _fail_keywords = ("zlyhalo", "raised", "exception", "Error",
-                       "not ok", "compute_current_state")
+                       "not ok", "compute_current_state",
+                       # Plán už je infeasible — audit hovorí "aj 0 kWh by
+                       # porušilo SOC". To znamená že D-1 plán + current SOC
+                       # sú nekonzistentné. RT nemá ako pomôcť pri tom, čo už
+                       # bolo zle naplánované. Lepšie nechať RT bežať
+                       # (rt_controller má per-minute SOC clip ako safety net).
+                       "aj 0 kWh by",
+                       "infeasible")
     if any(k in reason for k in _fail_keywords):
         out["decision"] = "accept"
         out["allowed_rt_kw"] = float(rt_intent_kw)
         out["scale_factor"] = 1.0
         out["reason"] = f"fail-open: {reason[:120]}"
         return out
+
+    # Bug RT-AUDIT-STARTSOC (2026-06-10): ak start_soc je už pod eff_min,
+    # audit_action každú akciu označí ako violation (lebo SOC trajektória
+    # začína mimo limitov). V tom prípade:
+    # - pre charge (nabíjanie) → fail-open (akcia zlepší SOC)
+    # - pre discharge (vybíjanie) → ostáva downscale (akcia zhorší)
+    # Analogicky ak start_soc nad eff_max:
+    # - discharge → fail-open
+    # - charge → downscale
+    try:
+        _start_soc = float(sa.get("current_soc_pct", 50.0))
+        _eff_min = float(sa.get("soc_min_eff_pct", 20.0))
+        _eff_max = float(sa.get("soc_max_eff_pct", 80.0))
+        _is_charge = (rt_intent_kw < 0)
+        if _start_soc < _eff_min and _is_charge:
+            out["decision"] = "accept"
+            out["allowed_rt_kw"] = float(rt_intent_kw)
+            out["scale_factor"] = 1.0
+            out["reason"] = (f"fail-open: start_soc {_start_soc:.1f}% < eff_min "
+                              f"{_eff_min:.1f}%, charge je legit oprava")
+            return out
+        if _start_soc > _eff_max and (not _is_charge):
+            out["decision"] = "accept"
+            out["allowed_rt_kw"] = float(rt_intent_kw)
+            out["scale_factor"] = 1.0
+            out["reason"] = (f"fail-open: start_soc {_start_soc:.1f}% > eff_max "
+                              f"{_eff_max:.1f}%, discharge je legit oprava")
+            return out
+    except Exception:
+        pass
 
     # downscale alebo reject — spočítaj povolenu časť RT navyše k planu
     allowed_total_kwh = float(sa.get("allowed_kwh", 0.0))
