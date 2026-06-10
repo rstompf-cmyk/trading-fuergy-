@@ -7084,7 +7084,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             from core.effect import (resolve_rt_col as _resolve_rt_de,
                                        get_rt_eur_series as _get_rt_de)
             _det_with_bl = _det_with_bl.copy()
-            _det_with_bl["_rt_eff"] = _get_rt_de(_det_with_bl, joint_flags=_chc_joint)
+            _det_with_bl["_rt_eff"] = _get_rt_de(_det_with_bl, joint_flags=_eff_joint)
             _det = (_det_with_bl.groupby("ts15").agg(dt=("dt_rev_min", "sum"), rt=("_rt_eff", "sum"),
                                                        bl=("_bl", "sum"))
                     .reset_index().sort_values("ts15"))
