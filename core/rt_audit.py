@@ -91,10 +91,26 @@ def audit_rt_slot(profile: str,
         return out
 
     decision = sa.get("decision", "accept")
+    reason = sa.get("reason", "")
     if decision == "accept":
         out["decision"] = "accept"
         out["allowed_rt_kw"] = float(rt_intent_kw)
         out["scale_factor"] = 1.0
+        return out
+
+    # Bug RT-AUDIT-FAILOPEN (2026-06-10): ak audit_action zlyhal kvôli
+    # internej chybe (compute_current_state, parse, atď), nesprávne by sme
+    # vrátili scale=0 a vypli RT pre celý deň. Lepšie fail-open: vrátiť
+    # accept (žiadny clip), nech aspoň base RT engine bežia s plnou silou.
+    # Užívateľ uvidí v logu "[RT-PRE-AUDIT] ... fail-open" že audit nemohol
+    # rozhodnúť, ale RT sa neumelo zablokuje.
+    _fail_keywords = ("zlyhalo", "raised", "exception", "Error",
+                       "not ok", "compute_current_state")
+    if any(k in reason for k in _fail_keywords):
+        out["decision"] = "accept"
+        out["allowed_rt_kw"] = float(rt_intent_kw)
+        out["scale_factor"] = 1.0
+        out["reason"] = f"fail-open: {reason[:120]}"
         return out
 
     # downscale alebo reject — spočítaj povolenu časť RT navyše k planu

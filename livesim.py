@@ -1057,7 +1057,11 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                 # ts15 = 15-min slot timestamp v tr
                                 _ts15_arr = tr["ts15"].values if "ts15" in tr.columns else None
                                 if _ts15_arr is not None and len(_ts15_arr) > 0:
-                                    _day_iso = day.isoformat()
+                                    # Bug RT-AUDIT-DATE (2026-06-10): day.isoformat()
+                                    # pre pd.Timestamp vráti "2026-06-10T00:00:00".
+                                    # date.fromisoformat() v stášom Pythone to nezvládne.
+                                    # Orezať na YYYY-MM-DD.
+                                    _day_iso = day.isoformat()[:10]
                                     # Per-15-min-slot priemer plan_batt_kw a rt_intent_kw
                                     _slot_keys = pd.to_datetime(_ts15_arr).floor("15min")
                                     _df_slot = pd.DataFrame({
