@@ -1062,63 +1062,47 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                     # date.fromisoformat() v stášom Pythone to nezvládne.
                                     # Orezať na YYYY-MM-DD.
                                     _day_iso = day.isoformat()[:10]
-                                    # Per-15-min-slot priemer plan_batt_kw a rt_intent_kw
-                                    _slot_keys = pd.to_datetime(_ts15_arr).floor("15min")
-                                    # Bug SOC-AUDIT-START (2026-06-10): vytiahnut SOC tesne
-                                    # pred slotom z tr (aktualna realita po vsetkych
-                                    # predchadzajucich RT zasahoch). Audit musi simulovat
-                                    # od tohto SOC, nie od start_soc na 00:00 (= D-1 plan
-                                    # start, ignoruje historicke RT). Bez tohto audit
-                                    # zamietne RT vybijanie aj ked je SOC dostatočne nad eff_min.
+                                    # Bug AUDIT-PER-MINUTE (2026-06-10): predchádzajúce volanie
+                                    # auditu používalo per-15-min priemer rt_intent a aplikovalo
+                                    # scale rovnako pre všetkých 15 minút slotu. User postreh:
+                                    # "ci audit obmedzje RT aj v konkretnom case v ktorom sa
+                                    # regulacia vykonava". Per-slot priemer ignoroval že SOC
+                                    # behom slotu rastie/klesá → ďalšie minúty by mali byť
+                                    # clipnuté agresívnejšie. Fix: volať audit per minútu so
+                                    # SOC z trace pre tú minútu.
                                     _soc_arr = (pd.to_numeric(tr.get("soc_pct", 50.0),
                                                                 errors="coerce").fillna(50.0).values
                                                 if "soc_pct" in tr.columns else None)
-                                    _df_slot = pd.DataFrame({
-                                        "slot": _slot_keys,
-                                        "plan_kw": _batt_p_d1,
-                                        "rt_int_kw": _rt_dir_arr * _rt_pct_arr / 100.0 * _bkw_max_rt,
-                                    })
-                                    _slot_means = _df_slot.groupby("slot").mean()
-                                    # Per-slot prvy index v tr (= start slotu)
-                                    _df_slot["minute_idx"] = np.arange(len(_df_slot))
-                                    _slot_first_idx = _df_slot.groupby("slot")["minute_idx"].first()
-                                    # Per slot zavolaj audit, odlož scale_factor
-                                    _scale_map = {}
+                                    _ts_min_arr = pd.to_datetime(_ts15_arr)
+                                    _per_min_scale = np.ones(len(_ts15_arr), dtype=float)
                                     _dn_cnt = 0
-                                    for _slot_ts, _row in _slot_means.iterrows():
-                                        _h = _slot_ts.hour; _m = _slot_ts.minute
+                                    for _i in range(len(_ts15_arr)):
+                                        _rt_kw_min = float(_rt_dir_arr[_i] * _rt_pct_arr[_i] / 100.0 * _bkw_max_rt)
+                                        if abs(_rt_kw_min) < 1.0:
+                                            continue   # žiadne RT v tejto minúte
+                                        _plan_kw_min = float(_batt_p_d1[_i])
+                                        _ts_min = _ts_min_arr[_i]
+                                        _h = _ts_min.hour; _m = _ts_min.minute
                                         _sidx = _h * 4 + (_m // 15)
-                                        # SOC tesne pred slotom (na prvej minute slotu, ak
-                                        # neexistuje fallback na None — audit pouzije D-1 start)
-                                        _soc_at_si = None
-                                        if _soc_arr is not None and _slot_ts in _slot_first_idx.index:
-                                            _first_i = int(_slot_first_idx[_slot_ts])
-                                            if _first_i > 0:
-                                                _soc_at_si = float(_soc_arr[_first_i - 1])
-                                            else:
-                                                _soc_at_si = float(_soc_arr[0])
+                                        _soc_at_i = (float(_soc_arr[_i - 1]) if _i > 0
+                                                       else float(_soc_arr[0])) if _soc_arr is not None else None
                                         _ax = _audit_rt(_prof_rt, _day_iso, int(_sidx),
-                                                          float(_row["plan_kw"]),
-                                                          float(_row["rt_int_kw"]),
+                                                          _plan_kw_min, _rt_kw_min,
                                                           step_min=15,
-                                                          current_soc_pct=_soc_at_si)
+                                                          current_soc_pct=_soc_at_i)
                                         _sf = float(_ax.get("scale_factor", 1.0))
                                         if _sf < 0.99:
-                                            _scale_map[_slot_ts] = _sf
+                                            _per_min_scale[_i] = _sf
                                             _dn_cnt += 1
-                                            if _dn_cnt <= 5:   # log iba prvých 5
-                                                print(f"[RT-PRE-AUDIT] {_prof_rt} slot={_h:02d}:{_m:02d} "
-                                                      f"plan={_row['plan_kw']:.0f} rt_int={_row['rt_int_kw']:.0f} kW "
-                                                      f"scale={_sf:.2f} ({_ax.get('reason','')[:60]})")
-                                    # Aplikuj scale_factor per minúta
-                                    if _scale_map:
-                                        _per_min_scale = np.array([
-                                            _scale_map.get(_slot_keys[_i], 1.0)
-                                            for _i in range(len(_ts15_arr))
-                                        ], dtype=float)
+                                            if _dn_cnt <= 5:
+                                                print(f"[RT-PRE-AUDIT min] {_prof_rt} "
+                                                      f"{_ts_min.strftime('%H:%M')} "
+                                                      f"SOC={_soc_at_i:.1f}% plan={_plan_kw_min:.0f} "
+                                                      f"rt={_rt_kw_min:.0f} kW scale={_sf:.2f}")
+                                    if _dn_cnt > 0:
                                         _rt_pct_arr = _rt_pct_arr * _per_min_scale
                                         print(f"[RT-PRE-AUDIT] {_prof_rt} {_day_iso}: "
-                                              f"clipnutých {_dn_cnt}/{len(_slot_means)} slotov")
+                                              f"clipnutých {_dn_cnt}/{len(_ts15_arr)} minút (per-minute audit)")
                         except Exception as _e_rta:
                             print(f"[RT-PRE-AUDIT] zlyhal: {_e_rta} → pokračujem fail-open")
 
