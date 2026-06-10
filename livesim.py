@@ -1084,35 +1084,6 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _dis_real = np.minimum(_plan_dis, _avail_for_dis)
                     _batt_real = _dis_real - _chg_real                              # ±kW
                     tr["batt_kw_realistic"] = _batt_real.round(1)
-                    # Bug SOC-FROM-REALISTIC (2026-06-10): SOC musí integrovať
-                    # batt_kw_realistic (= post grid+FTV clip), NIE plán+RT z rt_controller.
-                    # rt_controller nemá info o grid_export/FTV/load → integruje nereálne
-                    # batt (napr. -6000 kW plán keď grid=200 → SOC padne na 0% za pár min).
-                    # Užívateľ: "vypocet soc nepocita to co je realita". Toto je oprava.
-                    try:
-                        _bkwh_cap = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
-                        _eff_d_real = float(getattr(cfg, "eff_d", 0.95) or 0.95)
-                        _eff_c_real = float(getattr(cfg, "eff_c", 0.95) or 0.95)
-                        # eff_d/eff_c môžu byť v % (95) alebo zlomku (0.95). Normalize.
-                        if _eff_d_real > 2: _eff_d_real /= 100.0
-                        if _eff_c_real > 2: _eff_c_real /= 100.0
-                        # Štartovacie SOC: prvý záznam v tr (kde rt_controller už začal)
-                        _soc_kwh_start = float(tr["soc_kwh"].iloc[0]) if "soc_kwh" in tr.columns else float(soc)
-                        _soc_run = _soc_kwh_start
-                        _soc_kwh_new = np.zeros(len(_batt_real))
-                        for _i, _k in enumerate(_batt_real):
-                            _kwh_min = float(_k) / 60.0   # +discharge / -charge
-                            if _kwh_min > 0:
-                                _soc_run -= _kwh_min / _eff_d_real
-                            else:
-                                _soc_run += -_kwh_min * _eff_c_real
-                            _soc_run = max(0.0, min(_bkwh_cap, _soc_run))
-                            _soc_kwh_new[_i] = _soc_run
-                        if _bkwh_cap > 0:
-                            tr["soc_kwh"] = _soc_kwh_new.round(1)
-                            tr["soc_pct"] = (_soc_kwh_new / _bkwh_cap * 100.0).round(1)
-                    except Exception as _e_soc:
-                        print(f"[SOC-FROM-REALISTIC] recompute zlyhal: {_e_soc}")
                     # Real grid flow (po batérii, pred curtailom)
                     _real_grid_kw_pre = _ftv_r - _load_r + _batt_real               # kW (+= export)
                     # CURTAIL: VÝLUČNE z reality. Plán curtail sa ignoruje.
@@ -1337,36 +1308,9 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                                 end_day - pd.Timedelta(minutes=1), freq="1min")
                         if len(fut_idx):
                             pj = [min(len(dtprof)-1, max(0, _period_index(t, day, step))) for t in fut_idx]
-                            # Bug SOC-V (2026-06-10): SOC projekcia musí použiť SKUTOČNÝ
-                            # plánovaný batt_kw (D-1 + VDT realized + clip), nie len sch["batt_kw"]
-                            # z D-1. Pre profil s use_vdt=True boli VDT trades v plan_batt_kw
-                            # stĺpci CSV ale SOC ich ignoroval → graf SOC bol roztiahnutý.
-                            # Tu načítame _fut_plan_batt VOPRED (rovnaký kód ako nižšie ale skôr).
-                            _fut_dam_socpre = [float(sch["batt_kw"].values[i]) for i in pj]
-                            _fut_vdt_socpre = [0.0] * len(_fut_dam_socpre)
-                            try:
-                                import vdt_state as _vs_socpre
-                                from core.profile_resolver import get_active as _ga_socpre
-                                _prof_socpre = _ga_socpre()
-                                if _prof_socpre:
-                                    _vdt_kw_arr_pre = _vs_socpre.get_realized_batt_kw(
-                                        _prof_socpre, today_iso=day.isoformat(), dt_h=0.25)
-                                    if isinstance(_vdt_kw_arr_pre, list) and len(_vdt_kw_arr_pre) >= 96:
-                                        _pidx15_pre = [min(95, max(0, _period_index(t, day, 15)))
-                                                        for t in fut_idx]
-                                        _fut_vdt_socpre = [float(_vdt_kw_arr_pre[j] or 0.0)
-                                                            for j in _pidx15_pre]
-                            except Exception:
-                                pass
-                            _bkw_max_socpre = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
-                            _fut_plan_batt_socpre = [d + v for d, v in zip(_fut_dam_socpre,
-                                                                              _fut_vdt_socpre)]
-                            if _bkw_max_socpre > 0:
-                                _fut_plan_batt_socpre = [max(-_bkw_max_socpre, min(_bkw_max_socpre, x))
-                                                          for x in _fut_plan_batt_socpre]
                             soc_proj = soc; socs = []; socs_kwh = []
-                            for k, _eff_batt_kw in enumerate(_fut_plan_batt_socpre):
-                                soc_proj = min(bkwh, max(0.0, soc_proj - _eff_batt_kw / 60.0))
+                            for i in pj:
+                                soc_proj = min(bkwh, max(0.0, soc_proj - float(sch["batt_kw"].values[i])/60.0))
                                 socs.append(soc_proj/bkwh*100.0); socs_kwh.append(soc_proj)
                             last_cum_dt = float(tr["cum_dt"].iloc[-1]) if not tr.empty else cum_dt_done
                             last_cum_rt = float(tr["cum_rt"].iloc[-1]) if not tr.empty else cum_rt_done

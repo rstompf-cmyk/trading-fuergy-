@@ -408,45 +408,21 @@ def _carried_soc_banner(date: str, soc_init_pct: float, case: str = "plan_d1") -
 
 def _resolve_soc_init_carryover(date_iso: str, fp: dict,
                                    case: str = "plan_d1") -> tuple:
-    """Bug #622 + SOC-CONT: SOC kontinuita cez dni.
+    """Bug #622: vráti (soc_init_pct, source_label) pre D-1 plán.
 
-    Užívateľ: "soc nemoze kazdy den zacat od nuli alebo nastavenej hodnoty
-    ale pokracovat. delenie na dni je len logicka vec".
+    Hľadá poradí:
+      1. `lsim.carried_soc_for_date(case, port, date)` — koniec dňa D-1 zo
+         simulácie / realnej trajektórie. Použije sa ak je v rozumnom rozsahu
+         [soc_min, soc_max].
+      2. fallback na fp["soc_init"] (alebo DEF["soc_init"]).
 
-    Priorita zdrojov SOC pre začiatok dňa N:
-      1. **plan_store**: posledný `soc_pct` plánu pre deň N-1 (deterministický
-         LP výsledok z D-1 plánu). Použije sa AJ keď livesim ešte nezbehol.
-      2. **livesim trace**: `lsim.carried_soc_for_date` — koniec realizácie
-         dňa N-1 po RT zásahoch. Použije sa ak je plan_store fallback.
-      3. **manual** (`fp["soc_init"]`): IBA pre prvý deň simulácie, alebo
-         keď nič iné nie je k dispozícii (žiadny plán + žiadne livesim CSV).
+    Cieľ: D-1 plán začne s reálnym SOC po predošlom dni, nie ideálnym z form.
+    Tým sa znížia nereálne nominácie ktoré spôsobujú odchýlku v evening peakoch.
 
     Returns:
-        (soc_pct, source) — source ∈ {"plan_store", "carried", "manual_fallback",
-                                         "manual_clamped"}
+        (soc_pct, source) — source ∈ {"carried", "manual_fallback", "manual_clamped"}
     """
     manual_soc = float(fp.get("soc_init", DEF["soc_init"]))
-    soc_min = float(fp.get("soc_min", DEF["soc_min"]))
-    soc_max = float(fp.get("soc_max", DEF["soc_max"]))
-    # Krok 1: plan_store — posledný soc_pct plánu pre deň N-1
-    try:
-        import plan_store as _ps_carry
-        import datetime as _dt
-        _prev_day = (_dt.date.fromisoformat(date_iso) - _dt.timedelta(days=1)).isoformat()
-        _step_min = 60 if case == "plan_d1" else 15
-        _kind = "plan" if case == "plan_d1" else "dentrh"
-        _prev_plan = _ps_carry.load_plan_safe(_prev_day, _step_min, kind=_kind)
-        if _prev_plan and isinstance(_prev_plan, dict):
-            _slots = _prev_plan.get("slots") or _prev_plan.get("plan") or []
-            if _slots and isinstance(_slots, list):
-                _last = _slots[-1]
-                if isinstance(_last, dict) and "soc_pct" in _last:
-                    _last_soc = float(_last["soc_pct"])
-                    if soc_min <= _last_soc <= soc_max:
-                        return (_last_soc, "plan_store")
-    except Exception as _e_ps:
-        print(f"[SOC-CONT plan_store] {date_iso}: {_e_ps}")
-    # Krok 2: livesim trace carried
     try:
         info = lsim.carried_soc_for_date(case, port=_PORT, date=date_iso)
     except Exception:
@@ -457,7 +433,11 @@ def _resolve_soc_init_carryover(date_iso: str, fp: dict,
         carried_pct = float(info["soc_pct"])
     except (KeyError, TypeError, ValueError):
         return (manual_soc, "manual_fallback")
+    # Sanity: SOC musi byt v batt rozsahu [soc_min, soc_max]
+    soc_min = float(fp.get("soc_min", DEF["soc_min"]))
+    soc_max = float(fp.get("soc_max", DEF["soc_max"]))
     if not (soc_min <= carried_pct <= soc_max):
+        # mimo rozsahu (corrupted CSV alebo prvy beh) -> manual
         print(f"[#622 carryover] {date_iso}: carried={carried_pct:.1f}% mimo "
               f"[{soc_min:.0f}, {soc_max:.0f}], fallback na manual {manual_soc:.1f}%")
         return (manual_soc, "manual_clamped")
@@ -3207,10 +3187,9 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
     # nedosiahne (= odchýlka voči trhu = pokuta).
     _soc_init_carry, _soc_init_src = _resolve_soc_init_carryover(
         date, {"soc_init": soc_init, "soc_min": soc_min, "soc_max": soc_max}, case="dentrh")
-    soc_init_user = soc_init   # zachovaj manual pre ui_settings/profile zápis
     if _soc_init_src == "carried":
         print(f"[#622 /dentrh POST] {date}: soc_init={soc_init:.1f}% → "
-              f"carried {_soc_init_carry:.1f}% (LP only, profile zostáva {soc_init_user:.1f}%)")
+              f"carried {_soc_init_carry:.1f}%")
         soc_init = _soc_init_carry
     # asymetrické limity siete: ak prázdne, použiť grid_kw (backward compat)
     gki = float(grid_kw_import) if grid_kw_import is not None else float(grid_kw)
@@ -3237,7 +3216,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
     # hodnotu starou hodnotou z .plan (lebo _dentrh_form má .plan > .dentrh priority).
     _SHARED_SYNC = dict(lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
                           batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
-                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
+                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init, terminal_soc=terminal_soc,
                           soc_reserve_pct=float(soc_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
@@ -5414,50 +5393,6 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             dview["plan_grid_kwh"] = (dview["plan_grid_dam_kwh"].fillna(0.0)
                                                        + dview["plan_grid_vdt_kwh"].fillna(0.0))
                         _vdt_diag["applied"] = int(sum(1 for v in _vdt_kw_per if abs(v) > 0.01))
-
-                        # Bug BATT-REAL-RECOMPUTE (2026-06-10): livesim CSV mohol zapísať
-                        # batt_kw_realistic PRED tým, ako sa VDT trade dopísal do paper trades
-                        # (= za behu sa neaktualizuje, ostáva stale). Plus pre future minúty
-                        # batt_kw_realistic vôbec neexistuje. Po Bug Z VDT prepise plan_batt_kw
-                        # prepočítaj batt_kw_realistic z aktuálneho plánu + grid+FTV clip
-                        # (identická logika ako livesim.py riadky ~1062-1086).
-                        try:
-                            import profiles as _pr_br
-                            _p_br = _pr_br.load_profile(_prof_load) or {}
-                            _pl_br = (_p_br.get("plan") or {})
-                            _gki = float(_pl_br.get("grid_kw_import", 0.0) or 0.0)
-                            _gke = float(_pl_br.get("grid_kw_export", 0.0) or 0.0)
-                            _bkw_max_br = float(_pl_br.get("batt_kw", 0.0) or 0.0)
-                            _ftv_arr_br = pd.to_numeric(
-                                dview.get("ftv_min_real_kw", pd.Series([0.0]*len(dview))),
-                                errors="coerce").fillna(0.0).values
-                            _load_arr_br = pd.to_numeric(
-                                dview.get("load_min_real_kw", pd.Series([0.0]*len(dview))),
-                                errors="coerce").fillna(0.0).values
-                            _pb_arr_br = pd.to_numeric(
-                                dview["plan_batt_kw"], errors="coerce").fillna(0.0).values
-                            _rd_arr_br = pd.to_numeric(
-                                dview.get("rt_dir", pd.Series([0.0]*len(dview))),
-                                errors="coerce").fillna(0.0).values
-                            _rp_arr_br = pd.to_numeric(
-                                dview.get("rt_power_pct", pd.Series([0.0]*len(dview))),
-                                errors="coerce").fillna(0.0).values
-                            _bp_br = _pb_arr_br + _rd_arr_br * _rp_arr_br / 100.0 * _bkw_max_br
-                            if _bkw_max_br > 0:
-                                _bp_br = np.clip(_bp_br, -_bkw_max_br, _bkw_max_br)
-                            _plan_chg_br = np.maximum(-_bp_br, 0.0)
-                            _plan_dis_br = np.maximum(_bp_br, 0.0)
-                            _avail_chg_br = np.maximum(_ftv_arr_br - _load_arr_br, 0.0) + _gki
-                            _avail_dis_br = _gke + np.maximum(_load_arr_br - _ftv_arr_br, 0.0)
-                            _chg_r_br = np.minimum(_plan_chg_br, _avail_chg_br)
-                            _dis_r_br = np.minimum(_plan_dis_br, _avail_dis_br)
-                            dview["batt_kw_realistic"] = np.round(_dis_r_br - _chg_r_br, 1)
-                            _vdt_diag["batt_real_recomputed"] = int(len(_pb_arr_br))
-                            _vdt_diag["gki"] = _gki
-                            _vdt_diag["gke"] = _gke
-                        except Exception as _e_br:
-                            print(f"[BATT-REAL-RECOMPUTE] zlyhal: {_e_br}")
-
                         # Bug Z: SOC trajektória musí reflektovať plan_batt_kw (D-1+VDT).
                         # Predtým: soc_pct z _run_physical_day = D-1 only → SOC nereaguje na VDT.
                         # Recompute: integruj plan_batt_kw cez čas (1-min step) + start SOC z prvého
@@ -5508,19 +5443,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             _soc_cur_kwh = max(_soc_min_kwh,
                                                 min(_soc_max_kwh,
                                                     _start_soc / 100.0 * _batt_kwh_cap))
-                            # Bug SOC-REALISTIC-SOURCE (2026-06-10): SOC musí integrovať
-                            # reálny výkon na batérii — `batt_kw_realistic` (= D-1 plán +
-                            # VDT + RT, post grid+FTV clip). Predtým integroval `plan_batt_kw`
-                            # (= D-1 + VDT BEZ RT) → graf nereagoval na RT zásahy.
-                            # Užívateľ: "spocita aktualny vykon na baterii (nezalezi ako vznikol)".
-                            _src_col = "plan_batt_kw"
-                            if "batt_kw_realistic" in dview.columns:
-                                _br_check = pd.to_numeric(
-                                    dview["batt_kw_realistic"], errors="coerce").fillna(0)
-                                if _br_check.abs().sum() > 0.1:
-                                    _src_col = "batt_kw_realistic"
-                            _vdt_diag["soc_src_col"] = _src_col
-                            _pb_arr = dview[_src_col].fillna(0.0).tolist()
+                            _pb_arr = dview["plan_batt_kw"].fillna(0.0).tolist()
                             for _pb in _pb_arr:
                                 _dkwh_req = float(_pb) / 60.0   # kW × 1/60 h (signed)
                                 if _dkwh_req > 0:
@@ -5546,38 +5469,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             dview["soc_pct"] = _socs
                             # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
                             # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
-                            # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
-                            # Ak sme integrovali batt_kw_realistic, ten je už post-cap reality;
-                            # prepísanie plan_batt_kw by zamiešalo plán a realitu.
-                            if _src_col == "plan_batt_kw":
-                                dview["plan_batt_kw"] = _pb_realiz
-
-                            # Bug SOC-PLAN-PARALLEL (2026-06-10): paralelný SOC z plan_batt_kw
-                            # (= D-1 nominácia + VDT realized + plánované VDT). Užívateľ chce
-                            # vidieť aj full-day predikciu (vrátane budúcich zobchodovaných slotov),
-                            # nielen post-cap realitu. Reálne `soc_pct` ostáva z batt_kw_realistic.
-                            try:
-                                _soc_cur_plan = max(_soc_min_kwh,
-                                                    min(_soc_max_kwh,
-                                                        _start_soc / 100.0 * _batt_kwh_cap))
-                                _socs_plan = []
-                                _pb_plan_arr = dview["plan_batt_kw"].fillna(0.0).tolist()
-                                for _pbp in _pb_plan_arr:
-                                    _dkwh = float(_pbp) / 60.0
-                                    if _dkwh > 0:
-                                        _draw = _dkwh / max(0.01, _eff_d)
-                                        _avail = max(0.0, _soc_cur_plan - _soc_min_kwh)
-                                        _soc_cur_plan -= min(_draw, _avail)
-                                    elif _dkwh < 0:
-                                        _push = abs(_dkwh) * _eff_c
-                                        _room = max(0.0, _soc_max_kwh - _soc_cur_plan)
-                                        _soc_cur_plan += min(_push, _room)
-                                    _sp = (_soc_cur_plan / max(1.0, _batt_kwh_cap)) * 100.0
-                                    _sp = max(_soc_min_p, min(_soc_max_p, _sp))
-                                    _socs_plan.append(_sp)
-                                dview["soc_pct_plan"] = _socs_plan
-                            except Exception:
-                                pass
+                            dview["plan_batt_kw"] = _pb_realiz
                             _vdt_diag["soc_recomputed"] = len(_socs)
                             _vdt_diag["plan_clipped"] = int(sum(
                                 1 for a, b in zip(_pb_arr, _pb_realiz)
@@ -6275,46 +6167,25 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         _has_vdt_overlay = ("plan_batt_vdt_kw" in dview.columns
                             and pd.to_numeric(dview["plan_batt_vdt_kw"],
                                               errors="coerce").fillna(0).abs().sum() > 0.1)
-        # Bug SOC-DOUBLE-RT (2026-06-10): batt_kw_realistic JE výstup rt_controller PO
-        # aplikácii RT zásahov (vrátane plan+RT cap). Predtým sa k nemu PRIDÁVAL
-        # rt_dir × rt_power_pct/100 × bkw → DVOJITÉ ZAPOČÍTANIE RT v grafe.
-        # Dôsledok: zelená "Batéria PREDIKCIA (plán+RT)" ukazovala ±6000 kW peaky,
-        # ale SOC krivka (= integrácia skutočného batt_kw_realistic) zostala plochá
-        # lebo SOC integroval iba skutočné batt akcie (post-cap).
-        # Fix: ak batt_kw_realistic existuje → použiť priamo (zahŕňa všetky vrstvy).
-        #      inak (predikcia budúcich minút) → plan_batt_kw + RT intent (bez RT lebo
-        #      pre budúcnosť rt_dir=0).
-        # Bug SOC-DOUBLE-RT-v2: po Bug BB (#560 sch.batt_kw += VDT PRED rt_controller)
-        # batt_kw_realistic už zahŕňa aj VDT, nielen D-1 plán. Legacy Bug KK komentár
-        # bol pre starý code path. Odstránené `not _has_vdt_overlay` aby fix platil
-        # AJ pre use_vdt=True profily (VW_simulacia_2). Skontroluj že stĺpec má aspoň
-        # jednu nenulovú hodnotu (= rt_controller skutočne zbehol).
-        _batt_real_col = dview.get("batt_kw_realistic") if "batt_kw_realistic" in dview.columns else None
-        _has_real = (_batt_real_col is not None
-                      and pd.to_numeric(_batt_real_col, errors="coerce").fillna(0).abs().sum() > 0.1)
-        if _has_real:
+        if "batt_kw_realistic" in dview.columns and not _has_vdt_overlay:
             _batt_base = dview["batt_kw_realistic"]
-            _add_rt_intent = False   # batt_kw_realistic už zahŕňa plán+VDT+RT post-cap
         else:
             _batt_base = dview["plan_batt_kw"]
-            _add_rt_intent = True    # fallback pre staré CSV bez batt_kw_realistic
-        # Bug #610: clip predikciu na fyzické limity batt
+        # Bug II (2026-06-07): vratit per-minute granularitu (Bug FF agregat vymazal RT korekcie
+        # ktore v slot-e maju charge aj discharge -> rusia sa; user nevidel kazdu zmenu batt).
+        # Plus pridany druhy dataset AC_AGG (15-min slot mean) ako paralelny stepped reference.
+        # Bug #610: clip predikciu na fyzické limity batt. RT engine môže
+        # generovať rt_power_pct >100% (proporcionálna reakcia na sys_MW),
+        # bez clip-u by graf "Riadenie batérie" ukazoval >batt_kw_max (napr.
+        # -15000 kW pre 6000 kW batt).
         def _clip_to_batt(v):
             if bkw > 0:
                 if v > bkw: return bkw
                 if v < -bkw: return -bkw
             return v
-        if _add_rt_intent:
-            _act_per_min = [_clip_to_batt(_nz(pb) + _nz(d) * _nz(p) / 100.0 * bkw)
-                              for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])]
-        else:
-            _act_per_min = [_clip_to_batt(_nz(pb)) for pb in _batt_base]
+        _act_per_min = [_clip_to_batt(_nz(pb) + _nz(d) * _nz(p) / 100.0 * bkw)
+                          for pb, d, p in zip(_batt_base, dview["rt_dir"], dview["rt_power_pct"])]
         AC = "[" + ",".join(_js(float(x)) for x in _act_per_min) + "]"
-        # PLÁN batérie (D-1 + VDT realized + planned) — referencia "čo malo byť".
-        # Rozdiel voči AC = odchýlka (typicky keď VDT plán prekročí grid_kw_import
-        # alebo FTV nedodá → batt_kw_realistic clipnutý na 0 a vznikne dev).
-        _plan_for_ref = dview["plan_batt_kw"].fillna(0.0).tolist() if "plan_batt_kw" in dview.columns else [0.0]*len(dview)
-        AP = "[" + ",".join(_js(float(x)) for x in _plan_for_ref) + "]"
         # 15-min agregat ako druhy dataset (transparentny prehlad)
         try:
             _act_df = pd.DataFrame({"_t": dview["time"].values, "_v": _act_per_min})
@@ -6325,12 +6196,6 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             AC_AGG = AC
         # SOC PREDIKCIA: z trace (plánovaný/projektovaný SOC, výsledok RT engine + plánu)
         SO = "[" + ",".join(_js(x) for x in dview["soc_pct"]) + "]"
-        # SOC PLÁN: full-day predikcia z plan_batt_kw (D-1 + VDT realized + plánované VDT)
-        # — ide cez celý deň, aj cez zobchodované budúce sloty.
-        if "soc_pct_plan" in dview.columns:
-            SOP = "[" + ",".join(_js(x) for x in dview["soc_pct_plan"]) + "]"
-        else:
-            SOP = "[" + ",".join(["null"] * len(dview)) + "]"
         # ── Realio realita pre SOC + batt (len v realio_overlay móde, paralelne k predikcii) ──
         if realio_overlay and "realio_batt_kw" in dview.columns:
             BATT_REAL = "[" + ",".join(_js(x) for x in dview["realio_batt_kw"]) + "]"
@@ -6826,13 +6691,11 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         chRiadenie = (f"<h2>Riadenie batérie — predikcia (plán+RT) vs realita + SOC (deň {view_day}){_export_btn}{_now_banner}</h2>"
                 f"<div style='height:360px'><canvas id='chRi'></canvas></div>"
                 f"<script>new Chart(document.getElementById('chRi'),{{type:'line',data:{{labels:{Ld},datasets:["
-                f"{{label:'Plán batérie (D-1 + VDT, kW)',data:{AP},borderColor:'#37474F',borderWidth:1.4,borderDash:[2,3],fill:false,stepped:true,pointRadius:0,tension:.0}},"
-                f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min, post-cap)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
+                f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
                 f"{{label:'Batéria PREDIKCIA kW (15-min agregát)',data:{AC_AGG},borderColor:'#1565C0',borderDash:[6,3],fill:false,stepped:true,pointRadius:0,borderWidth:2.2}},"
                 f"{{label:'🔴 Batéria REÁLNE MERANIE kW',data:{BATT_REAL},borderColor:'#C62828',backgroundColor:'rgba(198,40,40,.0)',fill:false,pointRadius:0,borderWidth:2.2,tension:.15}},"
                 f"{{label:'RT odchýlka kW',data:{RK},borderColor:'#7030A0',backgroundColor:'rgba(112,48,160,.12)',fill:true,stepped:true,pointRadius:0,borderWidth:1.2}},"
-                f"{{label:'SOC PLÁN % (D-1 + VDT, full-day)',data:{SOP},borderColor:'#9E9E9E',borderWidth:1.4,borderDash:[2,3],pointRadius:0,yAxisID:'y2',tension:.1}},"
-                f"{{label:'SOC PREDIKCIA % (realita post-cap)',data:{SO},borderColor:'#C49000',borderWidth:1.8,borderDash:[5,3],pointRadius:0,yAxisID:'y2'}},"
+                f"{{label:'SOC PREDIKCIA %',data:{SO},borderColor:'#C49000',borderWidth:1.6,borderDash:[5,3],pointRadius:0,yAxisID:'y2'}},"
                 f"{{label:'🔴 SOC REÁLNE MERANIE %',data:{SOC_REAL},borderColor:'#E65100',borderWidth:2.0,pointRadius:0,yAxisID:'y2',tension:.15}}"
                 f"]}},options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},"
                 f"elements:{{point:{{radius:0}}}},scales:{{y:{{title:{{display:true,text:'kW'}},grid:{{color:(c)=>c.tick.value===0?'#333':'#eee'}}}},"
@@ -13840,17 +13703,11 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
     zbw = float(zco_bias_w or 0.0)
     # Bug #622 (Krok A): SOC carryover z livesim trace pre /plan POST.
     # Override user-vstupu `soc_init` reálnym SOC po predošlom dni.
-    # Bug SOC-INIT-PERSIST (2026-06-10): rozdeliť na 2 premenné — carried
-    # použiť LEN pre tento konkrétny LP beh, user manual hodnota zostane
-    # uložená v profile (= východisko pre buduce dni). Predtým sa carried
-    # zapisovala do profilu cez pr.save_profile → user nevidel svoju zadanú
-    # hodnotu po každom auto-tick-u.
     _soc_init_carry_p, _soc_init_src_p = _resolve_soc_init_carryover(
         date, {"soc_init": soc_init, "soc_min": soc_min, "soc_max": soc_max}, case="plan_d1")
-    soc_init_user = soc_init   # zachovaj user manual hodnotu pre save_profile
     if _soc_init_src_p == "carried":
         print(f"[#622 /plan POST] {date}: soc_init={soc_init:.1f}% → "
-              f"carried {_soc_init_carry_p:.1f}% (LP only, profile zostáva {soc_init_user:.1f}%)")
+              f"carried {_soc_init_carry_p:.1f}%")
         soc_init = _soc_init_carry_p
     rtf = bool(rt_freedom)
     aggr = bool(aggressive_rt)                                  # default False; ak True → RT bez cycle budgetu
@@ -13883,12 +13740,9 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
         "use_vdt": bool(joint_use_vdt),
         "optimize_distribution": bool(joint_optimize_dist),
     }
-    # Bug SOC-INIT-PERSIST: do ui_settings/profile sa zapisuje soc_init_user
-    # (= manuálna hodnota zo formulára), NIE carried po Bug #622 override.
-    # Carried platí iba pre tento konkrétny LP beh, profile zostáva s manualom.
     _ui_save("plan", dict(lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
                           batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
-                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
+                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init, terminal_soc=terminal_soc,
                           soc_reserve_pct=float(soc_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost,
@@ -13917,7 +13771,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
     # SYNC: shared parametre tiež do ui_settings.dentrh aby /plan a /dentrh ostali konzistentné
     _SHARED_SYNC = dict(lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
                           batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
-                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init_user, terminal_soc=terminal_soc,
+                          soc_min=soc_min, soc_max=soc_max, soc_init=soc_init, terminal_soc=terminal_soc,
                           soc_reserve_pct=float(soc_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,

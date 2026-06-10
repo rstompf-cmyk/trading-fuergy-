@@ -937,11 +937,8 @@ def _db_save_plan(date_iso: str, step_min: int, kind: str,
                 existing.block_planned_discharge = bool(body.get("block_planned_discharge", False))
                 existing.zco_bias_w = float(body.get("zco_bias_w") or 0.0)
                 existing.rt_freedom = bool(body.get("rt_freedom", True))
-                # Vymaž staré sloty (synchronize_session='fetch' + flush, inak
-                # nasledovný INSERT zlyhá na UNIQUE constraint plan_slot.plan_id+slot_idx)
-                s.query(_DbPlanSlot).filter_by(plan_id=existing.id).delete(
-                    synchronize_session='fetch')
-                s.flush()
+                # Vymaž staré sloty
+                s.query(_DbPlanSlot).filter_by(plan_id=existing.id).delete()
                 plan_id = existing.id
             else:
                 p = _DbPlan(
