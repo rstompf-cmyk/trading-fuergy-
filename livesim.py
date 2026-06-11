@@ -130,6 +130,11 @@ CSV_COLS = ["time", "date", "ts15",
             "plan_batt_dam_kw", "plan_batt_vdt_kw",
             "plan_grid_dam_kwh", "plan_grid_vdt_kwh",
             "batt_kw_realistic", "rt_rev_realistic_min",
+            # Bug VDT-ARB-ORDER (2026-06-11): vdt_arb_min do CSV — efekt z CSV
+            # (chC export, karty cez get_vdt_arb_series priorita 1) bez runtime
+            # prepočtu z trades. Pôvodné vylúčenie (Bug #608 back-compat) padá
+            # s csv_cols_v=15 resetom.
+            "vdt_arb_min",
             "soc_kwh", "soc_pct", "budget_left_kwh",
             "dt_rev_min", "rt_rev_min", "cum_dt", "cum_rt", "cum_total"]
 # Bug #608 (2026-06-08 hot-fix): vdt_arb_min + cum_vdt_arb sa NEZAPISUJÚ do CSV
@@ -1321,8 +1326,21 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             _act_sign = {"SELL": +1.0, "DISCHARGE": +1.0,
                                           "BUY": -1.0, "CHARGE": -1.0}
                             _vt = _vt[_vt["action"].astype(str).str.upper().isin(_act_sign.keys())]
-                            # dt_real_eur per minute z trace
-                            _dt_per_min = pd.to_numeric(tr.get("dt_real_eur", 0), errors="coerce").fillna(0).values
+                            # Bug VDT-ARB-ORDER (2026-06-11): tr["dt_real_eur"] sa plní až
+                            # NIŽŠIE (po tomto bloku) → tr.get(...) tu vracal skalár 0 →
+                            # .fillna() na skalári = exception → vdt_arb_min ticho = 0.0
+                            # VŽDY. VDT arbitráž sa tým NIKDY nezapočítala do efektu.
+                            # DT clearing berieme priamo z _real_dt_hourly (rovnaký zdroj
+                            # ako settlement + neskorší zápis dt_real_eur).
+                            if "dt_real_eur" in tr.columns:
+                                _dt_per_min = pd.to_numeric(tr["dt_real_eur"], errors="coerce").fillna(0).values
+                            else:
+                                _rdt24_arb = _real_dt_hourly(d.isoformat())
+                                if _rdt24_arb is not None:
+                                    _dt_per_min = np.array([float(_rdt24_arb[min(23, pd.Timestamp(t).hour)])
+                                                             for t in tr["time"]], dtype=float)
+                                else:
+                                    _dt_per_min = np.zeros(len(tr), dtype=float)
                             _vdt_arb_min = np.zeros(len(tr), dtype=float)
                             # Mapuj každý trade do 15-min slotu (HH:MM-HH:MM alebo HH:MM)
                             for _, _row in _vt.iterrows():
