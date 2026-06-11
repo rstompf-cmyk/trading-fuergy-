@@ -376,8 +376,17 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
                        rt_no_worsen_dev=True, ftv_strict_plan=True,
                        pv_plan_kw=None, ftv_strict_deadband_kw=5.0,
                        grid_kw_import=None, grid_kw_export=None,
-                       load_min_kw=None, load_plan_kw=None):
-    """Jedna fyzická batéria – deleguje na rt_controller.run_day_physical (jeden zdroj pravdy)."""
+                       load_min_kw=None, load_plan_kw=None,
+                       enforce_realistic=True, audit_today_state=None,
+                       audit_soc_reserve_pct=0.0):
+    """Jedna fyzická batéria – deleguje na rt_controller.run_day_physical (jeden zdroj pravdy).
+
+    Bug RT-INLINE-AUDIT (2026-06-11): defaultne `enforce_realistic=True` → rt_controller
+    integruje soc s ORZANÝM batt (= fyzická realita: grid_export/import + FTV + load).
+    Tým sa rt_controller-internal soc ZHODUJE s realitou, žiadna divergencia cez deň,
+    žiadne predčasné SOC clip aktivácie v drahých hodinách (= žiadna píla 20-21h).
+    audit_today_state: dict pre audit_capacity per minútu (chráni SOC pre budúce zazmluvnené sloty).
+    """
     gkw = np.asarray(sch["grid_kwh"].values, float) / (step/60.0)
     return rtc.run_day_physical(mn_day, np.asarray(sch["batt_kw"].values, float), day, step,
                                 bd, bc, cfg.w_sys, cfg.sys_orient, soc0=soc0,
@@ -394,7 +403,10 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
                                 pv_plan_kw=pv_plan_kw,
                                 ftv_strict_deadband_kw=ftv_strict_deadband_kw,
                                 load_min_kw=load_min_kw,
-                                load_plan_kw=load_plan_kw)
+                                load_plan_kw=load_plan_kw,
+                                enforce_realistic=enforce_realistic,
+                                audit_today_state=audit_today_state,
+                                audit_soc_reserve_pct=audit_soc_reserve_pct)
 
 
 def _load_meta(meta_path):
@@ -888,6 +900,22 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                   f"{_vdt_nonzero} nenulových slotov")
             except Exception as _e_sch_vdt:
                 print(f"[livesim Bug BB] aplikácia VDT do sch zlyhala: {_e_sch_vdt}")
+
+            # Bug RT-INLINE-AUDIT (2026-06-11): zostav audit_today_state pre rt_controller
+            # per-minute audit_capacity. Audit chráni SOC pre budúce zazmluvnené sloty
+            # (D-1 plán + VDT realized) tak, aby RT nevyčerpal kapacitu predčasne.
+            _audit_today_state = None
+            _audit_reserve = 0.0
+            try:
+                import vdt_state as _vs_a
+                from core.profile_resolver import get_active as _ga_a
+                _prof_a = _ga_a()
+                if _prof_a:
+                    _audit_today_state = _vs_a.compute_current_state(_prof_a, today=day.date()) or {}
+                    _audit_reserve = float((plan_params or {}).get("soc_reserve_pct", 0.0) or 0.0)
+            except Exception as _e_audit_state:
+                print(f"[RT-INLINE-AUDIT] compute_current_state zlyhal: {_e_audit_state}")
+
             rev, cyc, tr = _run_physical_day(cfg, mn_day, sch, day, step, bd, bc,
                                              soc0=soc, dev_budget_kwh=dev_budget, dt_bias_k=_dtk,
                                              rt_mask=_rt_mask, pv_min_kw=_pv_min_kw,
@@ -900,7 +928,10 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                              ftv_strict_deadband_kw=_ftv_deadband,
                                              grid_kw_import=_gki, grid_kw_export=_gke,
                                              load_min_kw=_load_min_kw,
-                                             load_plan_kw=_load_plan_per)
+                                             load_plan_kw=_load_plan_per,
+                                             enforce_realistic=True,
+                                             audit_today_state=_audit_today_state,
+                                             audit_soc_reserve_pct=_audit_reserve)
             day_dt_total = float(np.nansum(dtprof))
             # SK fallback odstránený — rt_controller.run_day_physical teraz akceptuje
             # ZCO=NaN (= žiadne zúčtovanie odchýlky), takže bežný flow funguje aj pre SK
@@ -1166,36 +1197,20 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _chg_real = np.minimum(_plan_chg, _avail_for_chg)
                     _dis_real = np.minimum(_plan_dis, _avail_for_dis)
                     _batt_real = _dis_real - _chg_real                              # ±kW
-                    tr["batt_kw_realistic"] = _batt_real.round(1)
-                    # Bug SOC-FROM-REALISTIC (2026-06-10): SOC musí integrovať
-                    # batt_kw_realistic (= post grid+FTV clip), NIE plán+RT z rt_controller.
-                    # rt_controller nemá info o grid_export/FTV/load → integruje nereálne
-                    # batt (napr. -6000 kW plán keď grid=200 → SOC padne na 0% za pár min).
-                    # Užívateľ: "vypocet soc nepocita to co je realita". Toto je oprava.
-                    try:
-                        _bkwh_cap = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
-                        _eff_d_real = float(getattr(cfg, "eff_d", 0.95) or 0.95)
-                        _eff_c_real = float(getattr(cfg, "eff_c", 0.95) or 0.95)
-                        # eff_d/eff_c môžu byť v % (95) alebo zlomku (0.95). Normalize.
-                        if _eff_d_real > 2: _eff_d_real /= 100.0
-                        if _eff_c_real > 2: _eff_c_real /= 100.0
-                        # Štartovacie SOC: prvý záznam v tr (kde rt_controller už začal)
-                        _soc_kwh_start = float(tr["soc_kwh"].iloc[0]) if "soc_kwh" in tr.columns else float(soc)
-                        _soc_run = _soc_kwh_start
-                        _soc_kwh_new = np.zeros(len(_batt_real))
-                        for _i, _k in enumerate(_batt_real):
-                            _kwh_min = float(_k) / 60.0   # +discharge / -charge
-                            if _kwh_min > 0:
-                                _soc_run -= _kwh_min / _eff_d_real
-                            else:
-                                _soc_run += -_kwh_min * _eff_c_real
-                            _soc_run = max(0.0, min(_bkwh_cap, _soc_run))
-                            _soc_kwh_new[_i] = _soc_run
-                        if _bkwh_cap > 0:
-                            tr["soc_kwh"] = _soc_kwh_new.round(1)
-                            tr["soc_pct"] = (_soc_kwh_new / _bkwh_cap * 100.0).round(1)
-                    except Exception as _e_soc:
-                        print(f"[SOC-FROM-REALISTIC] recompute zlyhal: {_e_soc}")
+                    # Bug RT-INLINE-AUDIT (2026-06-11): batt_kw_realistic preferuje act_batt_kw
+                    # z rt_controllera (= už integruje realistic clip dovnútra) ak je k dispozícii.
+                    # Bývalý Bug #607 _batt_p_raw post-loop je teraz nadbytočný — necháme len
+                    # ako sekundárny fallback pre profily bez enforce_realistic.
+                    if "act_batt_kw" in tr.columns:
+                        tr["batt_kw_realistic"] = tr["act_batt_kw"].round(1)
+                    else:
+                        tr["batt_kw_realistic"] = _batt_real.round(1)
+                    # Bug SOC-FROM-REALISTIC (2026-06-10): DISABLED 2026-06-11.
+                    # rt_controller teraz integruje soc s ORZANÝM batt (= enforce_realistic),
+                    # takže tr["soc_kwh"]/soc_pct sú už realistické. Post-hoc recompute by
+                    # spôsobil double-integration (= zlé hodnoty).
+                    # User postreh 2026-06-11: "vnutorne sa soc vycerpala pricom realne nie"
+                    # — fix = audit/clip dovnútra rt_controllera, nie post-hoc.
                     # Real grid flow (po batérii, pred curtailom)
                     _real_grid_kw_pre = _ftv_r - _load_r + _batt_real               # kW (+= export)
                     # CURTAIL: VÝLUČNE z reality. Plán curtail sa ignoruje.

@@ -197,7 +197,13 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                      rt_no_worsen_dev=True, ftv_strict_plan=True,
                      pv_plan_kw=None, ftv_strict_deadband_kw=5.0,
                      grid_cap_import=None, grid_cap_export=None,
-                     load_min_kw=None, load_plan_kw=None):
+                     load_min_kw=None, load_plan_kw=None,
+                     # Bug RT-INLINE-AUDIT (2026-06-11): realistic batt clip + audit dovnútra loop.
+                     # Bez tohto rt_controller-internal soc DIVERGÍ od reality (= predčasné vyčerpanie
+                     # SOC cez deň, dezolatne SOC clip aktivácie v drahých hodinách → píla 20-21h).
+                     # User 2026-06-11: "vnutorne sa soc vycerpala pricom realne nie".
+                     enforce_realistic=False, audit_today_state=None,
+                     audit_soc_reserve_pct=0.0):
     """JEDNA fyzická batéria: plán (nominácia, plan_kw_arr po periódach, +vybi/−nabi) + RT odchýlka
     zdieľajú SOC aj výkon (±BATT_KW). Odchýlka = skutočná práca − plán, zúčtovaná na ZCO.
     grid_kw_arr/grid_cap: nominovaná sieťová pozícia [kW] po periódach (už ZAHŔŇA FTV) a limit prípojky;
@@ -229,6 +235,14 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
         Keď False, fire iba pri opačných znakoch bez ohľadu na veľkosť odchýlky.
     ftv_strict_deadband_kw: prah šumu pre strict_plan override (default 5 kW). Šumové fluktuácie pod
         toto neblokujú MW arbitráž — ten ide bežne. Nad to sa preberá kontrola nad plánovou adherenciou.
+    enforce_realistic: keď True, celkový batt výkon `tot` sa per minútu oreže na fyzicky dostupný
+        výkon (= grid_export + max(load_min − ftv_min, 0) pre vybi; grid_import + max(ftv_min − load_min, 0)
+        pre nabi). Soc sa potom integruje s týmto ORZANÝM výkonom — žiadna divergencia rt_controller-internal
+        soc vs realistic. (default False = backward compat)
+    audit_today_state: dict pre `core.soc_use_audit.audit_capacity` (batt_kwh, eff_c/d, soc_min/max_pct,
+        dam_nomination_kwh [96], vdt_realized_kwh [96]). Keď zadaný, audit sa volá per minútu PRED
+        zápisom trace a orezáva RT zložku tak, aby nebola porušená SOC rezerva pre budúce zazmluvnené sloty.
+    audit_soc_reserve_pct: rezerva pásma pre audit (typicky 15 = SOC musí ostať v [soc_min+15, soc_max-15]).
 
     Vracia rev (zisk z odchýlky), cykly_spolu; pri return_trace aj minútový DataFrame."""
     import numpy as _np
@@ -462,6 +476,50 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
             _lo = (-_grid_imp - pg) if _grid_imp is not None else float("-inf")
             dev = max(_lo, min(_hi, dev))
             tot = max(-BK, min(BK, plan_kw + dev))
+        # ═════════════════════════════════════════════════════════════════════
+        # Bug RT-INLINE-AUDIT (2026-06-11): realistic clip + audit DOVNÚTRA loop
+        # ═════════════════════════════════════════════════════════════════════
+        # User postreh: "vnutorne sa soc vycerpala pricom realne nie". rt_controller
+        # interne integroval plný RT zámer cez deň → soc divergovala od reality
+        # (= post Bug SOC-FROM-REALISTIC recompute v livesim). V drahých hodinách
+        # (napr. 20:00-21:00) rt_controller-internal soc dosiahla soc_min PREDČASNE,
+        # SOC clip aktivoval → rt_dir=-1, rt_pct=60 → batt nevybíja plánovaný profit.
+        # Fix: clip tot na fyzicky dostupný výkon (avail_for_dis/chg) + audit RT cez
+        # audit_capacity PRED zápisom trace. Tým sa internal soc zhoduje s realitou.
+        if enforce_realistic and pv_min is not None and load_min is not None:
+            try:
+                m_idx_re = int((pd.Timestamp(rd.get("time")) - day_start).total_seconds() // 60)
+                if 0 <= m_idx_re < pv_min.size and 0 <= m_idx_re < load_min.size:
+                    _ftv_re = float(pv_min[m_idx_re])
+                    _load_re = float(load_min[m_idx_re])
+                    _gi_re = (_grid_imp if _grid_imp is not None else 1e9)
+                    _ge_re = (_grid_exp if _grid_exp is not None else 1e9)
+                    _avail_chg_re = max(_ftv_re - _load_re, 0.0) + _gi_re
+                    _avail_dis_re = _ge_re + max(_load_re - _ftv_re, 0.0)
+                    if tot > 0:    # vybi
+                        tot = min(tot, _avail_dis_re)
+                    elif tot < 0:  # nabi
+                        tot = max(tot, -_avail_chg_re)
+            except Exception:
+                pass
+        # Audit per minútu: orež RT zložku ak by porušila SOC rezervu pre budúce sloty
+        if audit_today_state is not None and abs(tot - plan_kw) >= 1.0:
+            try:
+                from core.soc_use_audit import audit_capacity as _cap_audit_in
+                si_15 = int(((pd.Timestamp(rd.get("time")) - day_start).total_seconds() // 60) // 15)
+                si_15 = max(0, min(95, si_15))
+                _rt_int_kw = tot - plan_kw
+                _ax = _cap_audit_in(soc/BKWH*100.0, plan_kw, _rt_int_kw,
+                                     today_state=audit_today_state,
+                                     step_min=15,
+                                     soc_reserve_pct=float(audit_soc_reserve_pct or 0.0),
+                                     si=si_15)
+                _scale_in = float(_ax.get("scale_factor", 1.0))
+                if _scale_in < 0.999:
+                    _rt_new = _rt_int_kw * _scale_in
+                    tot = max(-BK, min(BK, plan_kw + _rt_new))
+            except Exception:
+                pass
         # lo_eff sa už nastavil hore (pred lookahead blokom)
         eg = tot*e_h
         if eg > 0:
