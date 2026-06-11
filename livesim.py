@@ -594,7 +594,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
            "plan_store": plan_sigs,
            "ftv_scenarios": ftv_scen_sig,
            "profile": _prof_sig,
-           "csv_cols_v": "13"}  # bump: rt_rev_realistic_min (reality vs plan settlement cez ZCO)
+           "csv_cols_v": "14"}  # bump: Bug VDT-DATE-ISO — VDT trades sa konečne aplikujú v engine (re-sim histórie)
     sig_s = json.dumps(sig, sort_keys=True, default=str)
     meta = _load_meta(meta_path)
     if meta is not None and meta.get("settings_sig") != sig_s:
@@ -881,7 +881,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 _bkw_max_clip = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
                 if _prof_sch:
                     _vdt_kw_96 = _vs_sch.get_realized_batt_kw(_prof_sch,
-                                                              today_iso=day.isoformat(),
+                                                              today_iso=d.isoformat(),
                                                               dt_h=0.25)
                     if isinstance(_vdt_kw_96, list) and len(_vdt_kw_96) >= 96 and any(_vdt_kw_96):
                         _clipped_slots = 0
@@ -906,11 +906,11 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                 sch.at[_h, "batt_kw"] = _new
                         _vdt_nonzero = sum(1 for v in _vdt_kw_96 if abs(v)>0.01)
                         if _clipped_slots > 0:
-                            print(f"[livesim Bug BB+#625-A] sch.batt_kw += VDT pre {_prof_sch} ({day.isoformat()}): "
+                            print(f"[livesim Bug BB+#625-A] sch.batt_kw += VDT pre {_prof_sch} ({d.isoformat()}): "
                                   f"{_vdt_nonzero} nenulových slotov, CLIPPED {_clipped_slots} slotov "
                                   f"(prekročili ±{_bkw_max_clip:.0f} kW)")
                         else:
-                            print(f"[livesim Bug BB] sch.batt_kw += VDT pre {_prof_sch} ({day.isoformat()}): "
+                            print(f"[livesim Bug BB] sch.batt_kw += VDT pre {_prof_sch} ({d.isoformat()}): "
                                   f"{_vdt_nonzero} nenulových slotov")
             except Exception as _e_sch_vdt:
                 print(f"[livesim Bug BB] aplikácia VDT do sch zlyhala: {_e_sch_vdt}")
@@ -979,7 +979,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         # VDT je VŽDY 15-min granularita → pidx15 nezávislé od `step`.
                         pidx15 = [min(95, max(0, _period_index(t, day, 15))) for t in tr["ts15"]]
                         vdt_arr_kw = _vs.get_realized_batt_kw(_profile,
-                                                              today_iso=day.isoformat(),
+                                                              today_iso=d.isoformat(),
                                                               dt_h=0.25)
                         if isinstance(vdt_arr_kw, list) and len(vdt_arr_kw) >= 96:
                             vdt_per_min = [float(vdt_arr_kw[j] or 0.0) for j in pidx15]
@@ -1010,7 +1010,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     if _ga2 is not None:
                         _prof2 = _ga2()
                         if _prof2:
-                            _vdt_st = _vs2._load_vdt_realized(_prof2, day.isoformat())
+                            _vdt_st = _vs2._load_vdt_realized(_prof2, d.isoformat())
                             _vdt_kwh_arr = (_vdt_st or {}).get("kwh_batt_view") or [0.0] * 96
                             pidx15_grid = [min(95, max(0, _period_index(t, day, 15)))
                                             for t in tr["ts15"]]
@@ -1474,7 +1474,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                 _prof_socpre = _ga_socpre()
                                 if _prof_socpre:
                                     _vdt_kw_arr_pre = _vs_socpre.get_realized_batt_kw(
-                                        _prof_socpre, today_iso=day.isoformat(), dt_h=0.25)
+                                        _prof_socpre, today_iso=d.isoformat(), dt_h=0.25)
                                     if isinstance(_vdt_kw_arr_pre, list) and len(_vdt_kw_arr_pre) >= 96:
                                         _pidx15_pre = [min(95, max(0, _period_index(t, day, 15)))
                                                         for t in fut_idx]
@@ -1504,7 +1504,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                 _prof_fut = _ga_fut()
                                 if _prof_fut:
                                     _vdt_kw_arr = _vs_fut.get_realized_batt_kw(_prof_fut,
-                                                                                today_iso=day.isoformat(),
+                                                                                today_iso=d.isoformat(),
                                                                                 dt_h=0.25)
                                     if isinstance(_vdt_kw_arr, list) and len(_vdt_kw_arr) >= 96:
                                         _pidx15_fut = [min(95, max(0, _period_index(t, day, 15)))
@@ -1518,7 +1518,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             try:
                                 _prof_g = _ga_fut() if _ga_fut else None
                                 if _prof_g:
-                                    _vdt_st_fut = _vs_fut._load_vdt_realized(_prof_g, day.isoformat())
+                                    _vdt_st_fut = _vs_fut._load_vdt_realized(_prof_g, d.isoformat())
                                     _vdt_kwh_fut = (_vdt_st_fut or {}).get("kwh_batt_view") or [0.0] * 96
                                     _pidx15_grid = [min(95, max(0, _period_index(t, day, 15)))
                                                     for t in fut_idx]

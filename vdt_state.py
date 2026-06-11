@@ -251,6 +251,10 @@ def _load_vdt_realized(profile: str, today_iso: str) -> Dict[str, Any]:
     realized_kwh = [0.0] * 96
     count = 0
     total_eur = 0.0
+    # Bug VDT-DATE-ISO (2026-06-11): volajúci občas pošle Timestamp.isoformat()
+    # ("2026-06-10T00:00:00") — porovnanie ts[:10] != today_iso potom NIKDY nesedí
+    # a funkcia ticho vráti nuly (= VDT trades sa neaplikujú). Normalizuj na YYYY-MM-DD.
+    today_iso = str(today_iso)[:10]
     try:
         import vdt_live_advisor as _vla
         # Bug #620: musíme explicitne odovzdať profile, inak sandbox-aware path
@@ -317,6 +321,7 @@ def get_realized_prices_per_slot(profile: str, today_iso: str) -> list:
     prices = [float("nan")] * 96
     sum_pw = [0.0] * 96      # sum (price * weight)
     sum_w = [0.0] * 96       # sum (weight)
+    today_iso = str(today_iso)[:10]    # Bug VDT-DATE-ISO: normalizácia (viď _load_vdt_realized)
     try:
         import vdt_live_advisor as _vla
         # Bug #620: musíme explicitne odovzdať profile, inak sandbox-aware path
