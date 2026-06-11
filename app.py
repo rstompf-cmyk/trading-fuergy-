@@ -469,6 +469,58 @@ def _vdt_trade_stats(profile: str, day: str = None) -> dict:
     return out
 
 
+def _vdt_price_accuracy(profile: str, day: str, dview) -> dict:
+    """Bug VDT-EFEKTIVITA: vážená odchýlka EXEKUČNEJ ceny obchodu (reálny orderbook
+    bid/ask v momente obchodu) vs finálny OKTE VDT clearing (`vdt_eur` v trace).
+    Kladná hodnota = obchodovali sme nad clearingom (predaj výhodne / nákup draho).
+    Returns: {n, werr_eur_mwh} — n=0 ak nie sú dáta."""
+    out = dict(n=0, werr=None)
+    try:
+        if dview is None or "vdt_eur" not in getattr(dview, "columns", []):
+            return out
+        _t = pd.to_datetime(dview["time"], errors="coerce")
+        _cl = pd.to_numeric(dview["vdt_eur"], errors="coerce")
+        _cmap = {}
+        for _ts, _v in zip(_t, _cl):
+            if _v == _v and _ts == _ts:
+                _cmap.setdefault(int((_ts.hour * 60 + _ts.minute) // 15), []).append(float(_v))
+        _cavg = {k: sum(v) / len(v) for k, v in _cmap.items()}
+        if not _cavg:
+            return out
+        import vdt_live_advisor as _vla
+        import csv as _csv
+        p = _vla.paper_trades_csv_path(profile)
+        if not p or not os.path.exists(p):
+            return out
+        sw = se = 0.0
+        n = 0
+        with open(p, encoding="utf-8", newline="") as f:
+            for row in _csv.DictReader(f):
+                if str(row.get("profile") or "") != profile:
+                    continue
+                if str(row.get("ts", ""))[:10] != str(day)[:10]:
+                    continue
+                if str(row.get("action", "")).upper() not in ("BUY", "CHARGE", "SELL", "DISCHARGE"):
+                    continue
+                try:
+                    kwh = abs(float(row.get("kwh") or 0))
+                    pr_t = float(row.get("price_predicted_eur") or 0)
+                    _sl = str(row.get("slot", ""))
+                    idx = (int(_sl[:2]) * 60 + int(_sl[3:5])) // 15
+                except (TypeError, ValueError):
+                    continue
+                if kwh <= 0 or idx not in _cavg:
+                    continue
+                se += (pr_t - _cavg[idx]) * kwh
+                sw += kwh
+                n += 1
+        if sw > 0:
+            out = dict(n=n, werr=se / sw)
+    except Exception as _e:
+        print(f"[_vdt_price_accuracy] {profile}/{day}: {_e}")
+    return out
+
+
 def _vdt_eff_decorate(agg_df):
     """Bug VDT-EFEKTIVITA: doplní do per-deň agregátu stĺpce VDT nákup/predaj
     (kWh + vážená cena) z paper trades. No-op ak chýba stĺpec 'date'."""
@@ -6572,6 +6624,12 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 _spread_all = _vts_all["sell_avg"] - _vts_all["buy_avg"]
                 _day_part = ""
                 if _vts_day["n"]:
+                    # Bug VDT-EFEKTIVITA: presnosť exekučnej ceny vs OKTE clearing
+                    _acc = _vdt_price_accuracy(_prof_ve, view_day, dview)
+                    _acc_txt = ""
+                    if _acc.get("werr") is not None:
+                        _acc_txt = (f" · vs clearing {_acc['werr']:+.1f} €/MWh"
+                                    f" (n={_acc['n']})")
                     _day_part = (
                         f"<div class='card' style='background:#f3e8fd'>"
                         f"<div class='l'>VDT obchody {view_day}</div>"
@@ -6579,7 +6637,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                         f"kúpené {_vts_day['buy_kwh']:.0f} kWh @ {_vts_day['buy_avg']:.1f} · "
                         f"predané {_vts_day['sell_kwh']:.0f} kWh @ {_vts_day['sell_avg']:.1f} €/MWh</div>"
                         f"<div style='font-size:10px;color:#888'>{_vts_day['n']} obchodov · "
-                        f"cash {_vts_day['cash_eur']:+.1f} €</div></div>")
+                        f"cash {_vts_day['cash_eur']:+.1f} €{_acc_txt}</div></div>")
                 _vdt_eff_cards = _day_part + (
                     f"<div class='card' style='background:#f3e8fd'>"
                     f"<div class='l'>VDT od štartu</div>"
@@ -7438,7 +7496,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 _vdt_eur_cell = (f"<td style='text-align:right;color:#E65100'>{_vdt_p:+.0f}</td>"
                                   if _vdt_p is not None and abs(_vdt_p) > 0.01
                                   else "<td style='color:#bbb;text-align:right'>—</td>")
+                _slot_date = str(x._slot_ts)[:10]
                 trows += (f"<tr>"
+                           f"<td style='color:#888;font-size:11px'>{_slot_date}</td>"
                            f"<td>{_slot_start}–{_slot_end}</td>"
                            f"<td style='color:{_col};font-weight:600'>{_act}</td>"
                            f"<td style='text-align:right;font-weight:700'>{_nz(x.plan_batt_kw):+.0f}</td>"
@@ -7452,7 +7512,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                      f"<div class='wrap'>"
                      f"<table style='font-size:13px'>"
                      f"<tr style='background:#1F4E78;color:#fff'>"
-                     f"<th>slot</th><th>akcia</th><th title='D-1 + VDT'>batt kW</th>"
+                     f"<th>dátum</th><th>slot</th><th>akcia</th><th title='D-1 + VDT'>batt kW</th>"
                      f"<th title='D-1 plán'>z DAM</th>"
                      f"<th title='VDT realized'>z VDT</th>"
                      f"<th title='kWh za 15 min slot (+ vybíjanie, − nabíjanie)'>práca kWh</th>"
@@ -9801,10 +9861,27 @@ def vdt_live_advisor_page(
             "<th style='padding:6px 8px;text-align:right'>kWh / 15min</th>"
             "<th style='padding:6px 8px;text-align:right;background:#E65100'>DAM kWh</th>"
             "<th style='padding:6px 8px;text-align:right'>VDT extra kWh</th>"
+            "<th style='padding:6px 8px;text-align:right;background:#2E7D32'>realizované kWh</th>"
             "<th style='padding:6px 8px;text-align:right'>cena €/MWh</th>"
             "<th style='padding:6px 8px;text-align:right'>SOC po</th>"
             "</tr></thead><tbody>"
         )
+        # Bug VDT-EFEKTIVITA (2026-06-11): REALIZOVANÉ paper trades per slot —
+        # tabuľka je NÁVRH LP; bez tohto stĺpca nesedela s livesim (ten ukazuje
+        # len realizované obchody, návrh mohol byť audit gate-om odmietnutý).
+        _realized96 = [0.0] * 96
+        try:
+            import vdt_state as _vs_re
+            from core.profile_resolver import get_active as _ga_re
+            _prof_re = _ga_re() or ""
+            if _prof_re:
+                _st_re = _vs_re._load_vdt_realized(_prof_re, dt.date.today().isoformat())
+                _realized96 = (_st_re or {}).get("kwh_batt_view") or [0.0] * 96
+        except Exception as _e_re:
+            print(f"[vdt realized col] {_e_re}")
+        # Bug VDT-EFEKTIVITA: miera realizácie návrhu (Σ zrealizované / Σ návrh)
+        _sum_prop_kwh = 0.0
+        _sum_real_match_kwh = 0.0
         for p in full_plan_all:
             a = p.get("action", "")
             if a == "charge":
@@ -9845,6 +9922,29 @@ def vdt_live_advisor_page(
                 extra_html = f"<span style='color:#1F4E78;font-weight:600'>+{extra:.1f}</span>"
             else:
                 extra_html = f"<span style='color:#C62828;font-weight:600'>{extra:.1f}</span>"
+            # Bug VDT-EFEKTIVITA: realizované obchody pre slot (kwh_batt_view:
+            # + discharge / − charge → otoč na konvenciu tabuľky charge=+)
+            try:
+                _sl_re = str(p.get("slot", ""))
+                _ridx = (int(_sl_re[:2]) * 60 + int(_sl_re[3:5])) // 15
+                _re_signed = (-float(_realized96[_ridx])
+                              if 0 <= _ridx < 96 else 0.0)
+            except Exception:
+                _re_signed = 0.0
+            if abs(_re_signed) < 0.05 and abs(extra) < 0.05:
+                re_html = "<span style='color:#aaa'>—</span>"
+            elif abs(_re_signed) < 0.05:
+                re_html = ("<span style='color:#999' title='návrh nebol zrealizovaný "
+                           "(neexekuované / audit gate odmietol)'>✗ 0</span>")
+            else:
+                _re_col = "#1F4E78" if _re_signed > 0 else "#C62828"
+                _re_match = ("✓" if abs(_re_signed - extra) < max(5.0, abs(extra) * 0.05)
+                             else "⬇")
+                re_html = (f"<span style='color:{_re_col};font-weight:600' "
+                           f"title='realizovaný paper trade'>{_re_match} {_re_signed:+.1f}</span>")
+            _sum_prop_kwh += abs(extra)
+            if extra * _re_signed > 0:                       # rovnaký smer
+                _sum_real_match_kwh += min(abs(_re_signed), abs(extra))
             # Highlight aktuálny slot (slot label začína "HH:MM-..." → porovnaj prefix)
             _is_now = bool(_cur_slot_label and str(p["slot"]).startswith(_cur_slot_label))
             _row_extra = ""
@@ -9865,6 +9965,7 @@ def vdt_live_advisor_page(
                 f"<td style='padding:3px 8px;text-align:right'>{_kwh_val:.1f}</td>"
                 f"<td style='padding:3px 8px;text-align:right'>{dam_html}</td>"
                 f"<td style='padding:3px 8px;text-align:right'>{extra_html}</td>"
+                f"<td style='padding:3px 8px;text-align:right'>{re_html}</td>"
                 f"<td style='padding:3px 8px;text-align:right'>{price_s}</td>"
                 f"<td style='padding:3px 8px;text-align:right;color:#C49000;font-weight:600'>{_soc_after:.1f}%</td>"
                 f"</tr>"
@@ -9879,11 +9980,24 @@ def vdt_live_advisor_page(
             "if(off>0) w.scrollTop=off;}})();"
             "</script>"
         )
+        # Bug VDT-EFEKTIVITA: súhrn realizácie návrhu nad tabuľkou legiend
+        _real_pct = (100.0 * _sum_real_match_kwh / _sum_prop_kwh) if _sum_prop_kwh > 0.5 else None
+        if _real_pct is not None:
+            _rp_col = "#2E7D32" if _real_pct >= 80 else ("#B45309" if _real_pct >= 40 else "#C62828")
+            body += (
+                f"<div style='background:#fff;border-left:4px solid {_rp_col};padding:8px 14px;"
+                f"border-radius:6px;margin:8px 0;font-size:13px'>"
+                f"📊 <b>Realizácia VDT návrhu dnes:</b> "
+                f"<b style='color:{_rp_col}'>{_real_pct:.0f} %</b> objemu "
+                f"({_sum_real_match_kwh:.0f} z {_sum_prop_kwh:.0f} kWh zrealizovaných v smere návrhu). "
+                f"<span style='color:#666'>Nízke % = exekúcia neprešla (audit kapacita/SOC) "
+                f"alebo job ešte nebežal.</span></div>")
         body += (
             f"<p style='color:#666;font-size:11px;margin-top:6px'>"
             f"<b style='color:#E65100'>DAM kWh</b>: koľko je tento slot už predaný/kúpený v D-1 (+ export, − import). "
             f"<b style='color:#0D47A1'>VDT extra</b>: čo robí VDT navyše oproti DAM "
-            f"(+ extra nabíjanie, − extra vybíjanie z batt pohľadu). VDT total kWh = DAM + VDT extra.</p>"
+            f"(+ extra nabíjanie, − extra vybíjanie z batt pohľadu). VDT total kWh = DAM + VDT extra. "
+            f"<b style='color:#2E7D32'>realizované kWh</b>: uzavreté paper trades (✓ plne · ⬇ čiastočne · ✗ nič).</p>"
         )
 
     # ── Denný settlement card (Fáza SIM-C) ─────────────────────────────
