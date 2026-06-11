@@ -2126,6 +2126,8 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 <span>⛅ Deadband FTV odchýlky pre strict [kW]</span><input name="ftv_strict_deadband_kw" type="number" step="0.5" min="0" max="100" value="{f.get('ftv_strict_deadband_kw', 5.0)}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Celý RT zásah (MW signal + FTV balance) pozrie N hodín dopredu na plán batérie. Plánované nabíjanie zmenší možnosť RT nabíjania teraz (rezerva kapacity), plánované vybíjanie zmenší RT vybíjanie (rezerva SOC). 0 = vypnúť lookahead. Default 4 h pokrýva typický D-1 plán arbitráže.">
 <span>⏱ RT lookahead na plán [hodín]</span><input name="ftv_lookahead_h" type="number" step="0.5" min="0" max="12" value="{f.get('ftv_lookahead_h', 4.0)}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#e6f4ea;padding:4px 8px;border-radius:6px" title="Audit RT cez SOC kapacitu pozrie N hodín dopredu na plán — ak v okolí je plánované nabíjanie, RT nabíjanie sa orezáva (chráni soc_max); ak je plánované vybíjanie, RT vybíjanie sa orezáva (chráni soc_min). Default 1.0 h = audit zachytí len najbližšiu hodinu plánu. Pre konzervatívnejšie nastavenie: 2–4 h. 0 = vypnuté (RT len cez okamžitú SOC kapacitu).">
+<span>🛂 <b>Audit horizon [hodín]</b> (kapacita pre RT cez plán)</span><input name="rt_audit_horizon_h" type="number" step="0.5" min="0" max="12" value="{f.get('rt_audit_horizon_h', 1.0)}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Keď systémový signál pretrváva v jednom smere (príležitostí je veľa), agresivita FTV-balance sa zníži (~50 % pri silnej persistencii). Nechá priestor pre plán a iné zásahy.">
 <span>🌊 Persistencia signálu throttle</span><input name="ftv_persistence_throttle" type="checkbox" {"checked" if f.get("ftv_persistence_throttle", True) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#e6f4ea;padding:4px 8px;border-radius:6px" title="RT zásah (MW signal + FTV balance) nesmie nikdy zhoršiť threshold odchýlku voči obchodnému plánu. Keď FTV nedoposlúchne plán (under-deliver, pre_dev<0), RT nesmie batériu nabíjať navyše; keď FTV preteká (over-deliver), RT nesmie ďalej vybíjať. Plán adherence má prednosť pred MW signal arbitrážou.">
@@ -3382,6 +3384,7 @@ a{{color:#1F4E78}}</style></head><body>
                                   aggressive_rt=bool(_pui_plan.get("aggressive_rt", False)),
                                   ftv_balance=bool(_pui_plan.get("ftv_balance", True)),
                                   ftv_lookahead_h=float(_pui_plan.get("ftv_lookahead_h", 4.0)),
+                                  rt_audit_horizon_h=float(_pui_plan.get("rt_audit_horizon_h", 1.0)),
                                   ftv_persistence_throttle=bool(_pui_plan.get("ftv_persistence_throttle", True)),
                                   rt_no_worsen_dev=bool(_pui_plan.get("rt_no_worsen_dev", True)),
                                   ftv_strict_plan=bool(_pui_plan.get("ftv_strict_plan", True)),
@@ -13835,6 +13838,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          aggressive_rt: str = Form(default=""),
          ftv_balance: str = Form(default=""),
          ftv_lookahead_h: float = Form(default=4.0),
+         rt_audit_horizon_h: float = Form(default=1.0),
          ftv_persistence_throttle: str = Form(default=""),
          rt_no_worsen_dev: str = Form(default=""),
          ftv_strict_plan: str = Form(default=""),
@@ -13882,6 +13886,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
     aggr = bool(aggressive_rt)                                  # default False; ak True → RT bez cycle budgetu
     fbal = bool(ftv_balance)                                    # default True; ak True → FTV-driven RT balansovanie
     flah = max(0.0, min(12.0, float(ftv_lookahead_h or 4.0)))   # 0..12 hodín lookahead
+    rah = max(0.0, min(12.0, float(rt_audit_horizon_h or 1.0)))   # 0..12 hodín audit horizon
     fpth = bool(ftv_persistence_throttle)                       # default True; persistencia throttle
     rnwd = bool(rt_no_worsen_dev)                               # default True; RT nesmie zhoršovať threshold
     fsp = bool(ftv_strict_plan)                                 # default True; FTV-balance vždy fire keď pre_dev≠0
@@ -14088,6 +14093,7 @@ a{{color:#1F4E78}}</style></head><body>
                 price_scale=price_scale, pv_scale=pv_scale, block_neg_import=bool(block_neg_import),
                 no_planned_discharge=npd, zco_bias_w=zbw, rt_freedom=rtf,
                 aggressive_rt=aggr, ftv_balance=fbal, ftv_lookahead_h=flah,
+                rt_audit_horizon_h=rah,
                 ftv_persistence_throttle=fpth, rt_no_worsen_dev=rnwd,
                 ftv_strict_plan=fsp, ftv_strict_deadband_kw=fsdb,
                 baseline_im_mode=_bim_mode, baseline_im_value=_bim_val,
