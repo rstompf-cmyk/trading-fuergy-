@@ -671,8 +671,12 @@ def purge_full_profile(profile: Optional[str] = None) -> Dict[str, int]:
     except Exception as e:
         print(f"[purge_full_profile] VDT DB delete zlyhal: {e}")
     # VDT CSV — odstráň všetky riadky pre profil
+    # Bug FULL-RESET-GHOSTS časť 2 (2026-06-11): core.paths NEMÁ funkciu
+    # paper_trades_csv_path (volá sa vdt_trades_csv_path) → ImportError →
+    # except → trades CSV sa NIKDY nepurgol a obchody prežili každý úplný
+    # reset (engine/render ich čítajú z CSV, nie z DB).
     try:
-        from core.paths import paper_trades_csv_path as _vdt_csv
+        from core.paths import vdt_trades_csv_path as _vdt_csv
         import csv as _csv
         csv_p = _vdt_csv(prof)
         if os.path.exists(csv_p):
