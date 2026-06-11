@@ -273,11 +273,15 @@ def save_plan(date_iso: str, step_min: int, kind: str, *,
     # Iba pre kind='plan' (D-1) — dentrh a dam_d1 sú samostatné a delia kapacitu.
     if kind == "plan":
         try:
-            from core.capacity_ledger import reserve as _ledger_reserve, clear_day
+            from core.capacity_ledger import reserve as _ledger_reserve, release as _ledger_release
             _prof_for_ledger = resolve_profile(profile)
             if _prof_for_ledger:
-                # Reset existujúce D-1 rezervácie pre tento deň (re-uloženie plánu)
-                clear_day(_prof_for_ledger, date_iso)
+                # Reset existujúce D-1 rezervácie pre tento deň (re-uloženie plánu).
+                # Bug LEDGER-VDT-WIPE (2026-06-11): predtým clear_day = zmazal AJ VDT
+                # rezervácie → po každom regene plánu strážca kapacity "zabudol" na
+                # uzavreté obchody a advisor mohol tú istú kapacitu zobchodovať znova
+                # (D-1 5551 + VDT 2000 = 7551 kW > 6000 limit). Mažeme IBA source='d1'.
+                _ledger_release(_prof_for_ledger, date_iso, source="d1")
                 # Schedule batt_kw môže byť pod kľúčom 'batt_kw' alebo 'batt'
                 _batt_arr = schedule.get("batt_kw") or schedule.get("batt") or []
                 _step = int(step_min)
@@ -314,6 +318,37 @@ def save_plan(date_iso: str, step_min: int, kind: str, *,
                                       note=f"D-1 plán (step={_step}min)")
         except Exception as _e_ledger:
             print(f"[plan_store.save_plan #611] ledger reserve zlyhal: {_e_ledger}")
+        # Bug LEDGER-VDT-WIPE diag (2026-06-11): kolízia nového plánu s UŽ uzavretými
+        # VDT obchodmi dňa — regen LP zatiaľ obchody nerešpektuje (TODO per-slot bounds
+        # do LP), tak aspoň hlasný warning, nech kolízia nie je ticho.
+        try:
+            import vdt_state as _vs_chk
+            _prof_chk = resolve_profile(profile)
+            _vdt96 = _vs_chk.get_realized_batt_kw(_prof_chk,
+                                                  today_iso=str(date_iso)[:10],
+                                                  dt_h=0.25)
+            _batt_arr2 = schedule.get("batt_kw") or schedule.get("batt") or []
+            _bk2 = float((params or {}).get("batt_kw", 0.0) or 0.0)
+            if (_bk2 > 0 and _batt_arr2 and isinstance(_vdt96, list)
+                    and any(abs(float(v or 0.0)) > 0.01 for v in _vdt96)):
+                _step2 = max(int(step_min), 1)
+                _viol_n, _viol_max = 0, 0.0
+                for _q in range(96):
+                    _pi = _q // 4 if _step2 == 60 else (_q if _step2 == 15
+                                                         else (_q * 15) // _step2)
+                    if _pi >= len(_batt_arr2):
+                        break
+                    _tot = float(_batt_arr2[_pi] or 0.0) + float(_vdt96[_q] or 0.0)
+                    if abs(_tot) > _bk2 * 1.01:
+                        _viol_n += 1
+                        _viol_max = max(_viol_max, abs(_tot))
+                if _viol_n:
+                    print(f"[save_plan LEDGER-VDT-WIPE] ⚠ {date_iso} ({_prof_chk}): nový plán "
+                          f"+ uzavreté VDT obchody prekračujú batt_kw={_bk2:.0f} kW "
+                          f"v {_viol_n} slotoch (max {_viol_max:.0f} kW) — hrozí nedodanie. "
+                          f"LP regen musí dostať per-slot bounds z obchodov (TODO).")
+        except Exception:
+            pass
     return p
 
 
