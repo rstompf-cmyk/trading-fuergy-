@@ -532,6 +532,47 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
               f"FTV={cfg.kwp:.0f}kWp, "
               f"SOC={cfg.soc_min*100:.0f}–{cfg.soc_max*100:.0f}%, "
               f"grid={cfg.grid_kw:.0f}kW")
+    # Bug PROFILE-CFG-SSOT (2026-06-11 v noci): PROFIL je zdroj pravdy pre fyziku.
+    # plan_params prichádzajú z UI stavu — ak v momente (re)simulácie nebol uložený
+    # (čerstvý profil / po resete), cfg ostal na case defaultoch (batt 100 kW!) a deň
+    # sa NAVŽDY zapísal s orezanou batériou: real=±100 kW, rt_power_pct numericky
+    # = kW (dev/e_h/BK*100 pri BK=100) → graf ukázal ±230 000 kW a výkon "zmizol"
+    # v odchýlke. Fyzické parametre profilu prebijú UI/case defaulty VŽDY.
+    try:
+        from core.profile_resolver import get_active as _ga_cfg
+        import profiles as _pr_cfg
+        _prof_cfg_name = _ga_cfg()
+        _prof_plan_cfg = (((_pr_cfg.load_profile(_prof_cfg_name) or {}).get("plan") or {})
+                          if _prof_cfg_name else {})
+        _PHYS_KEYS = ["batt_kw", "batt_kwh", "eff_c", "eff_d", "kwp",
+                      "grid_kw", "grid_kw_import", "grid_kw_export"]
+        _overridden = []
+        for _k in _PHYS_KEYS:
+            _v = _prof_plan_cfg.get(_k)
+            if _v is None:
+                continue
+            try:
+                _v_f = float(_v)
+            except (TypeError, ValueError):
+                continue
+            if _v_f <= 0 and _k in ("batt_kw", "batt_kwh"):
+                continue                                   # prázdny profil → nechaj cfg
+            _cur = getattr(cfg, _k, None)
+            if _cur is None or abs(float(_cur) - _v_f) > 1e-6:
+                setattr(cfg, _k, _v_f)
+                _overridden.append(f"{_k}:{_cur}→{_v_f:g}")
+        for _k in ("soc_min", "soc_max"):
+            _v = _prof_plan_cfg.get(_k)
+            if _v is not None:
+                try:
+                    setattr(cfg, _k, float(_v) / 100.0)
+                except (TypeError, ValueError):
+                    pass
+        if _overridden:
+            print(f"[livesim PROFILE-CFG-SSOT] {_prof_cfg_name}: cfg prepísané z profilu: "
+                  f"{', '.join(_overridden[:6])}")
+    except Exception as _e_ssot:
+        print(f"[livesim PROFILE-CFG-SSOT] zlyhal: {_e_ssot}")
     rtc.apply_case(cfg)
     csv_path, meta_path = paths(case, port)
     now = pd.Timestamp(now) if now is not None else pd.Timestamp(dt.datetime.now())

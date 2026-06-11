@@ -321,8 +321,8 @@ def job_vdt_advisor():
                 cycle_cost=defaults.get("cycle_cost", 2.0),
                 min_spread=defaults.get("min_spread", 5.0),
                 soc_start_pct=None,
-                soc_end_min_pct=20.0,
-                max_cycles_per_day=3.0,
+                soc_end_min_pct=None,   # Bug VDT-SOC-RANGE: None → zdedí plan.soc_min z profilu
+                max_cycles_per_day=None,  # None → zdedí plan.max_cycles_per_day z profilu
                 use_orderbook=True,
                 use_dam_commitments=True,
                 profile=prof_name,
