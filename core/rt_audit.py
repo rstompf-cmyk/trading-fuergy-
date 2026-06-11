@@ -37,7 +37,8 @@ def audit_rt_slot(profile: str,
                    rt_intent_kw: float,
                    *,
                    step_min: int = 15,
-                   current_soc_pct: Optional[float] = None) -> Dict[str, Any]:
+                   current_soc_pct: Optional[float] = None,
+                   rt_persistence_slots: int = 4) -> Dict[str, Any]:
     """Audit RT zasahu pred aplikaciou.
 
     Args:
@@ -127,7 +128,8 @@ def audit_rt_slot(profile: str,
                               today_state=_today_state,
                               step_min=step_min,
                               soc_reserve_pct=_reserve,
-                              si=int(slot_idx))
+                              si=int(slot_idx),
+                              rt_persistence_slots=int(rt_persistence_slots or 4))
         out["decision"] = cap_res["decision"]
         out["allowed_rt_kw"] = cap_res["allowed_rt_kw"]
         out["scale_factor"] = cap_res["scale_factor"]

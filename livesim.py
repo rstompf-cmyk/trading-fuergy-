@@ -378,7 +378,8 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
                        grid_kw_import=None, grid_kw_export=None,
                        load_min_kw=None, load_plan_kw=None,
                        enforce_realistic=True, audit_today_state=None,
-                       audit_soc_reserve_pct=0.0):
+                       audit_soc_reserve_pct=0.0,
+                       audit_rt_persistence_slots=4):
     """Jedna fyzická batéria – deleguje na rt_controller.run_day_physical (jeden zdroj pravdy).
 
     Bug RT-INLINE-AUDIT (2026-06-11): defaultne `enforce_realistic=True` → rt_controller
@@ -406,7 +407,8 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
                                 load_plan_kw=load_plan_kw,
                                 enforce_realistic=enforce_realistic,
                                 audit_today_state=audit_today_state,
-                                audit_soc_reserve_pct=audit_soc_reserve_pct)
+                                audit_soc_reserve_pct=audit_soc_reserve_pct,
+                                audit_rt_persistence_slots=audit_rt_persistence_slots)
 
 
 def _load_meta(meta_path):
@@ -931,7 +933,8 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                              load_plan_kw=_load_plan_per,
                                              enforce_realistic=True,
                                              audit_today_state=_audit_today_state,
-                                             audit_soc_reserve_pct=_audit_reserve)
+                                             audit_soc_reserve_pct=_audit_reserve,
+                                             audit_rt_persistence_slots=4)
             day_dt_total = float(np.nansum(dtprof))
             # SK fallback odstránený — rt_controller.run_day_physical teraz akceptuje
             # ZCO=NaN (= žiadne zúčtovanie odchýlky), takže bežný flow funguje aj pre SK
@@ -1129,7 +1132,8 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                             _ax = _audit_rt(_prof_rt, _day_iso, int(_sidx),
                                                               _plan_kw_min, _rt_kw_proposed,
                                                               step_min=15,
-                                                              current_soc_pct=_running_soc)
+                                                              current_soc_pct=_running_soc,
+                                                              rt_persistence_slots=4)
                                             _scale_i = float(_ax.get("scale_factor", 1.0))
                                             if _scale_i < 0.99:
                                                 _per_min_scale[_i] = _scale_i

@@ -203,7 +203,8 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                      # SOC cez deň, dezolatne SOC clip aktivácie v drahých hodinách → píla 20-21h).
                      # User 2026-06-11: "vnutorne sa soc vycerpala pricom realne nie".
                      enforce_realistic=False, audit_today_state=None,
-                     audit_soc_reserve_pct=0.0):
+                     audit_soc_reserve_pct=0.0,
+                     audit_rt_persistence_slots=4):
     """JEDNA fyzická batéria: plán (nominácia, plan_kw_arr po periódach, +vybi/−nabi) + RT odchýlka
     zdieľajú SOC aj výkon (±BATT_KW). Odchýlka = skutočná práca − plán, zúčtovaná na ZCO.
     grid_kw_arr/grid_cap: nominovaná sieťová pozícia [kW] po periódach (už ZAHŔŇA FTV) a limit prípojky;
@@ -513,7 +514,8 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                                      today_state=audit_today_state,
                                      step_min=15,
                                      soc_reserve_pct=float(audit_soc_reserve_pct or 0.0),
-                                     si=si_15)
+                                     si=si_15,
+                                     rt_persistence_slots=int(audit_rt_persistence_slots or 4))
                 _scale_in = float(_ax.get("scale_factor", 1.0))
                 if _scale_in < 0.999:
                     _rt_new = _rt_int_kw * _scale_in

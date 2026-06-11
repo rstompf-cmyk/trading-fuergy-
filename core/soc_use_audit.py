@@ -132,7 +132,8 @@ def audit_capacity(current_soc_pct: float,
                     today_state: Dict[str, Any],
                     step_min: int = 15,
                     soc_reserve_pct: float = 0.0,
-                    si: int = 0) -> Dict[str, Any]:
+                    si: int = 0,
+                    rt_persistence_slots: int = 4) -> Dict[str, Any]:
     """Vráti max povolený RT (v rovnakom smere ako rt_intent_kw) podľa kapacity.
 
     Args:
@@ -144,6 +145,13 @@ def audit_capacity(current_soc_pct: float,
         step_min: 15 alebo 60 (default 15)
         soc_reserve_pct: rezerva pásma (typicky 15)
         si: aktuálny 15-min slot index (0..95) — pre výpočet future planned
+        rt_persistence_slots: Bug AUDIT-RT-PERSISTENCE (2026-06-11) — počet 15-min slotov
+            (vrátane si) cez ktoré audit predpokladá perzistenciu RT v rovnakom smere.
+            User postreh 11:00 hodinu: "neskoro" — audit per slot povolil plný RT lebo
+            nevidel že signal pokračuje N slotov + plán nabi N slotov → batt sa preplní
+            za 36 min. Fix: budúci plán + RT (× N) tvoria spoločný headroom budget.
+            Default 4 = 1h (= predpokladá že RT signál vydrží hodinu).
+            Hodnota 1 = pôvodné per-slot správanie.
 
     Returns:
         {
@@ -181,15 +189,16 @@ def audit_capacity(current_soc_pct: float,
     vdt_kwh = list(today_state.get("vdt_realized_kwh") or [0.0] * 96)
     while len(dam_kwh) < 96: dam_kwh.append(0.0)
     while len(vdt_kwh) < 96: vdt_kwh.append(0.0)
-    # NET future = Σ (DAM + VDT) od slotu si do konca dňa, vrátane si
-    # Konvencia: + = vybíjanie (zníži SOC), − = nabíjanie (zvýši SOC)
+    # Bug AUDIT-FUTURE-CHARGE (2026-06-11): pôvodný `future_charge = -min(0, NET)`
+    # IGNOROVAL nabíjanie keď v budúcnosti je dostatok vybi (=net positive). Príklad:
+    # 11:00 plán -3631 (nabi), 19:00 plán +4000 (vybi). NET = +369 → future_charge = 0 →
+    # audit povolí RT nabi navyše plánu → batt prekročí soc_max v 11:00. Užívateľ:
+    # "ten usek okolo 11 sice reagoval ale neskoro".
+    # Fix: future_charge = ΣUΣ záporných slotov (= celkový plánovaný objem nabi). Symetricky
+    # pre discharge. Tým headroom správne odráža kapacitu potrebnú pre PLÁN cez deň.
     future_net_kwh = sum(dam_kwh[i] + vdt_kwh[i] for i in range(int(si), 96))
-    # SOC_end_planned = SOC_now - future_net (vybíjanie znižuje, nabíjanie zvyšuje)
-    # Future planned discharge = pozitív → SOC_now musí byť ≥ future_planned_discharge + eff_min
-    # Future planned charge = negat. → SOC_now musí byť ≤ eff_max - |future_planned_charge|
-
-    future_charge_kwh = -min(0.0, future_net_kwh)    # |nabíjanie|, max kapacity to vezme
-    future_discharge_kwh = max(0.0, future_net_kwh)  # vybíjanie, kapacity uvoľní
+    future_charge_kwh = sum(-min(0.0, dam_kwh[i] + vdt_kwh[i]) for i in range(int(si), 96))
+    future_discharge_kwh = sum(max(0.0, dam_kwh[i] + vdt_kwh[i]) for i in range(int(si), 96))
 
     # Headroom pre RT charge (=nabíjanie navyše k plánu):
     # SOC_now + RT_charge_kwh + plan_future_net_charge ≤ eff_max_kwh
@@ -204,14 +213,25 @@ def audit_capacity(current_soc_pct: float,
     out["headroom_charge_kwh"] = headroom_chg
     out["headroom_discharge_kwh"] = headroom_dis
 
+    # Bug AUDIT-RT-PERSISTENCE (2026-06-11): RT signal je perzistentný cez sloty.
+    # Per-slot audit (rt_persistence_slots=1) povolí plný RT pre slot 44 (11:00) napr.
+    # -2369 kW × 0.25h / eff_c = 623 kWh nabíjania ⊂ 2730 headroom → accept.
+    # ALE RT pokračuje 4 sloty (1h) + plán nabíja 4 sloty → spolu 6124 kWh nabi,
+    # batt dosiahne soc_max za 36 min, zvyšok RT je "márny".
+    # Fix: násobiť rt_intent kWh × rt_persistence_slots (= predpokladaný horizon RT).
+    # Audit potom vidí "RT cez N slotov spotrebuje X kWh" a oreže ak X > headroom.
+    persistence = max(1, int(rt_persistence_slots or 1))
+
     # Max RT v kW (smerom rt_intent_kw)
     if rt_intent_kw < 0:    # nabíjanie navyše
+        # Predpokladaná RT spotreba cez N slotov (DC batt): |rt| × dt_h × N / eff_c
+        # Ak prekročí headroom_chg, oreže rt_kw tak aby N-slot kumulatívne RT = headroom_chg.
         max_rt_abs_kwh = headroom_chg / max(eff_c, 0.01)  # AC→batt cez eff_c
-        max_rt_abs_kw = max_rt_abs_kwh / dt_h
+        max_rt_abs_kw = max_rt_abs_kwh / (dt_h * persistence)
         allowed_signed = -min(abs(rt_intent_kw), max_rt_abs_kw)
     else:                   # vybíjanie navyše
         max_rt_abs_kwh = headroom_dis * eff_d              # batt→AC cez eff_d
-        max_rt_abs_kw = max_rt_abs_kwh / dt_h
+        max_rt_abs_kw = max_rt_abs_kwh / (dt_h * persistence)
         allowed_signed = +min(abs(rt_intent_kw), max_rt_abs_kw)
 
     out["allowed_rt_kw"] = allowed_signed
