@@ -192,13 +192,17 @@ def audit_capacity(current_soc_pct: float,
     # Bug AUDIT-FUTURE-CHARGE (2026-06-11): pôvodný `future_charge = -min(0, NET)`
     # IGNOROVAL nabíjanie keď v budúcnosti je dostatok vybi (=net positive). Príklad:
     # 11:00 plán -3631 (nabi), 19:00 plán +4000 (vybi). NET = +369 → future_charge = 0 →
-    # audit povolí RT nabi navyše plánu → batt prekročí soc_max v 11:00. Užívateľ:
-    # "ten usek okolo 11 sice reagoval ale neskoro".
-    # Fix: future_charge = ΣUΣ záporných slotov (= celkový plánovaný objem nabi). Symetricky
-    # pre discharge. Tým headroom správne odráža kapacitu potrebnú pre PLÁN cez deň.
-    future_net_kwh = sum(dam_kwh[i] + vdt_kwh[i] for i in range(int(si), 96))
-    future_charge_kwh = sum(-min(0.0, dam_kwh[i] + vdt_kwh[i]) for i in range(int(si), 96))
-    future_discharge_kwh = sum(max(0.0, dam_kwh[i] + vdt_kwh[i]) for i in range(int(si), 96))
+    # audit povolí RT nabi navyše plánu → batt prekročí soc_max v 11:00.
+    # Fix: future_charge = Σ záporných slotov, ALE LIMITOVANÉ na persistence horizon
+    # (default 4 sloty = 1h). Pôvodne som počítal cez CELÝ DEŇ, ale to bolo príliš
+    # konzervatívne — audit blokoval skoro všetko RT (user postreh: "vypadlo skoro
+    # uplne RT z simulacie"). Lokálny horizont 1h zachytí aj "neskorú reakciu" v 11h
+    # plus nechá legitne RT cez ostatok dňa.
+    persistence_calc = max(1, int(rt_persistence_slots or 1))
+    si_end = min(96, int(si) + persistence_calc)
+    future_net_kwh = sum(dam_kwh[i] + vdt_kwh[i] for i in range(int(si), si_end))
+    future_charge_kwh = sum(-min(0.0, dam_kwh[i] + vdt_kwh[i]) for i in range(int(si), si_end))
+    future_discharge_kwh = sum(max(0.0, dam_kwh[i] + vdt_kwh[i]) for i in range(int(si), si_end))
 
     # Headroom pre RT charge (=nabíjanie navyše k plánu):
     # SOC_now + RT_charge_kwh + plan_future_net_charge ≤ eff_max_kwh
