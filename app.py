@@ -5560,6 +5560,18 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                         dview["plan_batt_vdt_kw"] = _vdt_kw_per
                         dview["plan_batt_kw"] = (dview["plan_batt_dam_kw"].fillna(0.0)
                                                   + dview["plan_batt_vdt_kw"].fillna(0.0))
+                        # Bug VDT-CLIP-RENDER (2026-06-11): engine clipuje D-1+VDT na
+                        # ±batt_kw (#625-A) — render musí tiež, inak graf ukazuje
+                        # nemožné výkony (dam 5935 + vdt 2707 = 8642 kW > 6000 limit).
+                        try:
+                            import profiles as _pr_clip
+                            _bkw_clip = float((((_pr_clip.load_profile(_prof_load) or {})
+                                                .get("plan") or {}).get("batt_kw", 0.0)) or 0.0)
+                            if _bkw_clip > 0:
+                                dview["plan_batt_kw"] = dview["plan_batt_kw"].clip(
+                                    -_bkw_clip, _bkw_clip)
+                        except Exception as _e_clip:
+                            print(f"[VDT-CLIP-RENDER] zlyhal: {_e_clip}")
                         # Grid: rovnaký approach
                         if "plan_grid_kwh" in dview.columns:
                             if "plan_grid_dam_kwh" in dview.columns:
