@@ -5635,12 +5635,20 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                             # start. Tým vznikala nezhoda: VDT page 16%, livesim PREDIKCIA 22%.
                             _start_soc = None
                             _start_soc_src = "?"
-                            try:
-                                _cs = _vs_load.compute_current_state(_prof_load)
-                                _start_soc = float(_cs.get("start_soc_pct"))
-                                _start_soc_src = str(_cs.get("start_soc_source", "vdt_state"))
-                            except Exception:
-                                pass
+                            # Bug SOC-DAY-START (2026-06-11): compute_current_state vracia SOC
+                            # na začiatku AKTUÁLNEHO dňa — pre minulé dni je to nezmysel
+                            # (integrácia dňa N od štartu dneška → falošný koniec dňa, graf
+                            # ukazoval 06-10 koniec 57 % hoci CSV = 16 %). Použi ho IBA keď
+                            # zobrazený deň == aktuálny deň simulácie (prov); pre minulé dni
+                            # štart = prvý soc_pct z CSV trajektórie dňa (autoritatívny zdroj).
+                            _is_current_day = bool(prov and str(view_day) == str(prov))
+                            if _is_current_day:
+                                try:
+                                    _cs = _vs_load.compute_current_state(_prof_load)
+                                    _start_soc = float(_cs.get("start_soc_pct"))
+                                    _start_soc_src = str(_cs.get("start_soc_source", "vdt_state"))
+                                except Exception:
+                                    pass
                             if _start_soc is None:
                                 if "soc_pct" in dview.columns:
                                     _first_valid = dview["soc_pct"].dropna()
