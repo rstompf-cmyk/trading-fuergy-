@@ -456,9 +456,13 @@ def compute_current_state(profile: str,
     batt_kw = float(plan.get("batt_kw") or 100.0)
     eff_c = float(plan.get("eff_c") or 0.95)
     eff_d = float(plan.get("eff_d") or 0.95)
-    soc_min = float(plan.get("soc_min_pct") or 5.0)
-    # Pre vdt_state používame fyzikálny strop SOC (default 100%), nie operačný
-    soc_max = float(plan.get("soc_max_pct") or 100.0)
+    # Bug VDT-SOC-RANGE (2026-06-11): profil ukladá rozsah batérie pod kľúčmi
+    # soc_min/soc_max — pôvodné soc_min_pct/soc_max_pct tu NIKDY neexistovali,
+    # takže profily s iným rozsahom (napr. 15-90) dostávali defaulty 5-100.
+    soc_min = float((plan.get("soc_min") if plan.get("soc_min") is not None
+                     else plan.get("soc_min_pct")) or 5.0)
+    soc_max = float((plan.get("soc_max") if plan.get("soc_max") is not None
+                     else plan.get("soc_max_pct")) or 100.0)
 
     # 2. Start SOC (vždy success, fallback chain)
     start = _get_start_soc(profile)

@@ -353,6 +353,13 @@ def audit_action(profile: str,
     except Exception:
         pass
     soc_reserve = max(0.0, min(50.0, soc_reserve))
+    # Bug VDT-SOC-RANGE (2026-06-11, user): VDT obchody sa auditujú proti ČISTÉMU
+    # rozsahu batérie z profilu (soc_min..soc_max, štandardne 5-100) — BEZ rezervy.
+    # Rezerva je headroom pre RT/auto_control reakciu, nie pre intraday obchod;
+    # s rezervou vznikal trvalý konflikt: plán ide na 5-100, audit žiadal 20-85
+    # → REJECT "aj 0 kWh by spôsobilo violation" na úplne legitímne obchody.
+    if str(source or "").lower() == "vdt":
+        soc_reserve = 0.0
     soc_min_eff = soc_min + soc_reserve
     soc_max_eff = soc_max - soc_reserve
     out["soc_min_eff_pct"] = soc_min_eff

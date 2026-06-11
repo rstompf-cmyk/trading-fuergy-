@@ -335,13 +335,18 @@ def get_live_recommendation(*,
         cycle_cost = float(_pl.get("cycle_cost_vdt") or _pl.get("cycle_cost") or 2.0)
     if min_spread is None:
         min_spread = float(_pl.get("min_spread_eur") or 5.0)
+    # Bug VDT-SOC-RANGE (2026-06-11, user): VDT advisor pracuje s ROZSAHOM BATÉRIE
+    # z profilu (plan.soc_min..plan.soc_max, štandardne 5-100) — žiadny separátny
+    # operačný strop 95 ani koniec dňa 20. Predtým plán šiel 5-100 a advisor 20-85
+    # → trvalé REJECTy/infeasible. Explicitné UI/API hodnoty majú stále prednosť.
     if soc_min_pct is None:
-        soc_min_pct = float(_pl.get("soc_min_pct") or 5.0)
+        soc_min_pct = float((_pl.get("soc_min") if _pl.get("soc_min") is not None
+                             else _pl.get("soc_min_pct")) or 5.0)
     if soc_max_pct is None:
-        # VDT advisor používa OPERAČNÝ strop (95%), nie fyzikálny (100%) zo plan.soc_max_pct
-        soc_max_pct = float(_pl.get("soc_max_pct_operational") or 95.0)
+        soc_max_pct = float((_pl.get("soc_max") if _pl.get("soc_max") is not None
+                             else _pl.get("soc_max_pct")) or 100.0)
     if soc_end_min_pct is None:
-        soc_end_min_pct = float(_pl.get("soc_end_min_pct") or 20.0)
+        soc_end_min_pct = soc_min_pct
     if max_cycles_per_day is None:
         max_cycles_per_day = float(_pl.get("max_cycles_per_day") or 3.0)
 

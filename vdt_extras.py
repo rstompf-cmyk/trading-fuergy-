@@ -259,8 +259,12 @@ def propose_greedy(orderbook_df,
     now = now or dt.datetime.now()
     batt_kw = float(profile_cfg.get("batt_kw", 500.0))
     batt_kwh = float(profile_cfg.get("batt_kwh", 800.0))
-    soc_min = float(profile_cfg.get("soc_min_pct", 5.0))
-    soc_max = float(profile_cfg.get("soc_max_pct", 95.0))
+    # Bug VDT-SOC-RANGE (2026-06-11): rozsah batérie z profilu (soc_min/soc_max,
+    # štandardne 5-100) — kľúče soc_min_pct/soc_max_pct v profile neexistujú.
+    soc_min = float((profile_cfg.get("soc_min") if profile_cfg.get("soc_min") is not None
+                     else profile_cfg.get("soc_min_pct", 5.0)) or 5.0)
+    soc_max = float((profile_cfg.get("soc_max") if profile_cfg.get("soc_max") is not None
+                     else profile_cfg.get("soc_max_pct", 100.0)) or 100.0)
     eff_c = float(profile_cfg.get("eff_c", 0.95))
     eff_d = float(profile_cfg.get("eff_d", 0.95))
     dt_h = 0.25  # 15-min
@@ -500,6 +504,11 @@ def propose_lp(orderbook_df,
     dam_commits_arr = _norm_dam_commits(dam_commits)
     dam_clr_map = _norm_dam_clearing(dam_clearing)
     ob = _extract_orderbook_prices(orderbook_df)
+    # Bug VDT-SOC-RANGE (2026-06-11): rozsah batérie z profilu (default 5-100)
+    soc_min = float((profile_cfg.get("soc_min") if profile_cfg.get("soc_min") is not None
+                     else profile_cfg.get("soc_min_pct", 5.0)) or 5.0)
+    soc_max = float((profile_cfg.get("soc_max") if profile_cfg.get("soc_max") is not None
+                     else profile_cfg.get("soc_max_pct", 100.0)) or 100.0)
 
     if orderbook_df is None or len(orderbook_df) == 0:
         return {"method": "lp", "ok": False, "error": "prázdny orderbook",
@@ -546,10 +555,10 @@ def propose_lp(orderbook_df,
             eff_c=float(profile_cfg.get("eff_c", 0.95)),
             eff_d=float(profile_cfg.get("eff_d", 0.95)),
             grid_fee=grid_fee, cycle_cost=cycle_cost,
-            soc_min_pct=float(profile_cfg.get("soc_min_pct", 5.0)),
-            soc_max_pct=float(profile_cfg.get("soc_max_pct", 95.0)),
+            soc_min_pct=soc_min,
+            soc_max_pct=soc_max,
             soc_start_pct=float(start_soc_pct),
-            soc_end_min_pct=float(profile_cfg.get("soc_min_pct", 5.0)),
+            soc_end_min_pct=soc_min,
             future_only=True,
             dam_commitments=dam_commits_arr,
         )
