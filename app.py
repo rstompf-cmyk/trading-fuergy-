@@ -6865,7 +6865,17 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # Plán = `plan_grid_kwh` (Obchod) v kW. Konverzia kWh/perióda → kW podľa step_min.
         _step_min = int(r.get("step_min", 60)) if isinstance(r, dict) else 60
         _step_h = max(_step_min, 1) / 60.0
-        _pg_kw = [(_nz(x) / _step_h) for x in dview["plan_grid_kwh"]]                          # plán siete v kW (Obchod)
+        # Bug NOM-DOUBLE (2026-06-11): plan_grid_kwh UŽ obsahuje VDT (engine #625-B aj
+        # render Bug X rebuild). "DAM nominácia" musí byť ČISTÝ DAM (plan_grid_dam_kwh),
+        # inak "Aktuálna nominácia" (nižšie: DAM + VDT realizované) pripočíta VDT 2×
+        # a graf ukáže pozíciu nad fyzický limit (symptóm: 6500 pri reálnych 6000).
+        if "plan_grid_dam_kwh" in dview.columns:
+            _pg_series_nom = dview["plan_grid_dam_kwh"].fillna(dview["plan_grid_kwh"])
+            _pg_has_pure_dam = True
+        else:
+            _pg_series_nom = dview["plan_grid_kwh"]
+            _pg_has_pure_dam = False
+        _pg_kw = [(_nz(x) / _step_h) for x in _pg_series_nom]                                  # plán siete v kW (Obchod, čistý DAM)
         # ─── ENERGY BALANCE pre chFlow (stacked bars FTV/Load/Batt/Grid) ───────────────────
         # Konvencia: zdroje (energia do prahu) sú KLADNÉ, spotreba (energia zo prahu) je ZÁPORNÁ.
         # Bilancia: FTV + Batt_dis + Grid_im = Load + Batt_chg + Grid_ex + Curtail
@@ -7027,10 +7037,15 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # VDT plán je IBA návrh z live_advisor — nie je commitment, takže sa NEPRIRÁTAVA
         # (inak by sa rovnaký obchod počítal 2× a graf by ukázal 2-3× vyšší výkon než batéria
         # vie poskytnúť).
-        _dam_plus_vdt_kw = [
-            (_nz(pg) + _nz(vr))
-            for pg, vr in zip(_pg_kw, _vdt_real_kw)
-        ]
+        # Bug NOM-DOUBLE: VDT pripočítaj len keď _pg_kw je čistý DAM; pri fallbacku
+        # (staré dáta bez plan_grid_dam_kwh) plan_grid_kwh už VDT obsahuje.
+        if _pg_has_pure_dam:
+            _dam_plus_vdt_kw = [
+                (_nz(pg) + _nz(vr))
+                for pg, vr in zip(_pg_kw, _vdt_real_kw)
+            ]
+        else:
+            _dam_plus_vdt_kw = [_nz(pg) for pg in _pg_kw]
         # _actv = plán+RT pre celý deň (pre budúce minúty rt=0 → len plán). Predtým tu bolo
         # `if lv else NaN` čo orezávalo THR/DEV pri "teraz" — teraz to ide 0-24h.
         _actv = [(_nz(pb)+_nz(d)*_nz(p)/100.0*bkw)
