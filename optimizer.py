@@ -25,7 +25,8 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
                  load_kwh=None,
                  max_export_kwh_day=None, max_import_kwh_day=None,
                  soc_reserve_pct=0.0,
-                 rt_grid_reserve_pct=0.0):
+                 rt_grid_reserve_pct=0.0,
+                 batt_dis_cap_kw=None, batt_chg_cap_kw=None):
     """`load_kwh` = spotreba zákazníka [kWh/perióda] (net-meter setup): pv + di + im − ex − ch − cu = load.
     Ak má profil naimportovanú spotrebu, predáva sa najprv self-consumption (zadarmo),
     zvyšok ide do siete/batérie. Pri load > pv treba import alebo battery discharge.
@@ -108,12 +109,25 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
             A_eq.append(row); b_eq.append(soc0)
 
     # medze premenných (LP beží BEZ vedomia o batt_kw_override — × sa aplikuje až POST-procesom)
+    # Bug LP-VDT-BOUNDS (2026-06-11): batt_dis_cap_kw / batt_chg_cap_kw = per-slot
+    # smerové stropy (kW, len T) — typicky z UŽ uzavretých VDT obchodov dňa:
+    # |dam + vdt| ≤ batt_kw ⇒ dis_cap = clip(batt_kw − vdt, 0, batt_kw),
+    # chg_cap = clip(batt_kw + vdt, 0, batt_kw). None = plný batt_kw (back-compat).
+    _dis_caps = (np.clip(np.asarray(batt_dis_cap_kw, float).reshape(-1)[:T], 0.0, batt_kw)
+                 if batt_dis_cap_kw is not None else np.full(T, batt_kw))
+    _chg_caps = (np.clip(np.asarray(batt_chg_cap_kw, float).reshape(-1)[:T], 0.0, batt_kw)
+                 if batt_chg_cap_kw is not None else np.full(T, batt_kw))
+    if _dis_caps.size < T:
+        _dis_caps = np.concatenate([_dis_caps, np.full(T - _dis_caps.size, batt_kw)])
+    if _chg_caps.size < T:
+        _chg_caps = np.concatenate([_chg_caps, np.full(T - _chg_caps.size, batt_kw)])
     bounds = []
-    for t in range(T): bounds.append((0, batt_kw*dt))        # ch
+    for t in range(T): bounds.append((0, float(_chg_caps[t])*dt))   # ch
     # ak block_planned_discharge=True, D-1 plán nikdy nevybíja (di[t]=0 vo všetkých slotoch).
     # SOC sa môže nabíjať z PV/siete, ale vybíjanie ide cez RT odchýlku až za behom.
-    _di_cap = 0.0 if block_planned_discharge else batt_kw*dt
-    for t in range(T): bounds.append((0, _di_cap))           # di
+    for t in range(T):
+        _di_cap = 0.0 if block_planned_discharge else float(_dis_caps[t])*dt
+        bounds.append((0, _di_cap))                                  # di
     for t in range(T): bounds.append((0, grid_kw_export*dt))   # ex (limit dodávky do siete)
     for t in range(T):
         # ub_im: ak je load > 0, MUSÍME povoliť import aspoň na pokrytie load (inak infeasible).

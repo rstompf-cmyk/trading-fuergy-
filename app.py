@@ -577,9 +577,13 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         _soc_init_use, _soc_init_src = _resolve_soc_init_carryover(date_iso, fp, case="plan_d1")
         print(f"[#622 _gen_one_plan 60min] {date_iso}: soc_init={_soc_init_use:.1f}% "
               f"({_soc_init_src})")
+        # Bug LP-VDT-BOUNDS: uzavreté VDT obchody dňa = smerové stropy pre LP
+        from joint_lp_integration import vdt_committed_kw_for_day as _vdtb
+        _vdt_committed = _vdtb(_jb_prof, date_iso, T=24, step_min=60)
         sch, summ = _od_or_joint_batch(
             pv_arr, decision_price,
             joint_flags=_joint_flags_b, profile=_jb_prof,
+            vdt_committed_kw=_vdt_committed,
             settle_price=price_arr,
             batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])), batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
             eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
@@ -668,8 +672,12 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         _soc_init_use15, _soc_init_src15 = _resolve_soc_init_carryover(date_iso, fp, case="dentrh")
         print(f"[#622 _gen_one_plan 15min] {date_iso}: soc_init={_soc_init_use15:.1f}% "
               f"({_soc_init_src15})")
+        # Bug LP-VDT-BOUNDS: uzavreté VDT obchody dňa = smerové stropy pre LP
+        from joint_lp_integration import vdt_committed_kw_for_day as _vdtb15
+        _vdt_committed15 = _vdtb15(_jb_prof15, date_iso, T=n, step_min=15)
         sch, summ = _od_or_joint_batch15(pv15[:n], price15[:n], dt=0.25,
                                   joint_flags=_joint_flags_b15, profile=_jb_prof15,
+                                  vdt_committed_kw=_vdt_committed15,
                                   batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])),
                                   batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
                                   eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
@@ -14307,8 +14315,17 @@ a{{color:#1F4E78}}</style></head><body>
         # baseline (NÁVRH) — bez akéhokoľvek overridu, na porovnanie s FINÁL
         # Joint LP integrácia: ak _joint_flags["enabled"], použije sa optimize_joint_day
         from joint_lp_integration import optimize_day_or_joint as _od_or_joint
+        # Bug LP-VDT-BOUNDS: uzavreté VDT obchody dňa = smerové stropy pre LP
+        from joint_lp_integration import vdt_committed_kw_for_day as _vdtb_p
+        try:
+            import plan_store as _ps_vb
+            _prof_vb = _ps_vb.resolve_profile() or "default"
+        except Exception:
+            _prof_vb = "default"
+        _vdt_committed_p = _vdtb_p(_prof_vb, d.isoformat(), T=24, step_min=60)
         sch_base, summ_base = _od_or_joint(pv_arr, decision_price,
                                  joint_flags=_joint_flags,
+                                 vdt_committed_kw=_vdt_committed_p,
                                  settle_price=price_arr,
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
@@ -14329,6 +14346,7 @@ a{{color:#1F4E78}}</style></head><body>
         else:
             sch, summ = _od_or_joint(pv_arr, decision_price,
                                  joint_flags=_joint_flags,
+                                 vdt_committed_kw=_vdt_committed_p,
                                  settle_price=price_arr,
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,

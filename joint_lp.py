@@ -91,7 +91,10 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
                         allow_grid_charge: bool = True,
                         block_planned_discharge: bool = False,
                         block_neg_import: bool = False,
-                        dt: float = 1.0) -> Dict[str, Any]:
+                        dt: float = 1.0,
+                        # Bug LP-VDT-BOUNDS (2026-06-11): smerové per-slot stropy (kW)
+                        # z už uzavretých VDT obchodov dňa. None = plný batt_kw.
+                        batt_dis_cap_kw=None, batt_chg_cap_kw=None) -> Dict[str, Any]:
     """Joint LP optimalizácia.
 
     Args:
@@ -195,6 +198,21 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
             mults = mults[:T]
         # Sanity: clamp do [0, 5] (mults > 1 sú "boost" sloty)
         mults = np.clip(mults, 0.0, 5.0)
+
+    # Bug LP-VDT-BOUNDS (2026-06-11): smerové per-slot stropy z uzavretých VDT
+    # obchodov — |dam + vdt| ≤ batt_kw. None = plný batt_kw (back-compat).
+    if batt_dis_cap_kw is not None:
+        _dis_caps = np.clip(np.asarray(batt_dis_cap_kw, float).reshape(-1)[:T], 0.0, batt_kw)
+        if _dis_caps.size < T:
+            _dis_caps = np.concatenate([_dis_caps, np.full(T - _dis_caps.size, batt_kw)])
+    else:
+        _dis_caps = np.full(T, float(batt_kw))
+    if batt_chg_cap_kw is not None:
+        _chg_caps = np.clip(np.asarray(batt_chg_cap_kw, float).reshape(-1)[:T], 0.0, batt_kw)
+        if _chg_caps.size < T:
+            _chg_caps = np.concatenate([_chg_caps, np.full(T - _chg_caps.size, batt_kw)])
+    else:
+        _chg_caps = np.full(T, float(batt_kw))
 
     # SOC limity
     # Bug SOC-RESERVE-AUDIT-ONLY (2026-06-10): reserve sa NEAPLIKUJE na LP plánovanie.
@@ -424,15 +442,18 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
             ub = None
             # Per-slot batt cap (× šablóna). mult=0 znamená "slot vypnutý — batt sa nehýbe".
             batt_slot_cap = batt_kwh_per_slot * float(mults[t])
+            # Bug LP-VDT-BOUNDS: smerové stropy z uzavretých VDT obchodov (kWh/slot)
+            _chg_slot_cap = min(batt_slot_cap, float(_chg_caps[t]) * dt)
+            _dis_slot_cap = min(batt_slot_cap, float(_dis_caps[t]) * dt)
             # ---- Aggregate batt streams (gated cez trade_batt + mults + block_planned_discharge) ----
             if g == CH:
-                ub = batt_slot_cap if trade_batt else 0.0
+                ub = _chg_slot_cap if trade_batt else 0.0
             elif g == DI:
                 # block_planned_discharge: D-1 plán nesmie vybíjať (mults=0 alebo flag)
                 if not trade_batt or block_planned_discharge:
                     ub = 0.0
                 else:
-                    ub = batt_slot_cap
+                    ub = _dis_slot_cap
             # ---- Aggregate grid streams (limit iba sieťovou kapacitou + block_neg_import) ----
             elif g == EX_DAM:
                 ub = g_ex_kwh
@@ -456,8 +477,8 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
                 # PV → load: voľný (intern), max = min(pv, load). Nezávislé od mults (free path).
                 ub = float(min(max(pv[t], 0), max(load[t], 0)))
             elif g == PV_BATT:
-                # PV → batt: gated cez trade_batt + mults
-                ub = float(min(max(pv[t], 0), batt_slot_cap)) if trade_batt else 0.0
+                # PV → batt: gated cez trade_batt + mults (+ VDT chg cap)
+                ub = float(min(max(pv[t], 0), _chg_slot_cap)) if trade_batt else 0.0
             elif g == EX_FTV:
                 # Bug TT (2026-06-08): trade_ftv=false nesmie zakazat fyzicky export
                 # FTV do siete — to by spravilo z FTV peak-u curtail (= straty
@@ -469,26 +490,26 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
                 # aktivny DAM obchod.
                 ub = float(max(pv[t], 0))
             elif g == DI_LOAD:
-                # batt → load: gated cez trade_batt + mults + block_planned_discharge
+                # batt → load: gated cez trade_batt + mults + block_planned_discharge (+ VDT dis cap)
                 if not trade_batt or block_planned_discharge:
                     ub = 0.0
                 else:
-                    ub = float(min(batt_slot_cap, max(load[t], 0)))
+                    ub = float(min(_dis_slot_cap, max(load[t], 0)))
             elif g == EX_BATT:
-                # batt → grid: gated cez trade_batt + mults + block_planned_discharge
+                # batt → grid: gated cez trade_batt + mults + block_planned_discharge (+ VDT dis cap)
                 if not trade_batt or block_planned_discharge:
                     ub = 0.0
                 else:
-                    ub = batt_slot_cap
+                    ub = _dis_slot_cap
             elif g == IM_LOAD:
                 # grid → load: gated cez trade_load
                 ub = float(max(load[t], 0)) if trade_load else 0.0
             elif g == IM_BATT:
-                # grid → batt: gated cez trade_batt + mults + allow_grid_charge
+                # grid → batt: gated cez trade_batt + mults + allow_grid_charge (+ VDT chg cap)
                 if not trade_batt or not allow_grid_charge:
                     ub = 0.0
                 else:
-                    ub = batt_slot_cap
+                    ub = _chg_slot_cap
             bounds.append((lb, ub))
 
     # Solver

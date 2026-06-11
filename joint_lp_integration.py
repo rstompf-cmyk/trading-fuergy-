@@ -185,6 +185,31 @@ def _joint_to_optimize_day_format(
     return sch, summary
 
 
+def vdt_committed_kw_for_day(profile: str, date_iso: str, T: int,
+                              step_min: int = 60):
+    """Bug LP-VDT-BOUNDS (2026-06-11): per-slot kW UŽ uzavretých VDT obchodov dňa
+    (+ = discharge, − = charge) v rozlíšení plánu (T=24 → hodinový priemer 4×15-min,
+    T=96 → 1:1). None ak obchody nie sú / profil neexistuje.
+
+    Použitie: regen plánu pre deň s obchodmi musí dať LP smerové stropy
+    |dam + vdt| ≤ batt_kw, inak nominácia + obchody prekročia fyziku batérie."""
+    try:
+        import vdt_state as _vs
+        arr96 = _vs.get_realized_batt_kw(profile, today_iso=str(date_iso)[:10],
+                                          dt_h=0.25)
+        if not isinstance(arr96, list) or len(arr96) < 96:
+            return None
+        if not any(abs(float(v or 0.0)) > 0.01 for v in arr96):
+            return None
+        a = np.asarray([float(v or 0.0) for v in arr96], float)
+        if int(step_min) == 60 and T == 24:
+            return a.reshape(24, 4).mean(axis=1)
+        return a[:T]
+    except Exception as _e:
+        print(f"[vdt_committed_kw_for_day] {profile}/{date_iso}: {_e}")
+        return None
+
+
 def optimize_day_or_joint(
         pv_kwh, price_eur, *,
         joint_flags: Optional[Dict[str, bool]] = None,
@@ -219,6 +244,7 @@ def optimize_day_or_joint(
         max_export_kwh_day: Optional[float] = None,
         max_import_kwh_day: Optional[float] = None,
         dt: float = 1.0,
+        vdt_committed_kw=None,   # Bug LP-VDT-BOUNDS: per-slot kW uzavretých VDT obchodov dňa
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Drop-in nahradenie optimize_day s podporou Joint LP.
 
@@ -259,6 +285,24 @@ def optimize_day_or_joint(
     pv_for_lp = pv_arr_real.copy()
     load_for_lp = load_arr_real.copy() if load_arr_real is not None else None
 
+    # Bug LP-VDT-BOUNDS: smerové per-slot stropy z uzavretých VDT obchodov.
+    # |dam + vdt| ≤ batt_kw ⇒ dis_cap = batt_kw − vdt, chg_cap = batt_kw + vdt
+    # (vdt: + discharge, − charge; clip do [0, batt_kw] robí LP).
+    _vdt_dis_cap = None
+    _vdt_chg_cap = None
+    if vdt_committed_kw is not None:
+        try:
+            _vdt_arr = np.asarray(vdt_committed_kw, float).reshape(-1)[:len(pv_arr_real)]
+            if _vdt_arr.size and np.any(np.abs(_vdt_arr) > 0.01):
+                _vdt_dis_cap = float(batt_kw) - _vdt_arr
+                _vdt_chg_cap = float(batt_kw) + _vdt_arr
+                _n_aff = int(np.sum(np.abs(_vdt_arr) > 0.01))
+                print(f"[LP-VDT-BOUNDS] {profile}: {_n_aff} slotov s uzavretými VDT "
+                      f"obchodmi → LP dostáva smerové stropy (max vdt "
+                      f"{np.max(np.abs(_vdt_arr)):.0f} kW)")
+        except Exception as _e_vb:
+            print(f"[LP-VDT-BOUNDS] príprava stropov zlyhala: {_e_vb}")
+
     if joint_flags.get("enabled"):
         if not joint_flags.get("trade_ftv", True):
             pv_for_lp = np.zeros_like(pv_for_lp)
@@ -287,6 +331,7 @@ def optimize_day_or_joint(
             load_kwh=load_arr_real,
             max_export_kwh_day=max_export_kwh_day, max_import_kwh_day=max_import_kwh_day,
             dt=dt,
+            batt_dis_cap_kw=_vdt_dis_cap, batt_chg_cap_kw=_vdt_chg_cap,
         )
 
     # Joint LP path
@@ -349,6 +394,7 @@ def optimize_day_or_joint(
         block_planned_discharge=block_planned_discharge,
         block_neg_import=block_neg_import,
         dt=dt,
+        batt_dis_cap_kw=_vdt_dis_cap, batt_chg_cap_kw=_vdt_chg_cap,
     )
 
     if not res.get("ok"):
@@ -372,6 +418,7 @@ def optimize_day_or_joint(
             load_kwh=load_kwh,
             max_export_kwh_day=max_export_kwh_day, max_import_kwh_day=max_import_kwh_day,
             dt=dt,
+            batt_dis_cap_kw=_vdt_dis_cap, batt_chg_cap_kw=_vdt_chg_cap,
         )
         summary["_joint_lp_attempted"] = True
         summary["_joint_lp_error"] = res.get("error", "?")
