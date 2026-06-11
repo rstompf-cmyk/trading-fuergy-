@@ -5727,10 +5727,23 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                 _soc_pct = max(_soc_min_p, min(_soc_max_p, _soc_pct))
                                 _socs.append(_soc_pct)
                                 _pb_realiz.append(_pb_real)
-                            # Bug SOC-DAY-START revert časti 2 (2026-06-11): integrácia platí
-                            # pre VŠETKY dni (užívateľ: tvar v rámci dňa bol správny). Kontinuitu
-                            # medzi dňami rieši štart = koniec predchádzajúceho dňa (vyššie).
-                            dview["soc_pct"] = _socs
+                            # Bug SOC-ENGINE-SSOT (2026-06-11 večer): engine livesim je JEDINÝ
+                            # zdroj SOC. Po Bug VDT-DATE-ISO engine aplikuje VDT (aj večerné
+                            # nabíjanie), takže trace/CSV soc_pct je úplná pravda. Render
+                            # integrácia (bez RT audit clipu + engine sekvencie) divergovala
+                            # na konci dňa (graf 100 % vs engine 53 %) → skok na hranici dní.
+                            # Integrované _socs použijeme IBA na doplnenie NaN dier — NIKDY
+                            # na prepis engine hodnôt. Tým koniec dňa N == štart dňa N+1
+                            # z konštrukcie (oba = engine).
+                            _soc_eng = (pd.to_numeric(dview["soc_pct"], errors="coerce")
+                                        if "soc_pct" in dview.columns else None)
+                            if _soc_eng is None or _soc_eng.isna().all():
+                                dview["soc_pct"] = _socs
+                                _vdt_diag["soc_source"] = "render-integracia (engine soc chýba)"
+                            else:
+                                _fill_socs = pd.Series(_socs, index=dview.index)
+                                dview["soc_pct"] = _soc_eng.fillna(_fill_socs)
+                                _vdt_diag["soc_source"] = "engine (NaN doplnené integráciou)"
                             # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
                             # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
                             # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
