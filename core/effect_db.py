@@ -70,6 +70,31 @@ def _iso_to_ms(time_iso: str) -> int:
 
 # ── UPSERT zápis ───────────────────────────────────────────────────────────
 
+def purge_profile(profile_name: str) -> Dict[str, int]:
+    """Bug FULL-RESET-GHOSTS (2026-06-11): zmaže VŠETKY effect riadky profilu
+    (effect_minute + effect_daily). Volá ho plan_store.purge_full_profile pri
+    úplnom resete profilu — bez toho karty/chC/Excel ukazujú "duchov" zo starej
+    histórie, ktorá už nemá zodpovedajúci livesim trace ani plány.
+    """
+    out = {"effect_minute": 0, "effect_daily": 0}
+    try:
+        from sqlalchemy import delete as _sa_delete
+        with SessionLocal() as session:
+            pid = _profile_id(session, profile_name)
+            if pid is None:
+                return out
+            r1 = session.execute(_sa_delete(EffectMinute)
+                                  .where(EffectMinute.profile_id == pid))
+            out["effect_minute"] = int(r1.rowcount or 0)
+            r2 = session.execute(_sa_delete(EffectDaily)
+                                  .where(EffectDaily.profile_id == pid))
+            out["effect_daily"] = int(r2.rowcount or 0)
+            session.commit()
+    except Exception as e:
+        print(f"[effect_db.purge_profile] {profile_name}: {e}")
+    return out
+
+
 def upsert_minute_batch(profile_name: str, market: str, df: pd.DataFrame) -> int:
     """Zapíše/aktualizuje minútové riadky pre celý deň.
 

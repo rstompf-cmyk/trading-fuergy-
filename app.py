@@ -934,6 +934,8 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
                     f"<b>{purge_counts.get('vdt_cache', 0)}</b> VDT/MPC cache súborov, "
                     f"<b>{purge_counts.get('auto_control_events', 0)}</b> auto_control eventov, "
                     f"<b>{purge_counts.get('plan_overrides', 0)}</b> plan_override súborov, "
+                    f"<b>{purge_counts.get('livesim_files', 0)}</b> livesim súborov (CSV+meta), "
+                    f"<b>{purge_counts.get('effect_minute', 0)}+{purge_counts.get('effect_daily', 0)}</b> effect riadkov (min+daily), "
                     f"<b>{purge_counts.get('livesim_files', 0)}</b> livesim CSV/meta súborov, "
                     f"<b>{purge_counts.get('ledger_rows', 0)}</b> ledger rezervácií.<br>"
                     f"<i>Profile config (batt_kw, kwp, lat/lon, …) zostáva nedotknutý.</i></div>")

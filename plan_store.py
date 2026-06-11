@@ -779,37 +779,37 @@ def purge_full_profile(profile: Optional[str] = None) -> Dict[str, int]:
                             pass
         except Exception as e2:
             print(f"[purge_full_profile] plan_overrides cleanup zlyhal: {e} / {e2}")
-    # ── 7. Livesim CSV — per-port files kde aktívny profil = prof ────────
+    # ── 7. Livesim CSV + meta — VŠETKY livesim súbory v out/sk + out/cz ──
+    # Bug FULL-RESET-GHOSTS (2026-06-11): pôvodný pattern `livesim_*_{port}.csv`
+    # NIKDY nematchol default port 8000 (paths() suffix pridáva len pre != 8000,
+    # súbory sa volajú livesim_plan_d1.csv) → história prežila "úplný reset"
+    # a naháňali sa duchovia. Livesim CSV je zdieľaný per trh+case; po resete
+    # sa pre KAŽDÝ profil aj tak re-simuluje (profil je v settings_sig), takže
+    # zmazať všetky je bezpečné a zodpovedá "ako nový profil".
     try:
-        import glob as _g, json as _json
+        import glob as _g
         for market_sub in ["sk", "cz"]:
             md = os.path.join("out", market_sub)
             if not os.path.isdir(md):
                 continue
-            # Per-port active profile lookup
-            for pf in _g.glob(os.path.join(md, "profiles", "_active*.json")):
-                try:
-                    with open(pf) as fh:
-                        active = _json.load(fh)
-                    active_name = active.get("name") or active.get("active") or ""
-                except Exception:
-                    continue
-                if active_name != prof:
-                    continue
-                base = os.path.basename(pf).replace(".json", "").replace("_active", "")
-                port = base.lstrip("_") if base.lstrip("_") else "8000"
-                for pattern in [
-                    f"livesim_*_{port}.csv",
-                    f"livesim_*_{port}.meta.json",
-                    f"livesim_*_{port}_meta.json",
-                ]:
-                    for fp in _g.glob(os.path.join(md, pattern)):
-                        try:
-                            os.remove(fp); counts["livesim_files"] += 1
-                        except Exception:
-                            pass
+            for pattern in ["livesim_*.csv", "livesim_*.meta.json", "livesim_*_meta.json"]:
+                for fp in _g.glob(os.path.join(md, pattern)):
+                    try:
+                        os.remove(fp); counts["livesim_files"] += 1
+                    except Exception:
+                        pass
     except Exception as e:
         print(f"[purge_full_profile] livesim cleanup zlyhal: {e}")
+    # ── 8. Effect DB (effect_minute + effect_daily) ──────────────────────
+    # Bug FULL-RESET-GHOSTS: bez tohto karty/chC/Excel čítajú € hodnoty zo
+    # starej histórie aj po úplnom resete (effect_db je single SQL source).
+    try:
+        from core.effect_db import purge_profile as _eff_purge
+        _eff_counts = _eff_purge(prof)
+        counts["effect_minute"] = _eff_counts.get("effect_minute", 0)
+        counts["effect_daily"] = _eff_counts.get("effect_daily", 0)
+    except Exception as e:
+        print(f"[purge_full_profile] effect_db purge zlyhal: {e}")
     return counts
 
 
