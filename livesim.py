@@ -124,6 +124,11 @@ CSV_COLS = ["time", "date", "ts15",
             "mw_sig", "avg_react", "band_dis", "band_chg",
             "rt_dir", "rt_power_pct", "rt_reason",
             "plan_batt_kw", "plan_grid_kwh", "plan_curtail_kwh",
+            # Bug VDT-DOUBLE (2026-06-11): D-1 baseline + VDT zložka MUSIA byť v CSV.
+            # Bez nich render (app.py Bug X) nevie odlíšiť D-1 od D-1+VDT a pripočíta
+            # VDT druhýkrát (plan_batt_kw už po Bug VDT-DATE-ISO VDT obsahuje).
+            "plan_batt_dam_kw", "plan_batt_vdt_kw",
+            "plan_grid_dam_kwh", "plan_grid_vdt_kwh",
             "batt_kw_realistic", "rt_rev_realistic_min",
             "soc_kwh", "soc_pct", "budget_left_kwh",
             "dt_rev_min", "rt_rev_min", "cum_dt", "cum_rt", "cum_total"]
@@ -594,7 +599,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
            "plan_store": plan_sigs,
            "ftv_scenarios": ftv_scen_sig,
            "profile": _prof_sig,
-           "csv_cols_v": "14"}  # bump: Bug VDT-DATE-ISO — VDT trades sa konečne aplikujú v engine (re-sim histórie)
+           "csv_cols_v": "15"}  # bump: Bug VDT-DOUBLE — dam/vdt stĺpce do CSV (render nesmie VDT pripočítať 2×)
     sig_s = json.dumps(sig, sort_keys=True, default=str)
     meta = _load_meta(meta_path)
     if meta is not None and meta.get("settings_sig") != sig_s:
