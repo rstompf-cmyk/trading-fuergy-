@@ -3614,6 +3614,9 @@ _LIVESIM_LOCK = _threading.Lock()   # vlákno na pozadí aj prehliadač zapisuj�
 # Aktualne riešenie: prvý GET po každom BG tick = 1× advance, ostatné GETy z cache.
 _LIVESIM_R_CACHE: dict = {}            # (case, port, profile) → (meta_mtime, r_dict)
 _LIVESIM_R_CACHE_LOCK = _threading.Lock()
+# Bug COMPUTE-WORKER (2026-06-11): background compute stav — request nikdy nepočíta.
+_LIVESIM_COMPUTE_INFLIGHT = {}    # key → started_ts (epoch s)
+_LIVESIM_COMPUTE_ERR = {}         # key → posledná chyba background behu (str)
 
 
 def _livesim_meta_mtime(case: str, port: str) -> float:
@@ -3643,29 +3646,81 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
         cached = _LIVESIM_R_CACHE.get(key)
         if cached is not None and cached[0] == mtime_before and mtime_before > 0:
             return cached[1]
-    # Cache miss alebo meta sa zmenila → musime volat advance().
-    with _LIVESIM_LOCK:
-        r = lsim.advance(case, start, port=port, base_case=base_case,
-                         d1_step_min=d1_step_min,
-                         live_minutes=live_minutes, rt_params=rt_params,
-                         plan_params=plan_params, use_rt_override=use_rt_override)
-    # Bug SOC-CONT-V3 (2026-06-11): po advance over drift LP plánov budúcich dní voči
-    # meta.soc_after_done. Zastarané (race: plán generovaný pred livesim regenom)
-    # auto-regeneruj + prepočítaj projekciu, nech graf nemá SOC skok medzi dňami.
-    try:
-        if _auto_regen_stale_plans(case, port):
+    # Bug COMPUTE-WORKER (2026-06-11): cache miss → advance beží v BACKGROUND vlákne,
+    # request NEBLOKUJE. Vraciame posledný hotový stav (_stale=True) alebo None
+    # (= prvý beh bez akéhokoľvek stavu → volajúci ukáže progress stránku).
+    import time as _t_cw
+
+    def _do_compute():
+        try:
             with _LIVESIM_LOCK:
-                r = lsim.advance(case, start, port=port, base_case=base_case,
-                                 d1_step_min=d1_step_min,
-                                 live_minutes=live_minutes, rt_params=rt_params,
-                                 plan_params=plan_params, use_rt_override=use_rt_override)
-    except Exception as _e_v3:
-        print(f"[SOC-CONT-V3] auto-regen check zlyhal: {_e_v3}")
-    # Uložiť do cache s novým mtime (po advance sa meta zmenila)
-    mtime_after = _livesim_meta_mtime(case, port)
+                r_bg = lsim.advance(case, start, port=port, base_case=base_case,
+                                    d1_step_min=d1_step_min,
+                                    live_minutes=live_minutes, rt_params=rt_params,
+                                    plan_params=plan_params, use_rt_override=use_rt_override)
+            # Bug SOC-CONT-V3: po advance over drift LP plánov budúcich dní voči
+            # meta.soc_after_done → auto-regen + prepočet projekcie.
+            try:
+                if _auto_regen_stale_plans(case, port):
+                    with _LIVESIM_LOCK:
+                        r_bg = lsim.advance(case, start, port=port, base_case=base_case,
+                                            d1_step_min=d1_step_min,
+                                            live_minutes=live_minutes, rt_params=rt_params,
+                                            plan_params=plan_params,
+                                            use_rt_override=use_rt_override)
+            except Exception as _e_v3:
+                print(f"[SOC-CONT-V3] auto-regen check zlyhal: {_e_v3}")
+            m_after = _livesim_meta_mtime(case, port)
+            with _LIVESIM_R_CACHE_LOCK:
+                _LIVESIM_R_CACHE[key] = (m_after, r_bg)
+                _LIVESIM_COMPUTE_ERR.pop(key, None)
+        except Exception as _e_bg:
+            import traceback as _tb_bg
+            with _LIVESIM_R_CACHE_LOCK:
+                _LIVESIM_COMPUTE_ERR[key] = str(_e_bg)[:800]
+            print(f"[livesim-worker] {key} zlyhal:\n{_tb_bg.format_exc()[:1500]}")
+        finally:
+            with _LIVESIM_R_CACHE_LOCK:
+                _LIVESIM_COMPUTE_INFLIGHT.pop(key, None)
+
     with _LIVESIM_R_CACHE_LOCK:
-        _LIVESIM_R_CACHE[key] = (mtime_after, r)
-    return r
+        _already_running = key in _LIVESIM_COMPUTE_INFLIGHT
+        if not _already_running:
+            _LIVESIM_COMPUTE_INFLIGHT[key] = _t_cw.time()
+            _LIVESIM_COMPUTE_ERR.pop(key, None)
+    if not _already_running:
+        _threading.Thread(target=_do_compute, daemon=True,
+                          name=f"livesim-worker-{case}").start()
+    # Grace wait: malé prírastky (bežný tick) dobehnú do ~2 s → vrátime rovno čerstvé.
+    _deadline = _t_cw.time() + 2.0
+    while _t_cw.time() < _deadline:
+        with _LIVESIM_R_CACHE_LOCK:
+            _done = key not in _LIVESIM_COMPUTE_INFLIGHT
+            cached2 = _LIVESIM_R_CACHE.get(key)
+        if _done and cached2 is not None:
+            return cached2[1]
+        if _done:
+            break                                        # skončil s chybou — rieši sa nižšie
+        _t_cw.sleep(0.1)
+    # Stále počíta (alebo zlyhal) → posledný hotový stav ako stale, inak None.
+    with _LIVESIM_R_CACHE_LOCK:
+        cached = _LIVESIM_R_CACHE.get(key)
+        _started = _LIVESIM_COMPUTE_INFLIGHT.get(key)
+    if cached is not None:
+        r_stale = dict(cached[1])
+        r_stale["_stale"] = True
+        r_stale["_stale_since"] = _started
+        return r_stale
+    return None
+
+
+def _livesim_compute_status(case: str, port: str, profile_key: str = "") -> dict:
+    """Stav background compute pre (case, port, profile): running/started/err."""
+    key = (case, port, profile_key)
+    with _LIVESIM_R_CACHE_LOCK:
+        return dict(running=key in _LIVESIM_COMPUTE_INFLIGHT,
+                    started=_LIVESIM_COMPUTE_INFLIGHT.get(key),
+                    err=_LIVESIM_COMPUTE_ERR.get(key))
 
 
 def _livesim_cache_invalidate(case: str = None):
@@ -5431,6 +5486,31 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 case, start, _PORT, _bc, _st,
                 live_min, rtp, plan_pp, cur_use_rt,
                 profile_key=_profile_key)
+            # Bug COMPUTE-WORKER: žiadny hotový stav (prvý beh po resete) → progress
+            # stránka s auto-refresh; pri chybe background behu → friendly error page.
+            if r is None:
+                _cw_st = _livesim_compute_status(case, _PORT, _profile_key)
+                if _cw_st.get("err") and not _cw_st.get("running"):
+                    raise RuntimeError(_cw_st["err"])
+                import time as _t_pp
+                _cw_run_s = int(_t_pp.time() - float(_cw_st.get("started") or _t_pp.time()))
+                return (
+                    f"<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
+                    f"<meta http-equiv='refresh' content='5'>"
+                    f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                    f"<title>Živá simulácia — prepočet beží</title></head>"
+                    f"<body style='font-family:-apple-system,Segoe UI,Arial;max-width:780px;"
+                    f"margin:60px auto;padding:0 20px;color:#222'>"
+                    f"{_nav('/livesim')}"
+                    f"<h1 style='color:#1F4E78'>🟢 Živá simulácia</h1>"
+                    f"<div style='background:#e3f2fd;border-left:5px solid #1F4E78;"
+                    f"border-radius:8px;padding:16px 20px;font-size:15px'>"
+                    f"⏳ <b>Prepočítavam históriu simulácie…</b> beží {_cw_run_s} s.<br>"
+                    f"<span style='color:#666;font-size:13px'>Prvý beh po resete / zmene "
+                    f"nastavení simuluje celú históriu minútu po minúte — môže trvať "
+                    f"niekoľko minút. Stránka sa obnovuje automaticky každých 5 s; "
+                    f"výpočet beží na pozadí aj keď okno zavrieš.</span></div>"
+                    f"</body></html>")
         except RuntimeError as _adv_err:
             # Typicky: žiadny deň v rozsahu nemá plán v plan_store → strict mode raise.
             # Namiesto Internal Server Error ukáž user-friendly stránku s odkazom na batch.
@@ -5981,8 +6061,20 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     f"margin:10px 0;font-size:13px'><b>⚠ Realio overlay zlyhal:</b> {_ovl_err}</div>")
         body = _livesim_body(r, dfull, dview, view_day, days, realio_overlay=realio_on, trace_full=trace_full,
                               table_offset=table_offset, table_rows=table_rows)
-        return (head.replace("</head>", '<meta http-equiv="refresh" content="60">' + "</head>")
-                + form + plan_warn + plan_only_warn + zero_plan_warn + realio_banner + body + "</body></html>")
+        # Bug COMPUTE-WORKER: stale dáta (background prepočet beží) → banner + rýchlejší refresh
+        stale_banner = ""
+        _refresh_s = "60"
+        if isinstance(r, dict) and r.get("_stale"):
+            import time as _t_sb
+            _sb_run = int(_t_sb.time() - float(r.get("_stale_since") or _t_sb.time()))
+            stale_banner = (
+                "<div style='background:#e3f2fd;border-left:5px solid #1F4E78;padding:10px 14px;"
+                "border-radius:8px;margin:10px 0;font-size:14px'>"
+                f"⏳ <b>Prepočet beží na pozadí</b> ({_sb_run} s) — zobrazené dáta sú z posledného "
+                "dokončeného behu. Stránka sa obnoví automaticky.</div>")
+            _refresh_s = "15"
+        return (head.replace("</head>", f'<meta http-equiv="refresh" content="{_refresh_s}">' + "</head>")
+                + form + plan_warn + plan_only_warn + zero_plan_warn + realio_banner + stale_banner + body + "</body></html>")
     except Exception as ex:
         import traceback
         tb = traceback.format_exc()
