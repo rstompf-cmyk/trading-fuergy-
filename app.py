@@ -6638,6 +6638,19 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                         f"predané {_vts_day['sell_kwh']:.0f} kWh @ {_vts_day['sell_avg']:.1f} €/MWh</div>"
                         f"<div style='font-size:10px;color:#888'>{_vts_day['n']} obchodov · "
                         f"cash {_vts_day['cash_eur']:+.1f} €{_acc_txt}</div></div>")
+                # Bug VDT-EFEKTIVITA: zisk na cyklus — VDT arbitráž / cykly z VDT objemov
+                _cyc_txt = ""
+                try:
+                    import profiles as _pr_cyc
+                    _bkwh_cyc = float((((_pr_cyc.load_profile(_prof_ve) or {})
+                                        .get("plan") or {}).get("batt_kwh", 0.0)) or 0.0)
+                    _vdt_cycles = ((_vts_all["buy_kwh"] + _vts_all["sell_kwh"]) / 2.0
+                                   / _bkwh_cyc) if _bkwh_cyc > 0 else 0.0
+                    if _vdt_cycles > 0.05 and _cum_vdt_arb:
+                        _cyc_txt = (f" · {_vdt_cycles:.1f} cyklov "
+                                    f"≈ {_cum_vdt_arb / _vdt_cycles:+.1f} €/cyklus")
+                except Exception:
+                    pass
                 _vdt_eff_cards = _day_part + (
                     f"<div class='card' style='background:#f3e8fd'>"
                     f"<div class='l'>VDT od štartu</div>"
@@ -6645,7 +6658,8 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                     f"kúpené {_vts_all['buy_kwh']:.0f} kWh @ {_vts_all['buy_avg']:.1f} · "
                     f"predané {_vts_all['sell_kwh']:.0f} kWh @ {_vts_all['sell_avg']:.1f} €/MWh</div>"
                     f"<div style='font-size:10px;color:#888'>{_vts_all['n']} obchodov · "
-                    f"spread {_spread_all:+.1f} €/MWh · cash {_vts_all['cash_eur']:+.1f} €</div></div>")
+                    f"spread {_spread_all:+.1f} €/MWh · cash {_vts_all['cash_eur']:+.1f} €"
+                    f"{_cyc_txt}</div></div>")
     except Exception as _e_ve:
         print(f"[VDT-EFEKTIVITA karty] {_e_ve}")
     # daily VDT arb
