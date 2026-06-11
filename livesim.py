@@ -891,6 +891,13 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             # Bug #625-A (2026-06-09): clip na ±batt_kw_max — plán target NESMIE prekročiť
             # fyzický limit batérie. Ak by D-1+VDT presiahlo max, rt_controller dostane
             # nedosiahnuteľný target a vznikne odchýlka voči nominácii obchodu = pokuta.
+            # Bug FUT-DAM-DOUBLE (2026-06-11): odlož ČISTÚ D-1 batt trajektóriu PRED
+            # Bug BB (ten robí sch.batt_kw += VDT hodinový priemer). Stĺpce
+            # plan_batt_dam_kw (živé minúty aj fut projekcia) MUSIA stavať z čistého
+            # D-1 — inak "dam" obsahuje VDT a render/plan_batt_kw pripočíta VDT
+            # druhýkrát (symptóm: tabuľka dam 5706 pri pláne 4000 = 4000 + hodinový
+            # priemer obchodov 1706).
+            _sch_batt_dam_pure = sch["batt_kw"].astype(float).copy()
             try:
                 import vdt_state as _vs_sch
                 from core.profile_resolver import get_active as _ga_sch
@@ -986,7 +993,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 # Bug V (2026-06-07): plan_batt_kw = D-1 schedule + VDT realized (paper trades dňa)
                 # — žiadny LP recalc, čisto agregát persistovaných zdrojov.
                 # Plus dva diagnostické stĺpce pre transparenciu v UI grafe.
-                dam_per_min = [float(sch["batt_kw"].values[i]) for i in tr["pidx"]]
+                dam_per_min = [float(_sch_batt_dam_pure.values[i]) for i in tr["pidx"]]   # Bug FUT-DAM-DOUBLE: čistý D-1
                 vdt_per_min = [0.0] * len(dam_per_min)
                 try:
                     import vdt_state as _vs
@@ -1496,7 +1503,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             # z D-1. Pre profil s use_vdt=True boli VDT trades v plan_batt_kw
                             # stĺpci CSV ale SOC ich ignoroval → graf SOC bol roztiahnutý.
                             # Tu načítame _fut_plan_batt VOPRED (rovnaký kód ako nižšie ale skôr).
-                            _fut_dam_socpre = [float(sch["batt_kw"].values[i]) for i in pj]
+                            _fut_dam_socpre = [float(_sch_batt_dam_pure.values[i]) for i in pj]   # Bug FUT-DAM-DOUBLE
                             _fut_vdt_socpre = [0.0] * len(_fut_dam_socpre)
                             try:
                                 import vdt_state as _vs_socpre
@@ -1526,7 +1533,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             last_cum_rt = float(tr["cum_rt"].iloc[-1]) if not tr.empty else cum_rt_done
                             # Bug V (2026-06-07): pripočítaj VDT realized aj k projekcii
                             # (môže existovať VDT trade pre future slot ktorý už uzavrel).
-                            _fut_dam = [float(sch["batt_kw"].values[i]) for i in pj]
+                            _fut_dam = [float(_sch_batt_dam_pure.values[i]) for i in pj]   # Bug FUT-DAM-DOUBLE
                             _fut_vdt = [0.0] * len(_fut_dam)
                             try:
                                 import vdt_state as _vs_fut
