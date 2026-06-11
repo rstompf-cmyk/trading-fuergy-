@@ -572,6 +572,17 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     ftv_scen_sig[_diso] = _sc.get("saved_at", "?")
     except ImportError:
         pass
+    # Bug LIVESIM-PROFILE-SIG (2026-06-11): livesim CSV je per trh+case (ZDIEĽANÝ medzi
+    # profilmi), ale simulácia beží s parametrami + VDT paper trades AKTÍVNEHO profilu
+    # (Bug BB). Bez profilu v sig prepnutie profilu nechá v CSV históriu nasimulovanú pod
+    # INÝM profilom (vrátane SOC + soc_after_done) → "SOC z ničoho" na hranici dní
+    # (06-10: večerné VDT nabíjanie _3 v CSV chýbalo, deň končil 16 % namiesto rastu).
+    # Profil v sig ⇒ prepnutie profilu vyvolá reset + backfill pod novým profilom.
+    try:
+        from core.profile_resolver import get_active as _ga_sig
+        _prof_sig = str(_ga_sig() or "")
+    except Exception:
+        _prof_sig = ""
     sig = {"plan": {k: _po.get(k) for k in sorted(_po)},
            "rt": {k: (round(float(v), 4) if isinstance(v, (int, float)) else v)
                   for k, v in sorted((rt_params or {}).items())},
@@ -582,6 +593,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
            "po_template": po_sig,
            "plan_store": plan_sigs,
            "ftv_scenarios": ftv_scen_sig,
+           "profile": _prof_sig,
            "csv_cols_v": "13"}  # bump: rt_rev_realistic_min (reality vs plan settlement cez ZCO)
     sig_s = json.dumps(sig, sort_keys=True, default=str)
     meta = _load_meta(meta_path)
