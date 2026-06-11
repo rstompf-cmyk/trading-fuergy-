@@ -426,6 +426,68 @@ def _stale_plans_banner(case: str = "plan_d1") -> str:
             f"<a href='/plan_batch'>📦 Batch</a>.</div>")
 
 
+def _vdt_trade_stats(profile: str, day: str = None) -> dict:
+    """Bug VDT-EFEKTIVITA (2026-06-11): agregát VDT paper trades pre UI karty —
+    objemy + vážené priemerné ceny nákup/predaj + hrubý cash (predaj − nákup).
+    day=None → celá história profilu; day='YYYY-MM-DD' → len ten deň."""
+    out = dict(n=0, buy_kwh=0.0, buy_avg=0.0, sell_kwh=0.0, sell_avg=0.0,
+               cash_eur=0.0)
+    try:
+        import vdt_live_advisor as _vla
+        p = _vla.paper_trades_csv_path(profile)
+        if not p or not os.path.exists(p):
+            return out
+        import csv as _csv
+        b_pw = b_w = s_pw = s_w = 0.0
+        with open(p, encoding="utf-8", newline="") as f:
+            for row in _csv.DictReader(f):
+                if str(row.get("profile") or "") != profile:
+                    continue
+                if day and str(row.get("ts", ""))[:10] != str(day)[:10]:
+                    continue
+                act = str(row.get("action", "")).upper()
+                if act not in ("BUY", "CHARGE", "SELL", "DISCHARGE"):
+                    continue
+                try:
+                    kwh = abs(float(row.get("kwh") or 0))
+                    pr_t = float(row.get("price_predicted_eur") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if kwh <= 0:
+                    continue
+                out["n"] += 1
+                if act in ("BUY", "CHARGE"):
+                    b_w += kwh; b_pw += kwh * pr_t
+                else:
+                    s_w += kwh; s_pw += kwh * pr_t
+        out["buy_kwh"] = b_w; out["sell_kwh"] = s_w
+        out["buy_avg"] = (b_pw / b_w) if b_w > 0 else 0.0
+        out["sell_avg"] = (s_pw / s_w) if s_w > 0 else 0.0
+        out["cash_eur"] = (s_pw - b_pw) / 1000.0
+    except Exception as _e:
+        print(f"[_vdt_trade_stats] {profile}/{day}: {_e}")
+    return out
+
+
+def _vdt_eff_decorate(agg_df):
+    """Bug VDT-EFEKTIVITA: doplní do per-deň agregátu stĺpce VDT nákup/predaj
+    (kWh + vážená cena) z paper trades. No-op ak chýba stĺpec 'date'."""
+    if agg_df is None or "date" not in getattr(agg_df, "columns", []):
+        return agg_df
+    try:
+        _prof_eff = pr.get_active() if pr is not None else None
+        if not _prof_eff:
+            return agg_df
+        _stats = [_vdt_trade_stats(_prof_eff, day=str(_dy)) for _dy in agg_df["date"]]
+        agg_df["vdt_buy_kwh"] = [s["buy_kwh"] for s in _stats]
+        agg_df["vdt_buy_avg"] = [s["buy_avg"] for s in _stats]
+        agg_df["vdt_sell_kwh"] = [s["sell_kwh"] for s in _stats]
+        agg_df["vdt_sell_avg"] = [s["sell_avg"] for s in _stats]
+    except Exception as _e:
+        print(f"[VDT-EFEKTIVITA agg] {_e}")
+    return agg_df
+
+
 def _resolve_soc_init_carryover(date_iso: str, fp: dict,
                                    case: str = "plan_d1") -> tuple:
     """Bug #622 + SOC-CONT: SOC kontinuita cez dni.
@@ -4162,7 +4224,7 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
             agg_df["total_eur"] = agg_df["dt_eur"].fillna(0) + agg_df["rt_eur"].fillna(0) + _vdt_arb_col
             agg_df["prinos_bat_plan_eur"] = agg_df["total_eur"] - agg_df["baseline_eur"].fillna(0)
             agg_df["batt_cycles"] = (agg_df["batt_charge_kwh"] + agg_df["batt_discharge_kwh"]) / 2.0 / max(float(_pui_plan.get("batt_kwh", 200.0)), 1.0)
-            return agg_df
+            return _vdt_eff_decorate(agg_df)   # Bug VDT-EFEKTIVITA: + nákup/predaj per deň
 
         # Slovník stĺpcov → (pekný_nazov, format)
         COL_META = {
@@ -4191,6 +4253,12 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
             "soc_avg_pct":        ("Priemer SOC",            FMT_PCT),
             "soc_min_pct":        ("Min SOC",                FMT_PCT),
             "soc_max_pct":        ("Max SOC",                FMT_PCT),
+            # Bug VDT-EFEKTIVITA (2026-06-11)
+            "vdt_arb_eur":        ("Zisk VDT arbitráž",      FMT_EUR),
+            "vdt_buy_kwh":        ("VDT nákup",              FMT_KWH),
+            "vdt_buy_avg":        ("VDT nákup cena",         FMT_PRICE),
+            "vdt_sell_kwh":       ("VDT predaj",             FMT_KWH),
+            "vdt_sell_avg":       ("VDT predaj cena",        FMT_PRICE),
         }
 
         def _write_table(ws, title, agg_df, start_row=1, info=""):
@@ -4790,7 +4858,7 @@ pip install reportlab matplotlib</code>
             a["total_eur"] = a["dt_eur"].fillna(0) + a["rt_eur"].fillna(0) + _vdt_arb_col2
             a["prinos_eur"] = a["total_eur"] - a["baseline_eur"].fillna(0)
             a["cycles"] = (a["batt_charge_kwh"] + a["batt_discharge_kwh"]) / 2.0 / max(_bkwh_max, 1.0)
-            return a
+            return _vdt_eff_decorate(a)        # Bug VDT-EFEKTIVITA: + nákup/predaj per deň
 
         daily = _finalize(_agg(df.groupby("date")))
         monthly = _finalize(_agg(df.groupby("month")))
@@ -6491,6 +6559,37 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     _cum_vdt_arb = float(r.get("cum_vdt_arb", 0) or 0)
     _vdt_arb_card = (f"<div class='card'><div class='l'>z toho VDT arbitráž</div>"
                       f"<div class='v'>{_cum_vdt_arb:+.1f} €</div></div>") if _cum_vdt_arb else ""
+    # Bug VDT-EFEKTIVITA (2026-06-11): karty efektivity obchodovania — objemy +
+    # vážené ceny nákup/predaj za zobrazený deň aj od štartu.
+    _vdt_eff_cards = ""
+    try:
+        from core.profile_resolver import get_active as _ga_ve
+        _prof_ve = _ga_ve() or ""
+        if _prof_ve:
+            _vts_day = _vdt_trade_stats(_prof_ve, day=view_day)
+            _vts_all = _vdt_trade_stats(_prof_ve)
+            if _vts_all["n"]:
+                _spread_all = _vts_all["sell_avg"] - _vts_all["buy_avg"]
+                _day_part = ""
+                if _vts_day["n"]:
+                    _day_part = (
+                        f"<div class='card' style='background:#f3e8fd'>"
+                        f"<div class='l'>VDT obchody {view_day}</div>"
+                        f"<div class='v' style='font-size:13px'>"
+                        f"kúpené {_vts_day['buy_kwh']:.0f} kWh @ {_vts_day['buy_avg']:.1f} · "
+                        f"predané {_vts_day['sell_kwh']:.0f} kWh @ {_vts_day['sell_avg']:.1f} €/MWh</div>"
+                        f"<div style='font-size:10px;color:#888'>{_vts_day['n']} obchodov · "
+                        f"cash {_vts_day['cash_eur']:+.1f} €</div></div>")
+                _vdt_eff_cards = _day_part + (
+                    f"<div class='card' style='background:#f3e8fd'>"
+                    f"<div class='l'>VDT od štartu</div>"
+                    f"<div class='v' style='font-size:13px'>"
+                    f"kúpené {_vts_all['buy_kwh']:.0f} kWh @ {_vts_all['buy_avg']:.1f} · "
+                    f"predané {_vts_all['sell_kwh']:.0f} kWh @ {_vts_all['sell_avg']:.1f} €/MWh</div>"
+                    f"<div style='font-size:10px;color:#888'>{_vts_all['n']} obchodov · "
+                    f"spread {_spread_all:+.1f} €/MWh · cash {_vts_all['cash_eur']:+.1f} €</div></div>")
+    except Exception as _e_ve:
+        print(f"[VDT-EFEKTIVITA karty] {_e_ve}")
     # daily VDT arb
     _d_vdt = 0.0
     try:
@@ -6505,6 +6604,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         f"<div class='card'><div class='l'>z toho DT</div><div class='v'>{r['cum_dt']:.1f} €</div></div>"
         f"<div class='card'><div class='l'>z toho odchýlka (RT)</div><div class='v'>{r['cum_rt']:.1f} €</div></div>"
         f"{_vdt_arb_card}"
+        f"{_vdt_eff_cards}"
         f"{bl_cum_card}"
         f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt:.1f} €</div></div>"
         f"<div class='card' style='background:#eef7ee'><div class='l'>FTV výroba za deň</div><div class='v'>{d_ftv:.0f} kWh</div></div></div>"
