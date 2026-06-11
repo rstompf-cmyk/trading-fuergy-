@@ -90,9 +90,25 @@ def _get_start_soc_from_livesim_yesterday(profile: str) -> Optional[Dict[str, An
         import pandas as _pd
     except Exception:
         return None
-    port = os.environ.get("APP_PORT") or os.environ.get("PORT") or "8000"
+    port = os.environ.get("PORT") or os.environ.get("APP_PORT") or "8000"
     yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
-    for case in ("dt_15min", "plan_d1"):
+    # Bug START-SOC-CASE (2026-06-11): poradie case-ov podľa čerstvosti meta.json
+    # (naposledy advancovaný = ten ktorý sa reálne používa). Pevné poradie
+    # (dt_15min najprv) bralo štart SOC zo zastaraného CSV nepoužívaného case-u
+    # → dnešný deň štartoval z náhodnej historickej hodnoty namiesto konca
+    # včerajška v aktívnom case (plan_d1).
+    _cases = ["dt_15min", "plan_d1"]
+    try:
+        def _meta_mtime(_c):
+            try:
+                _, _mp = _ls.paths(_c, port)
+                return os.path.getmtime(_mp)
+            except OSError:
+                return 0.0
+        _cases.sort(key=_meta_mtime, reverse=True)
+    except Exception:
+        pass
+    for case in _cases:
         try:
             df = _ls.load_series(case, port=port, day=yesterday, max_points=10**9)
         except Exception:

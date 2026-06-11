@@ -5660,6 +5660,10 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                 _start_soc_src = "profile.soc_init"
                             _vdt_diag["start_soc"] = round(_start_soc, 1)
                             _vdt_diag["start_soc_src"] = _start_soc_src
+                            # Bug START-SOC-CASE diag: zdroj štartu SOC do logu — pri zlej
+                            # hodnote okamžite vidno či šiel default/zlý case/zlý fallback.
+                            print(f"[SOC-START {view_day}] start={_start_soc:.1f}% "
+                                  f"src={_start_soc_src}")
                             # Integrate: pre každú minútu Δ_kwh = plan_batt_kw / 60 (kW × 1/60 h)
                             # Sign: + discharge → SOC klesá; − charge → SOC stúpa
                             # Bug MM (2026-06-08): scale-down planu pri SOC floor/ceiling.
