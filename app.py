@@ -406,6 +406,26 @@ def _carried_soc_banner(date: str, soc_init_pct: float, case: str = "plan_d1") -
             f"<br><i>Pre 1:1 porovnanie s livesim: nastav <b>SOC začiatok = {carried_pct:.1f}</b> a klikni Generovať.</i></div>")
 
 
+def _stale_plans_banner(case: str = "plan_d1") -> str:
+    """Bug SOC-CONT-V3 (2026-06-11): warning na /plan keď existujúce LP plány pre budúce
+    dni majú soc_init nekonzistentný s meta.soc_after_done (> 1 %). Normálne ich auto-regen
+    opraví sám pri najbližšom livesim ticku — banner zachytí stav medzi tým / pri zlyhaní."""
+    try:
+        found = _find_stale_future_plans(case)
+    except Exception:
+        return ""
+    if not found or not found["stale"]:
+        return ""
+    items = " &nbsp;•&nbsp; ".join(
+        f"<b>{d}</b>: plán soc_init <b>{s0:.1f} %</b>" for d, s0 in found["stale"])
+    return (f"<div style='background:#fff3cd;border-left:4px solid #f0b80f;padding:8px 12px;"
+            f"margin:6px 0;font-size:13px;border-radius:4px;color:#7a5c00'>"
+            f"⚠ <b>Zastarané LP plány</b> (livesim po {found['done_through']} skončil na "
+            f"<b>{found['carried_pct']:.1f} %</b>): {items}. "
+            f"Auto-regen ich opraví pri najbližšom livesim ticku; ručne cez "
+            f"<a href='/plan_batch'>📦 Batch</a>.</div>")
+
+
 def _resolve_soc_init_carryover(date_iso: str, fp: dict,
                                    case: str = "plan_d1") -> tuple:
     """Bug #622 + SOC-CONT: SOC kontinuita cez dni.
@@ -1894,6 +1914,7 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 {_nav("/")}
 <p style="color:#666">Predpoveď počasia → odhad ISOT → optimálny rozvrh batérie a obchodná pozícia → Excel.</p>
 {_overrides_status(tomorrow)}
+{_stale_plans_banner()}
 <p class="msg">{msg}</p>
 <form method="post" action="/plan">
 <fieldset><legend>Deň, lokácia a elektráreň</legend>
@@ -3626,6 +3647,18 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
                          d1_step_min=d1_step_min,
                          live_minutes=live_minutes, rt_params=rt_params,
                          plan_params=plan_params, use_rt_override=use_rt_override)
+    # Bug SOC-CONT-V3 (2026-06-11): po advance over drift LP plánov budúcich dní voči
+    # meta.soc_after_done. Zastarané (race: plán generovaný pred livesim regenom)
+    # auto-regeneruj + prepočítaj projekciu, nech graf nemá SOC skok medzi dňami.
+    try:
+        if _auto_regen_stale_plans(case, port):
+            with _LIVESIM_LOCK:
+                r = lsim.advance(case, start, port=port, base_case=base_case,
+                                 d1_step_min=d1_step_min,
+                                 live_minutes=live_minutes, rt_params=rt_params,
+                                 plan_params=plan_params, use_rt_override=use_rt_override)
+    except Exception as _e_v3:
+        print(f"[SOC-CONT-V3] auto-regen check zlyhal: {_e_v3}")
     # Uložiť do cache s novým mtime (po advance sa meta zmenila)
     mtime_after = _livesim_meta_mtime(case, port)
     with _LIVESIM_R_CACHE_LOCK:
@@ -3644,6 +3677,97 @@ def _livesim_cache_invalidate(case: str = None):
             for k in list(_LIVESIM_R_CACHE.keys()):
                 if k[0] == case:
                     _LIVESIM_R_CACHE.pop(k, None)
+
+
+def _find_stale_future_plans(case: str = "plan_d1", port: str = None, max_days: int = 7):
+    """Bug SOC-CONT-V3 (2026-06-11): nájde LP plány pre BUDÚCE dni (date > meta.done_through)
+    ktorých soc_init (schedule.soc_pct[0]) sa líši od meta.soc_after_done o > 1 %.
+    Také plány boli generované PRED livesim regenom (race condition) → graf má SOC skok
+    medzi koncom done_through a začiatkom ďalšieho dňa.
+
+    Vracia dict: {carried_pct, done_through, step_min, kind, stale=[(date_iso, soc0_pct), ...]}
+    alebo None ak meta/livesim nie sú k dispozícii."""
+    if lsim is None or ps is None:
+        return None
+    try:
+        _, meta_path = lsim.paths(case, port or _PORT)
+        with open(meta_path) as f:
+            meta = json.load(f)
+    except Exception:
+        return None
+    done_through = meta.get("done_through")
+    soc_after = meta.get("soc_after_done")
+    try:
+        bkwh = float((meta.get("params") or {}).get("batt_kwh", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        bkwh = 0.0
+    if not done_through or soc_after is None or bkwh <= 0:
+        return None
+    carried_pct = float(soc_after) / bkwh * 100.0
+    step_min = 60 if case == "plan_d1" else 15
+    kind = "plan" if case == "plan_d1" else "dentrh"
+    try:
+        done_d = dt.date.fromisoformat(str(done_through))
+    except (TypeError, ValueError):
+        return None
+    stale = []
+    for off in range(1, max_days + 1):
+        d_iso = (done_d + dt.timedelta(days=off)).isoformat()
+        plan = ps.load_plan_safe(d_iso, step_min, kind=kind)
+        if not plan:
+            continue
+        soc_arr = (plan.get("schedule") or {}).get("soc_pct") or []
+        try:
+            soc0 = float(soc_arr[0])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if abs(soc0 - carried_pct) > 1.0:
+            stale.append((d_iso, soc0))
+    return dict(carried_pct=carried_pct, done_through=str(done_through),
+                step_min=step_min, kind=kind, stale=stale)
+
+
+# Guard: auto-regen bež najviac RAZ pre každú (profile, case, done_through, soc_after_done)
+# kombináciu — chráni pred opakovanými LP behmi keď regen nedotiahne drift pod 1 %
+# (LP zaokrúhľuje soc_pct) alebo keď regen zlyhá.
+_PLAN_AUTOREGEN_GUARD = {}
+_PLAN_AUTOREGEN_LOCK = _threading.Lock()
+
+
+def _auto_regen_stale_plans(case: str, port: str = None) -> list:
+    """Bug SOC-CONT-V3 (2026-06-11): po livesim advance automaticky regeneruje LP plány
+    pre budúce dni ktorých soc_init je zastaraný voči meta.soc_after_done (drift > 1 %).
+    Tým graf aj nominácia ostanú kontinuálne bez ručného /plan_batch hotfixu.
+
+    Vracia zoznam regenerovaných dátumov (prázdny ak nič netreba)."""
+    found = _find_stale_future_plans(case, port)
+    if not found or not found["stale"]:
+        return []
+    try:
+        profile = ps.resolve_profile(None)
+    except Exception:
+        profile = "default"
+    gkey = (profile, case)
+    gval = (found["done_through"], round(found["carried_pct"], 2))
+    with _PLAN_AUTOREGEN_LOCK:
+        if _PLAN_AUTOREGEN_GUARD.get(gkey) == gval:
+            return []                                       # už riešené pre tento stav meta
+        _PLAN_AUTOREGEN_GUARD[gkey] = gval                  # nastav HNEĎ — žiadne retry loopy
+    ui_key = "plan" if found["step_min"] == 60 else "dentrh"
+    fp = dict(_ui_load(ui_key, DEF))
+    regen = []
+    for d_iso, soc0 in found["stale"]:
+        try:
+            print(f"[SOC-CONT-V3] {d_iso}: LP plán má soc_init={soc0:.1f}% ale "
+                  f"meta.soc_after_done={found['carried_pct']:.1f}% "
+                  f"(done_through={found['done_through']}) → auto-regen")
+            _gen_one_plan(d_iso, found["step_min"], found["kind"], fp)
+            regen.append(d_iso)
+        except Exception as _e_regen:
+            print(f"[SOC-CONT-V3] auto-regen {d_iso} zlyhal: {_e_regen}")
+    if regen:
+        _livesim_cache_invalidate(case)                     # projekcia sa prepočíta s novým plánom
+    return regen
 
 
 def _livesim_pred_dt(today):
@@ -3810,6 +3934,12 @@ def _livesim_bg_tick():
             r = lsim.advance(case, start, port=_PORT, base_case=_bc, d1_step_min=_st,
                              live_minutes=live, rt_params=rtp, plan_params=plan_pp,
                              use_rt_override=_bg_use_rt)
+        # Bug SOC-CONT-V3: aj BG tick spúšťa drift check — regen invaliduje R cache,
+        # takže najbližší GET z prehliadača prepočíta projekciu s novým plánom.
+        try:
+            _auto_regen_stale_plans(case, _PORT)
+        except Exception as _e_v3:
+            print(f"[SOC-CONT-V3 bg] {_e_v3}")
         return int(r.get("appended", 0))
     except Exception as e:
         print("[livesim-bg] preskočené:", e)
