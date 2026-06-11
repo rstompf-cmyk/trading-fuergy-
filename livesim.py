@@ -908,6 +908,16 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             # (D-1 plán + VDT realized) tak, aby RT nevyčerpal kapacitu predčasne.
             _audit_today_state = None
             _audit_reserve = 0.0
+            # Bug AUDIT-HORIZON-PARAM (2026-06-11): nový plan param `rt_audit_horizon_h`
+            # — koľko hodín dopredu audit_capacity sleduje plán pre obmedzenie RT zložky.
+            # Default 1.0 h (= 4 × 15-min slotov). Nezdieľa sa s ftv_lookahead_h (= ten má
+            # iný účel: lookahead clip rt_action proti future plánu v rt_controlleri).
+            # User môže nastaviť v šablóne plánu, napr. 2.0 alebo 0.5.
+            try:
+                _audit_h_val = (plan_params or {}).get("rt_audit_horizon_h", 1.0)
+                _audit_horizon_slots = max(1, int(round(float(_audit_h_val) * 4)))
+            except (TypeError, ValueError):
+                _audit_horizon_slots = 4
             try:
                 import vdt_state as _vs_a
                 from core.profile_resolver import get_active as _ga_a
@@ -934,7 +944,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                              enforce_realistic=True,
                                              audit_today_state=_audit_today_state,
                                              audit_soc_reserve_pct=_audit_reserve,
-                                             audit_rt_persistence_slots=4)
+                                             audit_rt_persistence_slots=_audit_horizon_slots)
             day_dt_total = float(np.nansum(dtprof))
             # SK fallback odstránený — rt_controller.run_day_physical teraz akceptuje
             # ZCO=NaN (= žiadne zúčtovanie odchýlky), takže bežný flow funguje aj pre SK

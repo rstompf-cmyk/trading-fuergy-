@@ -84,6 +84,11 @@ class PlanConfig(BaseModel):
     rt_no_worsen_dev: bool = True
     ftv_strict_plan: bool = False
     ftv_strict_deadband_kw: float = Field(default=5.0, ge=0.0)
+    # Bug AUDIT-HORIZON-PARAM (2026-06-11): audit_capacity horizon (h) — koľko hodín
+    # dopredu sleduje plán pre obmedzenie RT zložky cez SOC kapacitu.
+    # 1.0 = lokálne (zachytí kde plán nabíja/vybíja v najbližšej hodine).
+    # 4.0 = stredne. 12.0 = veľmi konzervatívne. 0 = vypnuté (RT len cez kapacita).
+    rt_audit_horizon_h: float = Field(default=1.0, ge=0.0)
 
     # Day caps (0 = bez stropu)
     max_export_kwh_day: float = Field(default=0.0, ge=0.0)
