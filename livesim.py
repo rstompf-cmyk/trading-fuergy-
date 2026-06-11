@@ -559,15 +559,22 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                        + ";rt:" + "".join("0" if (np.isfinite(v) and v < 0.5) else "1" for v in tmpl_rt))
         except Exception:
             po_sig = ""
-    # podpis OBSAHU uložených plánov v rozsahu start_date → today (strict mode):
-    # ak sa plán pre niektorý deň regeneruje, settings_sig sa zmení → log sa prepočíta.
+    # podpis OBSAHU uložených plánov v rozsahu start_date → VČERA (strict mode):
+    # ak sa plán pre niektorý MINULÝ deň regeneruje, settings_sig sa zmení → log sa prepočíta.
+    # Bug PLAN-SIG-TODAY (2026-06-11): dnešok NESMIE byť v plan_sigs — dnešný deň sa pri
+    # každom advance prepočítava čerstvo z plan_store, takže zmena dnešného plánu reset
+    # nepotrebuje. Pôvodne tu bol aj today → každý regen dnešného plánu (vrátane
+    # SOC-CONT-V3 auto-regenu PO advance!) zmenil sig → FULL backfill celej histórie
+    # pri ďalšom requeste → /livesim sa otváral "neskutočne dlho", opakovane.
     plan_sigs = {}
     try:
-        for _d in pd.date_range(pd.Timestamp(start_date), today, freq="D"):
-            _diso = _d.date().isoformat()
-            _p = ps.load_plan_safe(_diso, step_min_now, kind_now)
-            if _p:
-                plan_sigs[_diso] = _p.get("generated_at", "?")
+        _sig_end = pd.Timestamp(today).normalize() - pd.Timedelta(days=1)
+        if _sig_end >= pd.Timestamp(start_date).normalize():
+            for _d in pd.date_range(pd.Timestamp(start_date), _sig_end, freq="D"):
+                _diso = _d.date().isoformat()
+                _p = ps.load_plan_safe(_diso, step_min_now, kind_now)
+                if _p:
+                    plan_sigs[_diso] = _p.get("generated_at", "?")
     except Exception:
         pass
     # FTV scenáre per-dátum — keď user pridá/zmení scenár, log sa resetuje a livesim ho prevezme
