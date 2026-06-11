@@ -5709,14 +5709,22 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                 _soc_pct = max(_soc_min_p, min(_soc_max_p, _soc_pct))
                                 _socs.append(_soc_pct)
                                 _pb_realiz.append(_pb_real)
-                            dview["soc_pct"] = _socs
-                            # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
-                            # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
-                            # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
-                            # Ak sme integrovali batt_kw_realistic, ten je už post-cap reality;
-                            # prepísanie plan_batt_kw by zamiešalo plán a realitu.
-                            if _src_col == "plan_batt_kw":
-                                dview["plan_batt_kw"] = _pb_realiz
+                            # Bug SOC-DAY-START (2026-06-11) časť 2: render-integrácia SOC
+                            # IBA pre aktuálny deň. Pre MINULÉ dni je CSV soc_pct autoritatívny
+                            # (livesim realita po inline RT audite); render-integrácia audit
+                            # clip nemá → diverguje od CSV konca dňa a graf stráca kontinuitu
+                            # medzi dňami (06-10 koniec 57 % vs CSV 16 %).
+                            if _is_current_day:
+                                dview["soc_pct"] = _socs
+                                # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
+                                # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
+                                # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
+                                # Ak sme integrovali batt_kw_realistic, ten je už post-cap reality;
+                                # prepísanie plan_batt_kw by zamiešalo plán a realitu.
+                                if _src_col == "plan_batt_kw":
+                                    dview["plan_batt_kw"] = _pb_realiz
+                            else:
+                                _vdt_diag["soc_csv_authoritative"] = True
 
                             # Bug SOC-PLAN-PARALLEL (2026-06-10): paralelný SOC z plan_batt_kw
                             # (= D-1 nominácia + VDT realized + plánované VDT). Užívateľ chce
