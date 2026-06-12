@@ -1070,7 +1070,8 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
                 rt_engine: str = Form(default=None),
                 rt2_margin_min_eur: float = Form(default=None),
                 rt2_margin_full_eur: float = Form(default=None),
-                rt2_zco_k: float = Form(default=None)):
+                rt2_zco_k: float = Form(default=None),
+                rt2_margin_min_chg_eur: str = Form(default=None)):
     """Hromadné generovanie plánov pre rozsah dátumov.
     Pre každý deň v [from, to] (inkluzívne) spustí internú generáciu a uloží do plan_store.
     Ak sú v requeste prítomné aj štandardné form polia (z /plan alebo /dentrh formulára),
@@ -1108,13 +1109,20 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
         if _prof_rteB and _prof_rteB != "default" and rt_engine is not None:
             _pobj_b = _pr_rteB.load_profile(_prof_rteB) or {}
             _rt_sec_b = _pobj_b.get("rt") or {}
-            _rt2_new_b = dict(engine=("v2" if str(rt_engine) == "v2" else "v1"))
+            _rt2_new_b = dict(engine=(str(rt_engine) if str(rt_engine) in ("v2", "v3") else "v1"))
             if rt2_margin_min_eur is not None:
                 _rt2_new_b["rt2_margin_min_eur"] = max(0.0, float(rt2_margin_min_eur))
             if rt2_margin_full_eur is not None:
                 _rt2_new_b["rt2_margin_full_eur"] = max(1.0, float(rt2_margin_full_eur))
             if rt2_zco_k is not None:
                 _rt2_new_b["rt2_zco_k"] = max(0.0, float(rt2_zco_k))
+            if rt2_margin_min_chg_eur is not None:
+                try:
+                    _rt2_new_b["rt2_margin_min_chg_eur"] = (
+                        float(rt2_margin_min_chg_eur)
+                        if str(rt2_margin_min_chg_eur).strip() else None)
+                except (TypeError, ValueError):
+                    pass
             if any(_rt_sec_b.get(k) != v for k, v in _rt2_new_b.items()):
                 _rt_sec_b.update(_rt2_new_b)
                 _pobj_b["rt"] = _rt_sec_b
@@ -2125,9 +2133,12 @@ def form_page(msg=""):
         _rt2_mmin_cur = float(_rt_sec_F.get("rt2_margin_min_eur", 10.0) or 10.0)
         _rt2_mfull_cur = float(_rt_sec_F.get("rt2_margin_full_eur", 60.0) or 60.0)
         _rt2_zcok_cur = float(_rt_sec_F.get("rt2_zco_k", 0.6) or 0.6)
+        _rt2_mchg_raw = _rt_sec_F.get("rt2_margin_min_chg_eur")
+        _rt2_mchg_cur = "" if _rt2_mchg_raw is None else f"{float(_rt2_mchg_raw):g}"
     except Exception:
         _rt_engine_cur = "v1"
         _rt2_mmin_cur, _rt2_mfull_cur, _rt2_zcok_cur = 10.0, 60.0, 0.6
+        _rt2_mchg_cur = ""
     # Distribučný poplatok — single source of truth.
     # Pole sa zobrazí 3 spôsobmi podľa stavu distribúcie v profile:
     #   • _dist_enabled=True  → readonly, vypočítaná hodnota (master toggle ON)
@@ -2421,17 +2432,23 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 <span>⚖️ <b>VDT breakeven auto</b> (prah z účinnosti + fees)</span><input name="vdt_breakeven_auto" type="checkbox" {"checked" if f.get("vdt_breakeven_auto", False) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Explicitná rezerva výkonu batérie pre VDT/RT: D-1 LP nominuje max (batt_kw − rezerva) v oboch smeroch. Nahrádza denný kWh strop ako nástroj delenia kapacity DAM vs intraday. 0 = bez rezervy.">
 <span>🪫 <b>VDT kapacitná rezerva [kW]</b> (headroom pre intraday)</span><input name="vdt_capacity_reserve_kw" type="number" step="any" min="0" value="{f.get('vdt_capacity_reserve_kw', 0.0)}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
-<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#eef3fb;padding:4px 8px;border-radius:6px" title="v1 = signálová heuristika (kdis/kchg/margin/dtk). v2 = RT poradca 2.0: ekonomické rozhodnutie — očakávaná ZCO cena z kalibrovaného spreadu (imbalance history) vs DT + cycle cost; zásah len pri čistej marži > prah. Ochranné vrstvy (no-worsen, lookahead, SOC audit, grid) platia pre obe verzie. v2 zatiaľ SK trh.">
-<span>🤖 <b>RT poradca engine</b> (v2 = ekonomický, testovací)</span><select name="rt_engine" style="padding:4px;border:1px solid #ccc;border-radius:6px">
-<option value="v1" {"selected" if _rt_engine_cur != "v2" else ""}>v1 — signálový</option>
-<option value="v2" {"selected" if _rt_engine_cur == "v2" else ""}>v2 — ekonomický (SK)</option>
+<div style="margin:10px 0;padding:10px 12px;border:2px solid #5b7fb5;border-radius:10px;background:#f4f8ff">
+<div style="font-weight:700;color:#1F4E78;margin-bottom:6px" title="Voľba RT enginu + jeho parametre na jednom mieste. Ukladá sa do rt sekcie profilu.">🤖 RT poradca — engine a parametre</div>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="v1 = signálová heuristika (kdis/kchg/margin/dtk). v2 = ekonomický: E[ZCO] z kalibrovaného spreadu vs prahy marže. v3 = marginálna hodnota energie: predaj/nákup teraz len ak E[ZCO] prekoná najlepšiu BUDÚCU alternatívu (committed plán, voľné okná zvyšku dňa, RT maska) — výkon vyplynie z objemu energie s kladnou maržou. Fyzické ochrany (SOC/grid/audit) platia pre všetky.">
+<span><b>Engine</b></span><select name="rt_engine" style="padding:4px;border:1px solid #ccc;border-radius:6px">
+<option value="v1" {"selected" if _rt_engine_cur not in ("v2", "v3") else ""}>v1 — signálový</option>
+<option value="v2" {"selected" if _rt_engine_cur == "v2" else ""}>v2 — ekonomický</option>
+<option value="v3" {"selected" if _rt_engine_cur == "v3" else ""}>v3 — hodnota energie (nový)</option>
 </select></label>
-<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="v2: minimálna čistá marža €/MWh (E[ZCO]−DT−cycle), pod ktorou RT nezasahuje. Vyššie = konzervatívnejšie, menej zásahov.">
-<span>&nbsp;&nbsp;↳ v2: prah marže [€/MWh]</span><input name="rt2_margin_min_eur" type="number" step="any" min="0" value="{_rt2_mmin_cur:g}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
-<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="v2: marža €/MWh pri ktorej ide RT na plný výkon batérie. Medzi prahom a touto hodnotou rastie výkon lineárne.">
-<span>&nbsp;&nbsp;↳ v2: plný výkon pri marži [€/MWh]</span><input name="rt2_margin_full_eur" type="number" step="any" min="1" value="{_rt2_mfull_cur:g}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
-<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="v2: fallback citlivosť €/MWh za MW signálu — použije sa LEN keď kalibrácia z imbalance_history nie je dostupná (inak sa berie kalibrovaný spread).">
-<span>&nbsp;&nbsp;↳ v2: fallback slope [€/MWh za MW]</span><input name="rt2_zco_k" type="number" step="any" min="0" value="{_rt2_zcok_cur:g}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="v2+v3: minimálna čistá marža €/MWh, pod ktorou RT nezasahuje. Vyššie = konzervatívnejšie. SK šum spreadu je ~±26 € → odporúčané 15-25.">
+<span>↳ prah marže [€/MWh]</span><input name="rt2_margin_min_eur" type="number" step="any" min="0" value="{_rt2_mmin_cur:g}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="v2+v3: samostatný (vyšší) prah pre NABÍJANIE. Prázdne = použije sa spoločný prah. Nabíjacie zásahy majú menšiu istotu (plán sa intradenne nereoptimalizuje) — odporúčané 30-50.">
+<span>↳ prah nabíjania [€/MWh] <span style="color:#888">(prázdne = spoločný)</span></span><input name="rt2_margin_min_chg_eur" type="number" step="any" min="0" value="{_rt2_mchg_cur}" placeholder="—" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="LEN v2: marža €/MWh pri ktorej ide RT na plný výkon (lineárna rampa od prahu). v3 výkon neodvodzuje z marže, ale z objemu energie s kladnou maržou — toto pole ignoruje.">
+<span>↳ v2: plný výkon pri marži [€/MWh]</span><input name="rt2_margin_full_eur" type="number" step="any" min="1" value="{_rt2_mfull_cur:g}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="v2+v3: fallback citlivosť €/MWh za MW signálu — použije sa LEN keď kalibrácia z imbalance_history nie je dostupná (inak kalibrovaný spread).">
+<span>↳ fallback slope [€/MWh za MW]</span><input name="rt2_zco_k" type="number" step="any" min="0" value="{_rt2_zcok_cur:g}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+</div>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Keď systémový signál pretrváva v jednom smere (príležitostí je veľa), agresivita FTV-balance sa zníži (~50 % pri silnej persistencii). Nechá priestor pre plán a iné zásahy.">
 <span>🌊 Persistencia signálu throttle</span><input name="ftv_persistence_throttle" type="checkbox" {"checked" if f.get("ftv_persistence_throttle", True) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#e6f4ea;padding:4px 8px;border-radius:6px" title="RT zásah (MW signal + FTV balance) nesmie nikdy zhoršiť threshold odchýlku voči obchodnému plánu. Keď FTV nedoposlúchne plán (under-deliver, pre_dev<0), RT nesmie batériu nabíjať navyše; keď FTV preteká (over-deliver), RT nesmie ďalej vybíjať. Plán adherence má prednosť pred MW signal arbitrážou.">
@@ -14544,6 +14561,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          rt2_margin_min_eur: float = Form(default=10.0),
          rt2_margin_full_eur: float = Form(default=60.0),
          rt2_zco_k: float = Form(default=0.6),
+         rt2_margin_min_chg_eur: str = Form(default=""),
          ftv_persistence_throttle: str = Form(default=""),
          rt_no_worsen_dev: str = Form(default=""),
          ftv_strict_plan: str = Form(default=""),
@@ -14600,13 +14618,18 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
         import profiles as _pr_rteS
         _prof_rteS = ps.resolve_profile() if ps is not None else None
         if _prof_rteS and _prof_rteS != "default":
-            _eng_new = "v2" if str(rt_engine) == "v2" else "v1"
+            _eng_new = str(rt_engine) if str(rt_engine) in ("v2", "v3") else "v1"
             _pobj_rte = _pr_rteS.load_profile(_prof_rteS) or {}
             _rt_sec = _pobj_rte.get("rt") or {}
+            try:
+                _mchg_new = float(rt2_margin_min_chg_eur) if str(rt2_margin_min_chg_eur).strip() else None
+            except (TypeError, ValueError):
+                _mchg_new = None
             _rt2_new = dict(engine=_eng_new,
                             rt2_margin_min_eur=max(0.0, float(rt2_margin_min_eur or 10.0)),
                             rt2_margin_full_eur=max(1.0, float(rt2_margin_full_eur or 60.0)),
-                            rt2_zco_k=max(0.0, float(rt2_zco_k or 0.6)))
+                            rt2_zco_k=max(0.0, float(rt2_zco_k or 0.6)),
+                            rt2_margin_min_chg_eur=_mchg_new)
             if any(_rt_sec.get(k) != v for k, v in _rt2_new.items()):
                 _rt_sec.update(_rt2_new)
                 _pobj_rte["rt"] = _rt_sec
@@ -15099,10 +15122,11 @@ a{{color:#1F4E78}}</style></head><body>
             ("zco_bias_w", zbw), ("ftv_lookahead_h", flah), ("rt_audit_horizon_h", rah),
             ("ftv_strict_deadband_kw", fsdb),
             ("terminal_soc_mode", tsm), ("vdt_capacity_reserve_kw", vcr),
-            ("rt_engine", ("v2" if str(rt_engine) == "v2" else "v1")),
+            ("rt_engine", (str(rt_engine) if str(rt_engine) in ("v2", "v3") else "v1")),
             ("rt2_margin_min_eur", rt2_margin_min_eur),
             ("rt2_margin_full_eur", rt2_margin_full_eur),
             ("rt2_zco_k", rt2_zco_k),
+            ("rt2_margin_min_chg_eur", rt2_margin_min_chg_eur),
         ])
     if agc:
         _hidden += "<input type='hidden' name='allow_grid_charge' value='1'>"

@@ -333,7 +333,7 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
     # Použité len pri rt_engine="v2" + restore_mode="auto" — ocenenie zásahu ako
     # substitúcie budúcej plánovanej akcie (viď rt_engine_v2.decide_v2).
     _pp_sum = _np.zeros(npn); _pp_cnt = _np.zeros(npn)
-    if str(rt_engine) == "v2":
+    if str(rt_engine) in ("v2", "v3"):
         try:
             for _r0 in g.itertuples(index=False):
                 _rd0 = _r0._asdict()
@@ -373,7 +373,49 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
             else:
                 bc_eff = band_chg*(1.0-boost)
         bd_eff, bc_eff = soc_bias_bands(bd_eff, bc_eff, soc/BKWH*100)
-        if str(rt_engine) == "v2":
+        if str(rt_engine) == "v3":
+            # RT poradca 3.0 (2026-06-12): marginálna hodnota energie — jediný
+            # princíp namiesto veže pravidiel. Viď rt_value.decide_v3. Nastavenia
+            # profilu sú vstupom (rt_on maska, voľný výkon nad plánom, committed
+            # plán ako rezerva). No-worsen/persistencia/lookahead sa pre v3
+            # PRESKAKUJÚ — ich úlohu preberá ocenenie; fyzika (SOC/grid/audit)
+            # clipy ostávajú.
+            from rt_engine_v2 import expected_zco_spread as _ezs_v3
+            from rt_value import decide_v3 as _decide_v3
+            _sig_raw_v3 = avg * (float(sys_orient) if sys_orient in (1, -1, 1.0, -1.0) else 1.0)
+            try:
+                _hr_v3 = pd.Timestamp(rd.get("time")).hour
+            except Exception:
+                _hr_v3 = None
+            _p3 = rt2_params or {}
+            _spread_v3, _src3 = _ezs_v3(_sig_raw_v3, float(_p3.get("rt2_zco_k") or 0.6),
+                                        hour=_hr_v3)
+            _zco_exp_v3 = float(dtp) + _spread_v3
+            _period_h_v3 = step_min / 60.0
+            _fut_plan3 = _np.asarray(plan[pidx + 1:], float) if pidx + 1 < npn else _np.zeros(0)
+            _fp3 = _price_per_period[pidx + 1: pidx + 1 + _fut_plan3.size]
+            if rt_on is not None and _fut_plan3.size:
+                _mask3 = (_np.asarray(rt_on[pidx + 1: pidx + 1 + _fut_plan3.size],
+                                      float) >= 0.5)
+            else:
+                _mask3 = _np.ones(_fut_plan3.size, dtype=bool)
+            _free_dis3 = _np.where(_mask3, _np.clip(BK - _np.clip(_fut_plan3, 0, None), 0, None), 0.0)
+            _free_chg3 = _np.where(_mask3, _np.clip(BK - _np.clip(-_fut_plan3, 0, None), 0, None), 0.0)
+            _fd_kwh3 = float(_np.sum(_np.clip(_fut_plan3, 0, None)) * _period_h_v3)
+            _fc_kwh3 = float(_np.sum(_np.clip(-_fut_plan3, 0, None)) * _period_h_v3)
+            _rt_kw3, reason = _decide_v3(
+                _zco_exp_v3, soc, lo_eff, hi, BK, _period_h_v3, EFFC, EFFD,
+                float(_p3.get("rt2_cycle_cost") or 5.0),
+                _fp3, _free_dis3, _free_chg3, _fd_kwh3, _fc_kwh3,
+                margin_min_eur=float(_p3.get("rt2_margin_min_eur") or 10.0),
+                margin_min_chg_eur=_p3.get("rt2_margin_min_chg_eur"))
+            if abs(_rt_kw3) > 1e-6:
+                d = 1 if _rt_kw3 > 0 else -1
+                f = min(1.0, abs(_rt_kw3) / max(BK, 1e-9))
+            else:
+                d, f = 0, 0.0
+            reason = f"{reason} ({_src3})"
+        elif str(rt_engine) == "v2":
             # RT poradca 2.0: ekonomický zámer (kalibrovaný E[ZCO] spread vs náklady).
             # Bug RT2-SIGN (2026-06-12, user: "pri nedostatku sa nabíja"): kalibrácia
             # beží na SUROVOM sys_MWh z imbalance_history, ale `avg` má aplikovanú
@@ -495,7 +537,7 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
         #   B) Žiadna FTV/load odchýlka (pre_dev ≈ 0): RT nesmie ÍSŤ PROTI smeru plánu —
         #      ak plán hovorí VYBI/NABI a MW engine by ho chcel zvrátiť, máme držať plán
         #      (kontrakt voči trhu = obchod, MW arbitrage nesmie znegovať planovaný zisk).
-        if rt_no_worsen_dev and _has_plan_action:
+        if rt_no_worsen_dev and _has_plan_action and str(rt_engine) != "v3":
             if abs(pre_dev) > 1e-3:
                 # vetva A — FTV/load odchýlka (LEGITIMNA: RT nesmie zhorsit
                 # already-existing threshold odchylku spôsobenú FTV/load driftom)
@@ -519,7 +561,7 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
         # POZOR: ak strict_plan fire batt_extra, NEDOTÝKAME sa rt_action — plán dnes > rezerva zajtra.
         if not _strict_fired:
             # ───── LOOKAHEAD: pozri ~ftv_lookahead_h hodín dopredu na plán ─────
-            if ftv_lookahead_h > 0 and rt_action != 0.0:
+            if ftv_lookahead_h > 0 and rt_action != 0.0 and str(rt_engine) != "v3":
                 _period_h = step_min / 60.0
                 _n_look = max(1, int(round(ftv_lookahead_h / _period_h)))
                 _future_disch_kwh = 0.0   # SOC ktorá musí ostať pre plánované vybíjanie
@@ -553,7 +595,7 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                 else:
                     rt_action = max(rt_action, -_max_chg_kw)
             # ───── PERSISTENCIA: keď systém pretrváva v jednom smere, zníž RT zásah ─────
-            if ftv_persistence_throttle and abs(sig) > 1e-3:
+            if ftv_persistence_throttle and abs(sig) > 1e-3 and str(rt_engine) != "v3":
                 _align = avg / max(abs(sig), 1.0)
                 _align_pos = max(0.0, min(1.0, _align * _np.sign(sig)))
                 _throttle = 1.0 - 0.5 * _align_pos

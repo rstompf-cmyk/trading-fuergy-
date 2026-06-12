@@ -156,7 +156,8 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
               batt_kwh: Optional[float] = None,
               ref_chg_price: Optional[float] = None,
               ref_dis_price: Optional[float] = None,
-              surplus_kwh: Optional[float] = None) -> Tuple[int, float, str]:
+              surplus_kwh: Optional[float] = None,
+              chg_overflow_kwh: Optional[float] = None) -> Tuple[int, float, str]:
     """Ekonomické RT rozhodnutie. Returns (d, f, reason) — kontrakt v1 decide_reason.
 
     d ∈ {-1, 0, +1} (−1 = nabíjaj nad plán, +1 = vybíjaj nad plán), f ∈ [0, 1].

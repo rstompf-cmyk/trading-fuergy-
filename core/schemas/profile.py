@@ -196,13 +196,15 @@ class RTConfig(BaseModel):
     # RT poradca 2.0 (2026-06-11): voľba enginu per profil pre A/B testovanie.
     # v1 = signálová heuristika (kdis/kchg/margin/dtk), v2 = ekonomické rozhodnutie
     # z kalibrovaného E[ZCO] spreadu (SK trh; CZ prispôsobíme — viac dát/granularita).
-    engine: Literal["v1", "v2"] = "v1"
+    # v3 = marginálna hodnota energie (rt_value.decide_v3, 2026-06-12)
+    engine: Literal["v1", "v2", "v3"] = "v1"
     rt2_margin_min_eur: float = Field(default=10.0, ge=0.0)
     rt2_margin_full_eur: float = Field(default=60.0, ge=0.0)
     rt2_zco_k: float = Field(default=0.6, ge=0.0)
     rt2_cycle_cost: Optional[float] = None     # None = zdedí plan.cycle_cost
     rt2_restore_weight: float = Field(default=0.5, ge=0.0, le=1.0)
-    rt2_restore_mode: Literal["fixed", "auto"] = "fixed"
+    rt2_restore_mode: Literal["fixed", "auto"] = "auto"
+    rt2_margin_min_chg_eur: Optional[float] = None   # asymetrický prah nabíjania
 
 
 class DistributionConfig(BaseModel):

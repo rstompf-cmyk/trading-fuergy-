@@ -1030,14 +1030,15 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 from core.profile_resolver import get_active as _ga_rte
                 import profiles as _pr_rte
                 _rt_cfg_sel = ((_pr_rte.load_profile(_ga_rte()) or {}).get("rt") or {})
-                if str(_rt_cfg_sel.get("engine", "v1")) == "v2":
+                _eng_sel = str(_rt_cfg_sel.get("engine", "v1"))
+                if _eng_sel in ("v2", "v3"):
                     import rt_engine_v2 as _rte2
-                    _rt_engine_sel = "v2"
+                    _rt_engine_sel = _eng_sel
                     _rt2_params = _rte2.params_from_profile_rt(
                         _rt_cfg_sel, cycle_cost_plan=getattr(cfg, "cycle_cost", None),
                         eff_rt=(float(getattr(cfg, "eff_c", 0.95) or 0.95)
                                 * float(getattr(cfg, "eff_d", 0.95) or 0.95)))
-                    print(f"[RT-ENGINE] {d}: v2 (ekonomický, params={_rt2_params})")
+                    print(f"[RT-ENGINE] {d}: {_eng_sel} (params={_rt2_params})")
             except Exception as _e_rte:
                 print(f"[RT-ENGINE] výber zlyhal ({_e_rte}) → v1")
 
