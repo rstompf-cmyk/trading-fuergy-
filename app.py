@@ -1060,7 +1060,17 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
                 rt_grid_reserve_pct: float = Form(default=None),
                 rt_freedom: str = Form(default=None),
                 purge_history: str = Form(default=None),
-                full_reset: str = Form(default=None)):
+                full_reset: str = Form(default=None),
+                # Bug BATCH-NEW-PARAMS (2026-06-12): nové polia musia prísť aj cez
+                # BATCH submit (rovnaký formulár, iné tlačidlo) — inak sa pri uložení
+                # cez BATCH zahodili (user: "neukladá sa, stále 60").
+                terminal_soc_mode: str = Form(default=None),
+                vdt_breakeven_auto: str = Form(default=None),
+                vdt_capacity_reserve_kw: float = Form(default=None),
+                rt_engine: str = Form(default=None),
+                rt2_margin_min_eur: float = Form(default=None),
+                rt2_margin_full_eur: float = Form(default=None),
+                rt2_zco_k: float = Form(default=None)):
     """Hromadné generovanie plánov pre rozsah dátumov.
     Pre každý deň v [from, to] (inkluzívne) spustí internú generáciu a uloží do plan_store.
     Ak sú v requeste prítomné aj štandardné form polia (z /plan alebo /dentrh formulára),
@@ -1083,7 +1093,35 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
         max_import_kwh_day=max_import_kwh_day,
         soc_reserve_pct=soc_reserve_pct,
         rt_grid_reserve_pct=rt_grid_reserve_pct,
+        vdt_capacity_reserve_kw=vdt_capacity_reserve_kw,
     ).items() if v is not None}
+    # Bug BATCH-NEW-PARAMS: string/checkbox polia
+    if terminal_soc_mode is not None:
+        _overrides["terminal_soc_mode"] = ("next_day_price"
+                                           if str(terminal_soc_mode) == "next_day_price" else "fixed")
+    if vdt_breakeven_auto is not None:
+        _overrides["vdt_breakeven_auto"] = bool(vdt_breakeven_auto)
+    # RT poradca 2.0: voľba enginu + v2 parametre do PROFILU rt sekcie (ako /plan POST)
+    try:
+        import profiles as _pr_rteB
+        _prof_rteB = ps.resolve_profile() if ps is not None else None
+        if _prof_rteB and _prof_rteB != "default" and rt_engine is not None:
+            _pobj_b = _pr_rteB.load_profile(_prof_rteB) or {}
+            _rt_sec_b = _pobj_b.get("rt") or {}
+            _rt2_new_b = dict(engine=("v2" if str(rt_engine) == "v2" else "v1"))
+            if rt2_margin_min_eur is not None:
+                _rt2_new_b["rt2_margin_min_eur"] = max(0.0, float(rt2_margin_min_eur))
+            if rt2_margin_full_eur is not None:
+                _rt2_new_b["rt2_margin_full_eur"] = max(1.0, float(rt2_margin_full_eur))
+            if rt2_zco_k is not None:
+                _rt2_new_b["rt2_zco_k"] = max(0.0, float(rt2_zco_k))
+            if any(_rt_sec_b.get(k) != v for k, v in _rt2_new_b.items()):
+                _rt_sec_b.update(_rt2_new_b)
+                _pobj_b["rt"] = _rt_sec_b
+                _pr_rteB.save_profile(_prof_rteB, _pobj_b)
+                print(f"[RT-ENGINE batch] profil {_prof_rteB}: {_rt2_new_b}")
+    except Exception as _e_rteB:
+        print(f"[RT-ENGINE batch] uloženie zlyhalo: {_e_rteB}")
     # checkbox-y: prítomné v requeste len ak sú zaškrtnuté
     if allow_grid_charge is not None: _overrides["allow_grid_charge"] = bool(allow_grid_charge)
     if allow_curtail is not None:     _overrides["allow_curtail"] = bool(allow_curtail)
