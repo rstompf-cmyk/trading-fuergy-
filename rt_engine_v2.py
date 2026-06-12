@@ -142,7 +142,9 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
               hour: Optional[int] = None,
               future_chg_kwh: Optional[float] = None,
               future_dis_kwh: Optional[float] = None,
-              batt_kwh: Optional[float] = None) -> Tuple[int, float, str]:
+              batt_kwh: Optional[float] = None,
+              ref_chg_price: Optional[float] = None,
+              ref_dis_price: Optional[float] = None) -> Tuple[int, float, str]:
     """Ekonomické RT rozhodnutie. Returns (d, f, reason) — kontrakt v1 decide_reason.
 
     d ∈ {-1, 0, +1} (−1 = nabíjaj nad plán, +1 = vybíjaj nad plán), f ∈ [0, 1].
@@ -165,22 +167,30 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
     #   nabi 1 kWh teraz za E[ZCO]; neskôr predáš η×DT            → marža = η×DT − ZCO − cc
     eff = max(0.5, min(1.0, float(p.get("rt2_eff_rt") or 0.9025)))
     w_fix = max(0.0, min(1.0, float(p.get("rt2_restore_weight", 0.5) or 0.0)))
-    # Bod 4 (adaptívna váha, user: "malo by sa meniť v čase"): mode="auto" → váha
-    # per smer z plán-kontextu. Keď plán dnes ešte NABÍJA dosť kWh, RT vybitie len
-    # posunie energiu (obnovu spraví plán za plánovanú cenu) → w_dis → 0. Analogicky
-    # plánované VYBÍJANIE robí lacný odbyt pre RT nabitie → w_chg → 0. Bez plánu
-    # v okolí = plný round-trip náklad (w=1). Škála = 10 % kapacity batérie.
-    w_dis = w_chg = w_fix
-    if str(p.get("rt2_restore_mode", "fixed")) == "auto" and batt_kwh:
-        _scale = max(1.0, 0.10 * float(batt_kwh))
-        if future_chg_kwh is not None:
-            w_dis = max(0.0, min(1.0, 1.0 - float(future_chg_kwh) / _scale))
-        if future_dis_kwh is not None:
-            w_chg = max(0.0, min(1.0, 1.0 - float(future_dis_kwh) / _scale))
     dtp = max(0.0, float(dt_eur or 0.0))
     zco_exp = dtp + spread
-    margin_dis = zco_exp - dtp - w_dis * dtp * (1.0 / eff - 1.0) - cc
-    margin_chg = dtp - zco_exp - w_chg * dtp * (1.0 - eff) - cc
+    # Bod 4 v2.1 — SUBSTITUČNÁ logika (2026-06-12, user: "okamžité nabíjania robia
+    # pokuty a nedodržanie plánu"). Pôvodná auto-váha bola pre nabíjanie NAOPAK:
+    # budúce plánované nabíjanie nerobí RT nákup lacným — SÚŤAŽÍ s ním o kapacitu.
+    # Správne: RT zásah sa oceňuje ako SUBSTITÚCIA plánovanej akcie:
+    #   nabi teraz za E[ZCO] NAMIESTO plánovaného nákupu neskôr za ref_chg_price
+    #     → marža = ref_chg_price − E[ZCO] − cc   (bez budúceho plán. nabíjania:
+    #       energia navyše sa predá za η×DT → marža = η×DT − E[ZCO] − cc)
+    #   vybi teraz za E[ZCO] NAMIESTO plánovaného predaja neskôr za ref_dis_price
+    #     → marža = E[ZCO] − ref_dis_price − cc   (bez budúceho plán. vybíjania:
+    #       obnova stojí DT/η → marža = E[ZCO] − DT/η − cc)
+    if str(p.get("rt2_restore_mode", "fixed")) == "auto":
+        if ref_dis_price is not None and (future_dis_kwh or 0) > 1.0:
+            margin_dis = zco_exp - float(ref_dis_price) - cc
+        else:
+            margin_dis = zco_exp - dtp / eff - cc
+        if ref_chg_price is not None and (future_chg_kwh or 0) > 1.0:
+            margin_chg = float(ref_chg_price) - zco_exp - cc
+        else:
+            margin_chg = dtp * eff - zco_exp - cc
+    else:
+        margin_dis = zco_exp - dtp - w_fix * dtp * (1.0 / eff - 1.0) - cc
+        margin_chg = dtp - zco_exp - w_fix * dtp * (1.0 - eff) - cc
     if margin_dis >= m_min:
         f = min(1.0, (margin_dis - m_min) / (m_full - m_min) + 0.15)
         return 1, round(f, 3), f"v2:dis m={margin_dis:.0f} ({src})"

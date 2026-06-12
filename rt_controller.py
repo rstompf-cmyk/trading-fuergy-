@@ -329,6 +329,24 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                     pv_period_plan = None
         else:
             pv_min = None
+    # RT v2.1 (substitučné referencie): per-perióda DT cena za celý deň (známa D-1).
+    # Použité len pri rt_engine="v2" + restore_mode="auto" — ocenenie zásahu ako
+    # substitúcie budúcej plánovanej akcie (viď rt_engine_v2.decide_v2).
+    _pp_sum = _np.zeros(npn); _pp_cnt = _np.zeros(npn)
+    if str(rt_engine) == "v2":
+        try:
+            for _r0 in g.itertuples(index=False):
+                _rd0 = _r0._asdict()
+                _dtp0 = _rd0.get("isot_eur")
+                if pd.isna(_dtp0):
+                    continue
+                _pi0 = int((pd.Timestamp(_rd0.get("ts15")) - day_start).total_seconds()
+                           // (step_min * 60))
+                if 0 <= _pi0 < npn:
+                    _pp_sum[_pi0] += float(_dtp0); _pp_cnt[_pi0] += 1
+        except Exception:
+            pass
+    _price_per_period = _np.where(_pp_cnt > 0, _pp_sum / _np.maximum(_pp_cnt, 1), _np.nan)
     for r in g.itertuples(index=False):
         rd = r._asdict(); zco = rd.get("zco_eur"); dtp = rd.get("isot_eur")
         # DT je povinný (jadro arbitrážnej logiky). ZCO môže byť NaN (napr. SK dnes — ZCO je
@@ -370,14 +388,32 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
             except Exception:
                 _hr_v2 = None
             _period_h_v2 = step_min / 60.0
-            _fut_plan = plan[pidx + 1:] if pidx + 1 < npn else []
-            _fut_chg_kwh_v2 = float(sum(-x * _period_h_v2 for x in _fut_plan if x < 0))
-            _fut_dis_kwh_v2 = float(sum(x * _period_h_v2 for x in _fut_plan if x > 0))
+            _fut_plan = _np.asarray(plan[pidx + 1:], float) if pidx + 1 < npn else _np.zeros(0)
+            _fut_chg_kwh_v2 = float(_np.sum(-_fut_plan[_fut_plan < 0]) * _period_h_v2)
+            _fut_dis_kwh_v2 = float(_np.sum(_fut_plan[_fut_plan > 0]) * _period_h_v2)
+            # Substitučné referenčné ceny: vážený priemer DT cien budúcich
+            # plánovaných nabíjacích / vybíjacích slotov (váha = |kW| slotu)
+            _ref_chg_v2 = _ref_dis_v2 = None
+            try:
+                if _fut_plan.size:
+                    _pp_fut = _price_per_period[pidx + 1: pidx + 1 + _fut_plan.size]
+                    _m_chg = (_fut_plan < 0) & _np.isfinite(_pp_fut)
+                    if _m_chg.any():
+                        _ref_chg_v2 = float(_np.average(_pp_fut[_m_chg],
+                                                        weights=-_fut_plan[_m_chg]))
+                    _m_dis = (_fut_plan > 0) & _np.isfinite(_pp_fut)
+                    if _m_dis.any():
+                        _ref_dis_v2 = float(_np.average(_pp_fut[_m_dis],
+                                                        weights=_fut_plan[_m_dis]))
+            except Exception:
+                pass
             d, f, reason = _decide_v2(_sig_raw_cal, float(dtp), soc / BKWH * 100.0,
                                       rt2_params, hour=_hr_v2,
                                       future_chg_kwh=_fut_chg_kwh_v2,
                                       future_dis_kwh=_fut_dis_kwh_v2,
-                                      batt_kwh=BKWH)
+                                      batt_kwh=BKWH,
+                                      ref_chg_price=_ref_chg_v2,
+                                      ref_dis_price=_ref_dis_v2)
         else:
             d, f, reason = decide_reason(rd, avg, bd_eff, bc_eff, strong_mw, dt_rel, dt_bias_k)
         if rt_on is not None and rt_on[pidx] < 0.5:           # RT v tomto slote zablokovaná → drž plán
