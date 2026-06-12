@@ -521,6 +521,41 @@ def _vdt_price_accuracy(profile: str, day: str, dview) -> dict:
     return out
 
 
+def _rt_eff_stats(df) -> dict:
+    """RT efektivita (bod 2 RT v2 plánu): ex-post vyhodnotenie zásahov z trace.
+    hit = smer zásahu sa zhodol so znamienkom realizovaného spreadu (zco − dt)."""
+    out = dict(n=0, hit_pct=None, rev_eur=0.0, avg_spread=None, v2_share=None)
+    try:
+        if df is None or "rt_dir" not in getattr(df, "columns", []):
+            return out
+        _dir = pd.to_numeric(df["rt_dir"], errors="coerce").fillna(0)
+        _act = _dir != 0
+        n = int(_act.sum())
+        out["n"] = n
+        try:
+            out["rev_eur"] = float(pd.to_numeric(
+                df.get("rt_rev_realistic_min"), errors="coerce").fillna(0).sum())
+        except Exception:
+            pass
+        if n == 0:
+            return out
+        _zco = pd.to_numeric(df.get("zco_eur"), errors="coerce")
+        _dt = pd.to_numeric(df.get("dt_real_eur", df.get("dt_eur")), errors="coerce")
+        _spread = (_zco - _dt)
+        _ok = _act & _spread.notna()
+        if int(_ok.sum()) > 0:
+            _d_ok = _dir[_ok]
+            _s_ok = _spread[_ok]
+            out["hit_pct"] = float(((_d_ok * _s_ok) > 0).mean() * 100.0)
+            out["avg_spread"] = float((_d_ok * _s_ok).mean())   # + = zásahy v smere spreadu
+        if "rt_reason" in df.columns:
+            _rs = df.loc[_act, "rt_reason"].astype(str)
+            out["v2_share"] = float(_rs.str.startswith("v2:").mean() * 100.0)
+    except Exception as _e:
+        print(f"[_rt_eff_stats] {_e}")
+    return out
+
+
 def _vdt_eff_decorate(agg_df):
     """Bug VDT-EFEKTIVITA: doplní do per-deň agregátu stĺpce VDT nákup/predaj
     (kWh + vážená cena) z paper trades. No-op ak chýba stĺpec 'date'."""
@@ -6748,6 +6783,29 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                     f"{_cyc_txt}</div></div>")
     except Exception as _e_ve:
         print(f"[VDT-EFEKTIVITA karty] {_e_ve}")
+    # RT efektivita (bod 2 RT v2): ex-post vyhodnotenie zásahov za zobrazený deň
+    _rt_eff_card = ""
+    try:
+        _res = _rt_eff_stats(dview)
+        if _res["n"] > 0:
+            _hit_txt = (f"hit {_res['hit_pct']:.0f} %" if _res["hit_pct"] is not None else "hit —")
+            _sp_txt = (f" · Ø spread {_res['avg_spread']:+.1f} €/MWh"
+                       if _res["avg_spread"] is not None else "")
+            _eng_txt = ""
+            if _res["v2_share"] is not None:
+                _eng_txt = (" · v2" if _res["v2_share"] >= 99
+                            else (" · v1" if _res["v2_share"] <= 1
+                                  else f" · v2 {_res['v2_share']:.0f} %"))
+            _rev_col = "#2E7D32" if _res["rev_eur"] >= 0 else "#C62828"
+            _rt_eff_card = (
+                f"<div class='card' style='background:#fdf3e8'>"
+                f"<div class='l'>RT efektivita {view_day}{_eng_txt}</div>"
+                f"<div class='v' style='font-size:13px;color:{_rev_col}'>"
+                f"{_res['rev_eur']:+.1f} € · {_res['n']} zásahov · {_hit_txt}</div>"
+                f"<div style='font-size:10px;color:#888'>hit = smer zásahu sa zhodol "
+                f"so znamienkom realizovaného ZCO−DT spreadu{_sp_txt}</div></div>")
+    except Exception as _e_rte_c:
+        print(f"[RT-EFEKTIVITA karta] {_e_rte_c}")
     # daily VDT arb
     _d_vdt = 0.0
     try:
@@ -6763,6 +6821,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         f"<div class='card'><div class='l'>z toho odchýlka (RT)</div><div class='v'>{r['cum_rt']:.1f} €</div></div>"
         f"{_vdt_arb_card}"
         f"{_vdt_eff_cards}"
+        f"{_rt_eff_card}"
         f"{bl_cum_card}"
         f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt:.1f} €</div></div>"
         f"<div class='card' style='background:#eef7ee'><div class='l'>FTV výroba za deň</div><div class='v'>{d_ftv:.0f} kWh</div></div></div>"

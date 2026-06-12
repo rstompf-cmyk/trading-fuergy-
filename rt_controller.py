@@ -363,7 +363,21 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
             # (orient ∈ {±1}: raw = avg × orient).
             from rt_engine_v2 import decide_v2 as _decide_v2
             _sig_raw_cal = avg * (float(sys_orient) if sys_orient in (1, -1, 1.0, -1.0) else 1.0)
-            d, f, reason = _decide_v2(_sig_raw_cal, float(dtp), soc / BKWH * 100.0, rt2_params)
+            # Bod 3+4: hodina pre daypart kalibráciu + zostávajúci plán dnes
+            # (kWh nabíjania/vybíjania od ďalšej periódy) pre adaptívnu váhu obnovy.
+            try:
+                _hr_v2 = pd.Timestamp(rd.get("time")).hour
+            except Exception:
+                _hr_v2 = None
+            _period_h_v2 = step_min / 60.0
+            _fut_plan = plan[pidx + 1:] if pidx + 1 < npn else []
+            _fut_chg_kwh_v2 = float(sum(-x * _period_h_v2 for x in _fut_plan if x < 0))
+            _fut_dis_kwh_v2 = float(sum(x * _period_h_v2 for x in _fut_plan if x > 0))
+            d, f, reason = _decide_v2(_sig_raw_cal, float(dtp), soc / BKWH * 100.0,
+                                      rt2_params, hour=_hr_v2,
+                                      future_chg_kwh=_fut_chg_kwh_v2,
+                                      future_dis_kwh=_fut_dis_kwh_v2,
+                                      batt_kwh=BKWH)
         else:
             d, f, reason = decide_reason(rd, avg, bd_eff, bc_eff, strong_mw, dt_rel, dt_bias_k)
         if rt_on is not None and rt_on[pidx] < 0.5:           # RT v tomto slote zablokovaná → drž plán

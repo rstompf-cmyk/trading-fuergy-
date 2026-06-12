@@ -201,6 +201,8 @@ class RTConfig(BaseModel):
     rt2_margin_full_eur: float = Field(default=60.0, ge=0.0)
     rt2_zco_k: float = Field(default=0.6, ge=0.0)
     rt2_cycle_cost: Optional[float] = None     # None = zdedí plan.cycle_cost
+    rt2_restore_weight: float = Field(default=0.5, ge=0.0, le=1.0)
+    rt2_restore_mode: Literal["fixed", "auto"] = "fixed"
 
 
 class DistributionConfig(BaseModel):
