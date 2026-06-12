@@ -551,6 +551,10 @@ def _rt_eff_stats(df) -> dict:
         if "rt_reason" in df.columns:
             _rs = df.loc[_act, "rt_reason"].astype(str)
             out["v2_share"] = float(_rs.str.startswith("v2:").mean() * 100.0)
+            # RT-EFF-V3-LABEL: dominantný engine z reasons (v3 karta ukazovala "v1")
+            _eng = _rs.str.extract(r"^(v\d)")[0]
+            out["engine"] = (_eng.mode().iloc[0]
+                             if _eng.notna().any() else "v1")
     except Exception as _e:
         print(f"[_rt_eff_stats] {_e}")
     return out
@@ -6847,7 +6851,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _sp_txt = (f" · Ø spread {_res['avg_spread']:+.1f} €/MWh"
                        if _res["avg_spread"] is not None else "")
             _eng_txt = ""
-            if _res["v2_share"] is not None:
+            if _res.get("engine"):
+                _eng_txt = f" · {_res['engine']}"   # RT-EFF-V3-LABEL
+            elif _res["v2_share"] is not None:
                 _eng_txt = (" · v2" if _res["v2_share"] >= 99
                             else (" · v1" if _res["v2_share"] <= 1
                                   else f" · v2 {_res['v2_share']:.0f} %"))

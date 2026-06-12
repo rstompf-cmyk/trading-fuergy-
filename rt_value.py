@@ -133,12 +133,15 @@ def decide_v3(zco_exp: float,
                     break
                 margin = eff_c * eff_d * resale - (zco_exp + cc)
             else:
+                # Bug V3-GREEDY-BUY (2026-06-12, user: "tomuto nabíjaniu nerozumiem,
+                # odchýlka nebola najlepšia"): resale skratka (kúp teraz, lebo cyklus
+                # je ziskový) prebíjala porovnanie s LACNEJŠÍMI budúcimi oknami →
+                # nočné nákupy za E[ZCO] 142-149 (real 171-469, deficit sústavy!)
+                # namiesto poludňajších za 60. Nákup teraz IBA ak je teraz lacnejšie
+                # než najlacnejšia budúca príležitosť — edge dodáva ZCO zľava
+                # (prebytok sústavy → E[ZCO] pod DT). Resale cyklus ostáva len pre
+                # prípad bez budúcich nákupných okien (rieši vetva alt=NaN vyššie).
                 margin = alt - (zco_exp + cc)                # kúp teraz namiesto neskôr
-                # nákup "navyše" (nie substitúcia) má zmysel len ak ho predaj unesie
-                resale = _marginal_value(sell_p, sell_c,
-                                         need_kwh + q + chunk)
-                if resale == resale:
-                    margin = max(margin, eff_c * eff_d * resale - (zco_exp + cc))
             if margin < m_min_c:
                 break
             buy_now_kwh = q + chunk
