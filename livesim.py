@@ -643,6 +643,21 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         _prof_sig = str(_ga_sig() or "")
     except Exception:
         _prof_sig = ""
+    # Bug PROFILE-RT2-SIG (2026-06-12): sig obsahoval len MENO profilu — zmena rt
+    # parametrov profilu (engine v1/v2, rt2_* prahy) reset nevyvolala → história v CSV
+    # ostala nasimulovaná so STARÝMI parametrami (dnešok sa pritom počíta čerstvo →
+    # nekonzistencia karta vs história). Obsah rt sekcie do sig ⇒ zmena vyvolá backfill.
+    # Plan sekciu NEpridávame: tá tečie cez plan_params/_po (už v sig) a profil sa
+    # auto-ukladá pri každom /plan POST — celý profil v sig by spúšťal backfill zbytočne.
+    _prof_rt_sig = {}
+    if _prof_sig:
+        try:
+            import profiles as _pr_sig
+            _pdata_sig = _pr_sig.load_profile(_prof_sig) or {}
+            _rt_sec = _pdata_sig.get("rt") or {}
+            _prof_rt_sig = {k: _rt_sec.get(k) for k in sorted(_rt_sec)}
+        except Exception:
+            _prof_rt_sig = {}
     sig = {"plan": {k: _po.get(k) for k in sorted(_po)},
            "rt": {k: (round(float(v), 4) if isinstance(v, (int, float)) else v)
                   for k, v in sorted((rt_params or {}).items())},
@@ -654,6 +669,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
            "plan_store": plan_sigs,
            "ftv_scenarios": ftv_scen_sig,
            "profile": _prof_sig,
+           "profile_rt": _prof_rt_sig,   # Bug PROFILE-RT2-SIG
            "csv_cols_v": "15"}  # bump: Bug VDT-DOUBLE — dam/vdt stĺpce do CSV (render nesmie VDT pripočítať 2×)
     sig_s = json.dumps(sig, sort_keys=True, default=str)
     meta = _load_meta(meta_path)
