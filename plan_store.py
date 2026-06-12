@@ -800,6 +800,12 @@ def purge_full_profile(profile: Optional[str] = None) -> Dict[str, int]:
         if po_root and os.path.isdir(po_root):
             import glob as _g
             for fp in _g.glob(os.path.join(po_root, "*.json")):
+                # Bug PURGE-TEMPLATE (2026-06-12, user: "uložil som ×0.5, po úplnom
+                # resete sa vrátilo 1"): _template.json / _template_rt.json je GLOBÁLNA
+                # šablóna profilu (nastavenie, nie stav) — purge maže len per-day
+                # overridy (dátumové súbory). Súbory začínajúce "_" preskakujeme.
+                if os.path.basename(fp).startswith("_"):
+                    continue
                 try:
                     os.remove(fp); counts["plan_overrides"] += 1
                 except Exception:
@@ -812,6 +818,8 @@ def purge_full_profile(profile: Optional[str] = None) -> Dict[str, int]:
                 pdir = os.path.join(base, prof)
                 if os.path.isdir(pdir):
                     for fp in _g.glob(os.path.join(pdir, "*.json")):
+                        if os.path.basename(fp).startswith("_"):   # Bug PURGE-TEMPLATE
+                            continue
                         try:
                             os.remove(fp); counts["plan_overrides"] += 1
                         except Exception:
