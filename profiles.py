@@ -626,6 +626,14 @@ def snapshot_current(name: str, ui_load_fn, po_module, note: str = "",
     # ďalšie profile-only polia), sa pri každom auto-save po /plan ticho MAZALI
     # (užívateľ: "zmením engine a vráti sa na v1"). Merge: existujúci profil je
     # podklad, UI stav prepíše len kľúče, ktoré reálne nesie.
+    # Bug RT2-UI-STALE (2026-06-12, user: "60 na 40 sa neuloží, skúšal som
+    # niekoľkokrát"): aktivácia profilu kopíruje rt sekciu do ui stavu VRÁTANE
+    # rt2_*/engine. Tá kópia je STARÁ — RT-ENGINE blok /plan POST medzitým zapíše
+    # nové hodnoty do profilu, ale merge nižšie ich UI kópiou zase prebil (40→60).
+    # rt2_*/engine vlastní VÝHRADNE profil → z UI stavu ich pred merge vyhodíme.
+    _ui_rt = data.get("rt") or {}
+    data["rt"] = {k: v for k, v in _ui_rt.items()
+                  if k != "engine" and not str(k).startswith("rt2_")}
     try:
         _existing = load_profile(name) or {}
         for _sec in ("plan", "dentrh", "rt"):
