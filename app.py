@@ -2036,6 +2036,13 @@ def form_page(msg=""):
         _jl_flags = {"enabled": False, "trade_batt": True, "trade_ftv": True,
                      "trade_load": True, "use_vdt": False,
                      "optimize_distribution": False}
+    # RT poradca 2.0: aktuálny engine z profilu rt sekcie (pre select v forme)
+    try:
+        import profiles as _pr_rteF
+        _rt_engine_cur = str((((_pr_rteF.load_profile(_active_prof_jli) or {})
+                               .get("rt") or {}).get("engine", "v1")) or "v1")
+    except Exception:
+        _rt_engine_cur = "v1"
     # Distribučný poplatok — single source of truth.
     # Pole sa zobrazí 3 spôsobmi podľa stavu distribúcie v profile:
     #   • _dist_enabled=True  → readonly, vypočítaná hodnota (master toggle ON)
@@ -2329,6 +2336,11 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 <span>⚖️ <b>VDT breakeven auto</b> (prah z účinnosti + fees)</span><input name="vdt_breakeven_auto" type="checkbox" {"checked" if f.get("vdt_breakeven_auto", False) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Explicitná rezerva výkonu batérie pre VDT/RT: D-1 LP nominuje max (batt_kw − rezerva) v oboch smeroch. Nahrádza denný kWh strop ako nástroj delenia kapacity DAM vs intraday. 0 = bez rezervy.">
 <span>🪫 <b>VDT kapacitná rezerva [kW]</b> (headroom pre intraday)</span><input name="vdt_capacity_reserve_kw" type="number" step="100" min="0" value="{f.get('vdt_capacity_reserve_kw', 0.0)}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#eef3fb;padding:4px 8px;border-radius:6px" title="v1 = signálová heuristika (kdis/kchg/margin/dtk). v2 = RT poradca 2.0: ekonomické rozhodnutie — očakávaná ZCO cena z kalibrovaného spreadu (imbalance history) vs DT + cycle cost; zásah len pri čistej marži > prah. Ochranné vrstvy (no-worsen, lookahead, SOC audit, grid) platia pre obe verzie. v2 zatiaľ SK trh.">
+<span>🤖 <b>RT poradca engine</b> (v2 = ekonomický, testovací)</span><select name="rt_engine" style="padding:4px;border:1px solid #ccc;border-radius:6px">
+<option value="v1" {"selected" if _rt_engine_cur != "v2" else ""}>v1 — signálový</option>
+<option value="v2" {"selected" if _rt_engine_cur == "v2" else ""}>v2 — ekonomický (SK)</option>
+</select></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Keď systémový signál pretrváva v jednom smere (príležitostí je veľa), agresivita FTV-balance sa zníži (~50 % pri silnej persistencii). Nechá priestor pre plán a iné zásahy.">
 <span>🌊 Persistencia signálu throttle</span><input name="ftv_persistence_throttle" type="checkbox" {"checked" if f.get("ftv_persistence_throttle", True) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#e6f4ea;padding:4px 8px;border-radius:6px" title="RT zásah (MW signal + FTV balance) nesmie nikdy zhoršiť threshold odchýlku voči obchodnému plánu. Keď FTV nedoposlúchne plán (under-deliver, pre_dev<0), RT nesmie batériu nabíjať navyše; keď FTV preteká (over-deliver), RT nesmie ďalej vybíjať. Plán adherence má prednosť pred MW signal arbitrážou.">
@@ -14413,6 +14425,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          terminal_soc_mode: str = Form(default="fixed"),
          vdt_breakeven_auto: str = Form(default=""),
          vdt_capacity_reserve_kw: float = Form(default=0.0),
+         rt_engine: str = Form(default="v1"),
          ftv_persistence_throttle: str = Form(default=""),
          rt_no_worsen_dev: str = Form(default=""),
          ftv_strict_plan: str = Form(default=""),
@@ -14464,6 +14477,21 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
     tsm = "next_day_price" if str(terminal_soc_mode) == "next_day_price" else "fixed"
     vba = bool(vdt_breakeven_auto)                              # auto breakeven prah pre VDT advisor
     vcr = max(0.0, float(vdt_capacity_reserve_kw or 0.0))       # kW headroom pre VDT/RT v D-1 LP
+    # RT poradca 2.0: voľba enginu sa ukladá do PROFILU rt sekcie (livesim ju číta odtiaľ)
+    try:
+        import profiles as _pr_rteS
+        _prof_rteS = ps.resolve_profile() if ps is not None else None
+        if _prof_rteS and _prof_rteS != "default":
+            _eng_new = "v2" if str(rt_engine) == "v2" else "v1"
+            _pobj_rte = _pr_rteS.load_profile(_prof_rteS) or {}
+            _rt_sec = _pobj_rte.get("rt") or {}
+            if str(_rt_sec.get("engine", "v1")) != _eng_new:
+                _rt_sec["engine"] = _eng_new
+                _pobj_rte["rt"] = _rt_sec
+                _pr_rteS.save_profile(_prof_rteS, _pobj_rte)
+                print(f"[RT-ENGINE] profil {_prof_rteS}: engine → {_eng_new}")
+    except Exception as _e_rteS:
+        print(f"[RT-ENGINE] uloženie voľby zlyhalo: {_e_rteS}")
     fpth = bool(ftv_persistence_throttle)                       # default True; persistencia throttle
     rnwd = bool(rt_no_worsen_dev)                               # default True; RT nesmie zhoršovať threshold
     fsp = bool(ftv_strict_plan)                                 # default True; FTV-balance vždy fire keď pre_dev≠0

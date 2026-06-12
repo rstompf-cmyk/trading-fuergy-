@@ -389,7 +389,8 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
                        load_min_kw=None, load_plan_kw=None,
                        enforce_realistic=True, audit_today_state=None,
                        audit_soc_reserve_pct=0.0,
-                       audit_rt_persistence_slots=4):
+                       audit_rt_persistence_slots=4,
+                       rt_engine="v1", rt2_params=None):
     """Jedna fyzická batéria – deleguje na rt_controller.run_day_physical (jeden zdroj pravdy).
 
     Bug RT-INLINE-AUDIT (2026-06-11): defaultne `enforce_realistic=True` → rt_controller
@@ -418,7 +419,8 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
                                 enforce_realistic=enforce_realistic,
                                 audit_today_state=audit_today_state,
                                 audit_soc_reserve_pct=audit_soc_reserve_pct,
-                                audit_rt_persistence_slots=audit_rt_persistence_slots)
+                                audit_rt_persistence_slots=audit_rt_persistence_slots,
+                                rt_engine=rt_engine, rt2_params=rt2_params)
 
 
 def _load_meta(meta_path):
@@ -1005,6 +1007,22 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             except Exception as _e_audit_state:
                 print(f"[RT-INLINE-AUDIT] compute_current_state zlyhal: {_e_audit_state}")
 
+            # RT poradca 2.0 (2026-06-11): voľba enginu z profilu rt.engine ("v1"|"v2").
+            # v2 = ekonomické rozhodnutie z kalibrovaného E[ZCO] spreadu (SK trh).
+            _rt_engine_sel, _rt2_params = "v1", None
+            try:
+                from core.profile_resolver import get_active as _ga_rte
+                import profiles as _pr_rte
+                _rt_cfg_sel = ((_pr_rte.load_profile(_ga_rte()) or {}).get("rt") or {})
+                if str(_rt_cfg_sel.get("engine", "v1")) == "v2":
+                    import rt_engine_v2 as _rte2
+                    _rt_engine_sel = "v2"
+                    _rt2_params = _rte2.params_from_profile_rt(
+                        _rt_cfg_sel, cycle_cost_plan=getattr(cfg, "cycle_cost", None))
+                    print(f"[RT-ENGINE] {d}: v2 (ekonomický, params={_rt2_params})")
+            except Exception as _e_rte:
+                print(f"[RT-ENGINE] výber zlyhal ({_e_rte}) → v1")
+
             rev, cyc, tr = _run_physical_day(cfg, mn_day, sch, day, step, bd, bc,
                                              soc0=soc, dev_budget_kwh=dev_budget, dt_bias_k=_dtk,
                                              rt_mask=_rt_mask, pv_min_kw=_pv_min_kw,
@@ -1021,7 +1039,8 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                              enforce_realistic=True,
                                              audit_today_state=_audit_today_state,
                                              audit_soc_reserve_pct=_audit_reserve,
-                                             audit_rt_persistence_slots=_audit_horizon_slots)
+                                             audit_rt_persistence_slots=_audit_horizon_slots,
+                                             rt_engine=_rt_engine_sel, rt2_params=_rt2_params)
             day_dt_total = float(np.nansum(dtprof))
             # SK fallback odstránený — rt_controller.run_day_physical teraz akceptuje
             # ZCO=NaN (= žiadne zúčtovanie odchýlky), takže bežný flow funguje aj pre SK

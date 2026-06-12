@@ -204,7 +204,12 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                      # User 2026-06-11: "vnutorne sa soc vycerpala pricom realne nie".
                      enforce_realistic=False, audit_today_state=None,
                      audit_soc_reserve_pct=0.0,
-                     audit_rt_persistence_slots=4):
+                     audit_rt_persistence_slots=4,
+                     # RT poradca 2.0 (2026-06-11): rt_engine="v2" → ekonomické rozhodnutie
+                     # (E[ZCO] z kalibrovaného spreadu vs náklady) namiesto signálovej
+                     # heuristiky v1. Downstream vrstvy (no-worsen, lookahead, persistencia,
+                     # grid, inline audit) ostávajú IDENTICKÉ pre obe verzie.
+                     rt_engine: str = "v1", rt2_params=None):
     """JEDNA fyzická batéria: plán (nominácia, plan_kw_arr po periódach, +vybi/−nabi) + RT odchýlka
     zdieľajú SOC aj výkon (±BATT_KW). Odchýlka = skutočná práca − plán, zúčtovaná na ZCO.
     grid_kw_arr/grid_cap: nominovaná sieťová pozícia [kW] po periódach (už ZAHŔŇA FTV) a limit prípojky;
@@ -350,7 +355,12 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
             else:
                 bc_eff = band_chg*(1.0-boost)
         bd_eff, bc_eff = soc_bias_bands(bd_eff, bc_eff, soc/BKWH*100)
-        d, f, reason = decide_reason(rd, avg, bd_eff, bc_eff, strong_mw, dt_rel, dt_bias_k)
+        if str(rt_engine) == "v2":
+            # RT poradca 2.0: ekonomický zámer (kalibrovaný E[ZCO] spread vs náklady)
+            from rt_engine_v2 import decide_v2 as _decide_v2
+            d, f, reason = _decide_v2(avg, float(dtp), soc / BKWH * 100.0, rt2_params)
+        else:
+            d, f, reason = decide_reason(rd, avg, bd_eff, bc_eff, strong_mw, dt_rel, dt_bias_k)
         if rt_on is not None and rt_on[pidx] < 0.5:           # RT v tomto slote zablokovaná → drž plán
             d, f = 0, 0.0
             reason = "rt_blocked"

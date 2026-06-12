@@ -193,6 +193,14 @@ class RTConfig(BaseModel):
     rboost: float = Field(default=0.7, ge=0.0)
     sock: float = Field(default=0.5, ge=0.0)
     case: str = "default"
+    # RT poradca 2.0 (2026-06-11): voľba enginu per profil pre A/B testovanie.
+    # v1 = signálová heuristika (kdis/kchg/margin/dtk), v2 = ekonomické rozhodnutie
+    # z kalibrovaného E[ZCO] spreadu (SK trh; CZ prispôsobíme — viac dát/granularita).
+    engine: Literal["v1", "v2"] = "v1"
+    rt2_margin_min_eur: float = Field(default=10.0, ge=0.0)
+    rt2_margin_full_eur: float = Field(default=60.0, ge=0.0)
+    rt2_zco_k: float = Field(default=0.6, ge=0.0)
+    rt2_cycle_cost: Optional[float] = None     # None = zdedí plan.cycle_cost
 
 
 class DistributionConfig(BaseModel):
