@@ -217,11 +217,18 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
         m_min_chg = float(_m_min_chg_raw) if _m_min_chg_raw is not None else m_min
     except (TypeError, ValueError):
         m_min_chg = m_min
+    # Bug RT2-F-NEG (2026-06-12, user: "sústava bola prebytková a došlo k vybíjaniu"):
+    # keď m_full < m_min_chg (napr. full=40, chg prah=50), menovateľ vyšiel ZÁPORNÝ
+    # → f < 0 → d×f OTOČILO SMER (zámer nabíjať sa vykonal ako plné vybíjanie,
+    # 06-09 poludnie: +cover m=91..131 vybíjalo do prebytkovej sústavy a vyprázdnilo
+    # batériu pred večerným DAM blokom). Fix: per-side full bod ≥ prah + clamp f∈[0,1].
     if margin_dis >= m_min:
-        f = min(1.0, (margin_dis - m_min) / (m_full - m_min) + 0.15)
+        _den_d = max(1e-6, m_full - m_min)
+        f = max(0.0, min(1.0, (margin_dis - m_min) / _den_d + 0.15))
         return 1, round(f, 3), f"v2:dis m={margin_dis:.0f} ({src})"
     if margin_chg >= m_min_chg:
-        f = min(1.0, (margin_chg - m_min_chg) / (m_full - m_min_chg) + 0.15)
+        _den_c = max(1e-6, m_full - m_min_chg)
+        f = max(0.0, min(1.0, (margin_chg - m_min_chg) / _den_c + 0.15))
         return -1, round(f, 3), f"v2:chg m={margin_chg:.0f} ({src})"
     return 0, 0.0, f"v2:idle m={max(margin_dis, margin_chg):.0f}"
 
