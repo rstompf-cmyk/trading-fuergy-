@@ -407,13 +407,24 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                                                         weights=_fut_plan[_m_dis]))
             except Exception:
                 pass
+            # SURPLUS/DEFICIT bilancia: koľko energie nad SOC floor batéria má vs
+            # koľko jej plán ešte reálne uplatní (predaj/η_d − nákup×η_c). Plus
+            # overflow: časť plánovaného nákupu, ktorá sa už NEZMESTÍ pod strop.
+            _avail_kwh_v2 = max(0.0, soc - lo_eff)
+            _need_kwh_v2 = max(0.0, _fut_dis_kwh_v2 / max(EFFD, 0.01)
+                               - _fut_chg_kwh_v2 * EFFC)
+            _chg_overflow_v2 = max(0.0, _fut_chg_kwh_v2 * EFFC - max(0.0, hi - soc))
+            _surplus_kwh_v2 = max(_avail_kwh_v2 - _need_kwh_v2, _chg_overflow_v2) \
+                if (_avail_kwh_v2 - _need_kwh_v2) > 0 or _chg_overflow_v2 > 0 \
+                else (_avail_kwh_v2 - _need_kwh_v2)
             d, f, reason = _decide_v2(_sig_raw_cal, float(dtp), soc / BKWH * 100.0,
                                       rt2_params, hour=_hr_v2,
                                       future_chg_kwh=_fut_chg_kwh_v2,
                                       future_dis_kwh=_fut_dis_kwh_v2,
                                       batt_kwh=BKWH,
                                       ref_chg_price=_ref_chg_v2,
-                                      ref_dis_price=_ref_dis_v2)
+                                      ref_dis_price=_ref_dis_v2,
+                                      surplus_kwh=_surplus_kwh_v2)
         else:
             d, f, reason = decide_reason(rd, avg, bd_eff, bc_eff, strong_mw, dt_rel, dt_bias_k)
         if rt_on is not None and rt_on[pidx] < 0.5:           # RT v tomto slote zablokovaná → drž plán

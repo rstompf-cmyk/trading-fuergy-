@@ -147,7 +147,8 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
               future_dis_kwh: Optional[float] = None,
               batt_kwh: Optional[float] = None,
               ref_chg_price: Optional[float] = None,
-              ref_dis_price: Optional[float] = None) -> Tuple[int, float, str]:
+              ref_dis_price: Optional[float] = None,
+              surplus_kwh: Optional[float] = None) -> Tuple[int, float, str]:
     """Ekonomické RT rozhodnutie. Returns (d, f, reason) — kontrakt v1 decide_reason.
 
     d ∈ {-1, 0, +1} (−1 = nabíjaj nad plán, +1 = vybíjaj nad plán), f ∈ [0, 1].
@@ -191,6 +192,23 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
             margin_chg = float(ref_chg_price) - zco_exp - cc
         else:
             margin_chg = dtp * eff - zco_exp - cc
+        # SURPLUS/DEFICIT bilancia (2026-06-12, user: "vysoké SOC, nákup z DT sa
+        # nezmestí, pri deficite sa batéria nevybila"). Substitučná referencia
+        # platí len pre energiu, ktorú plán reálne uplatní:
+        #   PREBYTOK (SOC > potreby plánu / plánovaný nákup sa nezmestí):
+        #     energia nemá alternatívny odbyt → predaj za E[ZCO] − cc; navyše
+        #     uvoľní miesto plánovanému nákupu (bráni odchýlke zo SOC stropu).
+        #   DEFICIT (SOC nepokryje plánovaný predaj): nákup teraz kryje budúci
+        #     plánovaný predaj → marža = η×ref_dis − E[ZCO] − cc.
+        if surplus_kwh is not None and batt_kwh:
+            _thr_kwh = 0.02 * float(batt_kwh)
+            if float(surplus_kwh) > _thr_kwh:
+                margin_dis = max(margin_dis, zco_exp - cc)
+                src = src + "+surplus"
+            elif float(surplus_kwh) < -_thr_kwh:
+                _cover_ref = (float(ref_dis_price) if ref_dis_price is not None else dtp)
+                margin_chg = max(margin_chg, eff * _cover_ref - zco_exp - cc)
+                src = src + "+cover"
     else:
         margin_dis = zco_exp - dtp - w_fix * dtp * (1.0 / eff - 1.0) - cc
         margin_chg = dtp - zco_exp - w_fix * dtp * (1.0 - eff) - cc
