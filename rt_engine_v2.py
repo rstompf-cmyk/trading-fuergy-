@@ -78,11 +78,18 @@ def _load_calibration() -> Optional[Dict[str, Any]]:
         return cached
     try:
         import pandas as pd
-        df = pd.read_csv(p, usecols=["ts", "isot_eur", "zco_eur", "sys_MWh"])
-        df = df.dropna(subset=["isot_eur", "zco_eur", "sys_MWh"])
+        # Bug RT2-CZ-SCHEMA (2026-06-12): CZ história má stĺpec sys_MW priamo
+        # (SK má sys_MWh per 15-min → ×4). Bez tohto CZ kalibrácia padla na
+        # lineárny fallback k×sys — pri CZ signáloch ±300 MW dával ±180 €/MWh
+        # s OPAČNÝM znamienkom (CZ konvencia: záporný sys = nedostatok → ZCO hore).
+        _hdr = pd.read_csv(p, nrows=0).columns
+        _sys_col = "sys_MWh" if "sys_MWh" in _hdr else "sys_MW"
+        df = pd.read_csv(p, usecols=["ts", "isot_eur", "zco_eur", _sys_col])
+        df = df.dropna(subset=["isot_eur", "zco_eur", _sys_col])
         if len(df) < 50:
             return None
-        sys_mw = (pd.to_numeric(df["sys_MWh"], errors="coerce") * 4.0).values
+        _mult = 4.0 if _sys_col == "sys_MWh" else 1.0
+        sys_mw = (pd.to_numeric(df[_sys_col], errors="coerce") * _mult).values
         spread = (pd.to_numeric(df["zco_eur"], errors="coerce")
                   - pd.to_numeric(df["isot_eur"], errors="coerce")).values
         hours = pd.to_datetime(df["ts"], errors="coerce").dt.hour.fillna(0).astype(int).values
