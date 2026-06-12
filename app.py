@@ -15090,6 +15090,19 @@ a{{color:#1F4E78}}</style></head><body>
             ("soc_init", soc_init_user), ("terminal_soc", terminal_soc), ("grid_kw", grid_kw),
             ("grid_fee", grid_fee), ("cycle_cost", cycle_cost), ("min_spread", min_spread),
             ("min_trade", min_trade), ("price_scale", price_scale), ("pv_scale", pv_scale),
+            # Bug HIDDEN-FORM-PARAMS (2026-06-12, user: "Uložiť šablónu prepíše na 60"):
+            # hidden form NIESOL len staré polia → POST z "Uložiť šablónu" prišiel
+            # s Form defaultmi pre všetko ostatné a prepísal profil/ui_settings
+            # (rt2_* na defaulty, engine na v1, audit horizon na 1.0, …).
+            ("soc_reserve_pct", soc_reserve_pct), ("rt_grid_reserve_pct", rt_grid_reserve_pct),
+            ("max_export_kwh_day", max_export_kwh_day), ("max_import_kwh_day", max_import_kwh_day),
+            ("zco_bias_w", zbw), ("ftv_lookahead_h", flah), ("rt_audit_horizon_h", rah),
+            ("ftv_strict_deadband_kw", fsdb),
+            ("terminal_soc_mode", tsm), ("vdt_capacity_reserve_kw", vcr),
+            ("rt_engine", ("v2" if str(rt_engine) == "v2" else "v1")),
+            ("rt2_margin_min_eur", rt2_margin_min_eur),
+            ("rt2_margin_full_eur", rt2_margin_full_eur),
+            ("rt2_zco_k", rt2_zco_k),
         ])
     if agc:
         _hidden += "<input type='hidden' name='allow_grid_charge' value='1'>"
@@ -15099,6 +15112,21 @@ a{{color:#1F4E78}}</style></head><body>
         _hidden += "<input type='hidden' name='block_neg_import' value='1'>"
     if npd:
         _hidden += "<input type='hidden' name='no_planned_discharge' value='1'>"
+    # Bug HIDDEN-FORM-PARAMS: checkbox flagy (prítomnosť = true)
+    if vba:
+        _hidden += "<input type='hidden' name='vdt_breakeven_auto' value='1'>"
+    if rtf:
+        _hidden += "<input type='hidden' name='rt_freedom' value='1'>"
+    if aggr:
+        _hidden += "<input type='hidden' name='aggressive_rt' value='1'>"
+    if fbal:
+        _hidden += "<input type='hidden' name='ftv_balance' value='1'>"
+    if fpth:
+        _hidden += "<input type='hidden' name='ftv_persistence_throttle' value='1'>"
+    if rnwd:
+        _hidden += "<input type='hidden' name='rt_no_worsen_dev' value='1'>"
+    if fsp:
+        _hidden += "<input type='hidden' name='ftv_strict_plan' value='1'>"
     body = f"""<style>
 table{{border-collapse:collapse;width:100%;font-size:14px}}
 table th,table td{{border:1px solid #e3e3e3;padding:5px 8px;text-align:right}}
