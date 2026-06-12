@@ -621,6 +621,19 @@ def snapshot_current(name: str, ui_load_fn, po_module, note: str = "",
         "note": note,
         "mode": mode,
     }
+    # Bug SNAPSHOT-MERGE (2026-06-12): snapshot NAHRÁDZAL celé sekcie UI stavom —
+    # kľúče, ktoré UI stav nepozná (rt.engine + rt.rt2_* z RT poradcu 2.0, prípadné
+    # ďalšie profile-only polia), sa pri každom auto-save po /plan ticho MAZALI
+    # (užívateľ: "zmením engine a vráti sa na v1"). Merge: existujúci profil je
+    # podklad, UI stav prepíše len kľúče, ktoré reálne nesie.
+    try:
+        _existing = load_profile(name) or {}
+        for _sec in ("plan", "dentrh", "rt"):
+            _ex = _existing.get(_sec) or {}
+            if _ex:
+                data[_sec] = {**_ex, **(data.get(_sec) or {})}
+    except Exception:
+        pass
     if po_module is not None:
         try:
             m = po_module.load_template().tolist()
