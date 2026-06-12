@@ -736,11 +736,16 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         # Bug LP-VDT-BOUNDS: uzavreté VDT obchody dňa = smerové stropy pre LP
         from joint_lp_integration import vdt_committed_kw_for_day as _vdtb
         _vdt_committed = _vdtb(_jb_prof, date_iso, T=24, step_min=60)
+        # Bug VDT-CAP-RESERVE-HIST (2026-06-12, user): rezerva pre intraday platí LEN
+        # pre dnešok/budúcnosť — pri spätnom prepočte minulých dní žiadne VDT obchody
+        # nevzniknú a rezerva by históriu len hendikepovala (skreslenie efektu).
+        _vcr_eff = (float(fp.get("vdt_capacity_reserve_kw", 0) or 0)
+                    if d >= dt.date.today() else 0.0)
         sch, summ = _od_or_joint_batch(
             pv_arr, decision_price,
             joint_flags=_joint_flags_b, profile=_jb_prof,
             vdt_committed_kw=_vdt_committed,
-            vdt_capacity_reserve_kw=float(fp.get("vdt_capacity_reserve_kw", 0) or 0),
+            vdt_capacity_reserve_kw=_vcr_eff,
             settle_price=price_arr,
             batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])), batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
             eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
@@ -832,10 +837,13 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         # Bug LP-VDT-BOUNDS: uzavreté VDT obchody dňa = smerové stropy pre LP
         from joint_lp_integration import vdt_committed_kw_for_day as _vdtb15
         _vdt_committed15 = _vdtb15(_jb_prof15, date_iso, T=n, step_min=15)
+        # Bug VDT-CAP-RESERVE-HIST: rezerva len pre dnešok/budúcnosť (viď 60-min vetva)
+        _vcr_eff15 = (float(fp.get("vdt_capacity_reserve_kw", 0) or 0)
+                      if d >= dt.date.today() else 0.0)
         sch, summ = _od_or_joint_batch15(pv15[:n], price15[:n], dt=0.25,
                                   joint_flags=_joint_flags_b15, profile=_jb_prof15,
                                   vdt_committed_kw=_vdt_committed15,
-                                  vdt_capacity_reserve_kw=float(fp.get("vdt_capacity_reserve_kw", 0) or 0),
+                                  vdt_capacity_reserve_kw=_vcr_eff15,
                                   batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])),
                                   batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
                                   eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
@@ -14674,6 +14682,8 @@ a{{color:#1F4E78}}</style></head><body>
                                                eff_c=eff_c, eff_d=eff_d, cycle_cost=cycle_cost,
                                                grid_fee=grid_fee, soc_max=soc_max),
                                           price_arr)
+        # Bug VDT-CAP-RESERVE-HIST: rezerva pre intraday len pre dnešok/budúcnosť
+        _vcr_eff_p = vcr if d >= dt.date.today() else 0.0
         # Bug LP-VDT-BOUNDS: uzavreté VDT obchody dňa = smerové stropy pre LP
         from joint_lp_integration import vdt_committed_kw_for_day as _vdtb_p
         try:
@@ -14685,7 +14695,7 @@ a{{color:#1F4E78}}</style></head><body>
         sch_base, summ_base = _od_or_joint(pv_arr, decision_price,
                                  joint_flags=_joint_flags,
                                  vdt_committed_kw=_vdt_committed_p,
-                                 vdt_capacity_reserve_kw=vcr,
+                                 vdt_capacity_reserve_kw=_vcr_eff_p,
                                  settle_price=price_arr,
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
@@ -14707,7 +14717,7 @@ a{{color:#1F4E78}}</style></head><body>
             sch, summ = _od_or_joint(pv_arr, decision_price,
                                  joint_flags=_joint_flags,
                                  vdt_committed_kw=_vdt_committed_p,
-                                 vdt_capacity_reserve_kw=vcr,
+                                 vdt_capacity_reserve_kw=_vcr_eff_p,
                                  settle_price=price_arr,
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,

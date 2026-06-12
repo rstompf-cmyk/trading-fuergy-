@@ -356,9 +356,14 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                 bc_eff = band_chg*(1.0-boost)
         bd_eff, bc_eff = soc_bias_bands(bd_eff, bc_eff, soc/BKWH*100)
         if str(rt_engine) == "v2":
-            # RT poradca 2.0: ekonomický zámer (kalibrovaný E[ZCO] spread vs náklady)
+            # RT poradca 2.0: ekonomický zámer (kalibrovaný E[ZCO] spread vs náklady).
+            # Bug RT2-SIGN (2026-06-12, user: "pri nedostatku sa nabíja"): kalibrácia
+            # beží na SUROVOM sys_MWh z imbalance_history, ale `avg` má aplikovanú
+            # orientáciu (sys_orient) z mw_signal → vráť orientáciu pred kalibráciou
+            # (orient ∈ {±1}: raw = avg × orient).
             from rt_engine_v2 import decide_v2 as _decide_v2
-            d, f, reason = _decide_v2(avg, float(dtp), soc / BKWH * 100.0, rt2_params)
+            _sig_raw_cal = avg * (float(sys_orient) if sys_orient in (1, -1, 1.0, -1.0) else 1.0)
+            d, f, reason = _decide_v2(_sig_raw_cal, float(dtp), soc / BKWH * 100.0, rt2_params)
         else:
             d, f, reason = decide_reason(rd, avg, bd_eff, bc_eff, strong_mw, dt_rel, dt_bias_k)
         if rt_on is not None and rt_on[pidx] < 0.5:           # RT v tomto slote zablokovaná → drž plán
