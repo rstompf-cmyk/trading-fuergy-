@@ -377,6 +377,7 @@ def optimize_day_or_joint(
         grid_kw_import=grid_kw_import or grid_kw,
         grid_kw_export=grid_kw_export or grid_kw,
         grid_fee=grid_fee, cycle_cost=cycle_cost,
+        min_spread_eur=min_spread_eur,   # Bug JOINT-MIN-SPREAD: parita s classic optimize_day
         vdt_buy_price=vdt_buy_price, vdt_sell_price=vdt_sell_price,
         tou_price_eur=tou_price_eur,
         trade_batt=joint_flags["trade_batt"],

@@ -54,6 +54,15 @@ class PlanConfig(BaseModel):
     soc_max: float = Field(default=100.0, ge=0.0, le=100.0)
     soc_init: float = Field(default=50.0, ge=0.0, le=100.0)
     terminal_soc: float = Field(default=50.0, ge=0.0, le=100.0)
+    # Bug TERMINAL-SOC-MODE (2026-06-11): "fixed" = terminal_soc ako doteraz;
+    # "next_day_price" = terminál dňa podľa porovnania zajtrajšieho rána s dnešným
+    # večerom (LP je cez polnoc myopický — fixný terminál 5 % necháva ráno prázdnu
+    # batériu aj keď je ráno drahé).
+    terminal_soc_mode: Literal["fixed", "next_day_price"] = "fixed"
+    # Bug VDT-BREAKEVEN-AUTO (2026-06-11): advisor si prah spreadu počíta z reálnych
+    # nákladov obchodu (straty účinnosti + 2×fee + cycle_cost) namiesto fixného
+    # min_spread_eur. Fix hodnota ostáva ako minimum.
+    vdt_breakeven_auto: bool = False
 
     # Sieť
     grid_kw: float = Field(default=200.0, ge=0.0)

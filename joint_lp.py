@@ -72,6 +72,7 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
                         grid_kw_export: Optional[float] = None,
                         rt_grid_reserve_pct: float = 0.0,
                         grid_fee: float = 22.0, cycle_cost: float = 2.0,
+                        min_spread_eur: float = 0.0,   # Bug JOINT-MIN-SPREAD (2026-06-11): parita s optimize_day
                         vdt_buy_price: Optional[np.ndarray] = None,
                         vdt_sell_price: Optional[np.ndarray] = None,
                         tou_price_eur: Optional[np.ndarray] = None,
@@ -299,7 +300,10 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
     #   - import: cost = (price + grid_fee) × kwh
     #   - cycle cost: penalty na ch aj di (každá strana 1/2 cyklu)
     c = np.zeros(n)
-    pen = cycle_cost / 2.0 / 1000.0
+    # Bug JOINT-MIN-SPREAD (2026-06-11): min_spread bol v joint LP IGNOROVANÝ
+    # (classic optimize_day ho má ako trecí náklad cyklu) → joint LP točil aj
+    # marginálne cykly pod prahom. Parita: pen = (cycle_cost + min_spread)/2/1000.
+    pen = (cycle_cost + float(min_spread_eur or 0.0)) / 2.0 / 1000.0
     for t in range(T):
         # DAM
         c[idx(EX_DAM, t)] = -pr_dam[t] / 1000.0                # predaj: +cena (bez fee)

@@ -335,6 +335,31 @@ def get_live_recommendation(*,
         cycle_cost = float(_pl.get("cycle_cost_vdt") or _pl.get("cycle_cost") or 2.0)
     if min_spread is None:
         min_spread = float(_pl.get("min_spread_eur") or 5.0)
+    # Bug VDT-BREAKEVEN-AUTO (2026-06-11): prah spreadu z REÁLNYCH nákladov obchodu —
+    # straty round-trip účinnosti (na cenovej hladine dňa) + 2×fee + cycle_cost.
+    # Fixný min_spread ostáva ako minimum. Generické: všetko z parametrov profilu.
+    if bool(_pl.get("vdt_breakeven_auto", False)):
+        try:
+            _eff_rt_be = float(eff_c) * float(eff_d)
+            _p_ref_be = None
+            try:
+                import market as _mk_be
+                _df_be = _mk_be.fetch_dam_prices(dt.date.today())
+                if _df_be is not None and not _df_be.empty:
+                    _p_ref_be = float(pd.to_numeric(_df_be["cena_EUR"],
+                                                    errors="coerce").dropna().mean())
+            except Exception:
+                _p_ref_be = None
+            if _p_ref_be and _p_ref_be > 0:
+                _auto_be = (_p_ref_be * (1.0 / max(_eff_rt_be, 0.5) - 1.0)
+                            + 2.0 * float(grid_fee) + float(cycle_cost))
+                if _auto_be > min_spread:
+                    print(f"[VDT-BREAKEVEN-AUTO] min_spread {min_spread:.1f} → "
+                          f"{_auto_be:.1f} €/MWh (p_ref={_p_ref_be:.0f}, "
+                          f"eff_rt={_eff_rt_be:.3f}, fee={grid_fee:g}, cc={cycle_cost:g})")
+                    min_spread = _auto_be
+        except Exception as _e_be:
+            print(f"[VDT-BREAKEVEN-AUTO] zlyhal: {_e_be} → fix min_spread")
     # Bug VDT-SOC-RANGE (2026-06-11, user): VDT advisor pracuje s ROZSAHOM BATÉRIE
     # z profilu (plan.soc_min..plan.soc_max, štandardne 5-100) — žiadny separátny
     # operačný strop 95 ani koniec dňa 20. Predtým plán šiel 5-100 a advisor 20-85

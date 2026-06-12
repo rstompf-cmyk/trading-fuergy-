@@ -610,6 +610,48 @@ def _resolve_soc_init_carryover(date_iso: str, fp: dict,
     return (manual_soc, "manual_fallback")
 
 
+def _resolve_terminal_soc(date_iso: str, fp: dict, price_arr_today) -> float:
+    """Bug TERMINAL-SOC-MODE (2026-06-11): terminál dňa podľa zajtrajších cien.
+
+    mode="fixed" (default) → fp["terminal_soc"] ako doteraz.
+    mode="next_day_price"  → ak zajtrajšie ráno (06-10 h) je drahšie než dnešný
+    večer (17-22 h) + breakeven nákladov round-tripu, oplatí sa energiu PODRŽAŤ
+    cez polnoc → terminál = vysoký (min(soc_max, 90)). Inak fixný terminál.
+    Zajtrajšie ceny: reálny DAM (market.fetch_dam_prices) ak je publikovaný,
+    inak None → fixed. Generické pre ľubovoľný profil (všetko z fp)."""
+    mode = str(fp.get("terminal_soc_mode") or "fixed")
+    base_term = float(fp.get("terminal_soc", DEF["terminal_soc"]))
+    if mode != "next_day_price":
+        return base_term
+    try:
+        import market as _mk_t
+        _d_next = dt.date.fromisoformat(date_iso) + dt.timedelta(days=1)
+        _df_n = _mk_t.fetch_dam_prices(_d_next)
+        if _df_n is None or _df_n.empty:
+            return base_term
+        _pn = pd.to_numeric(_df_n["cena_EUR"], errors="coerce").dropna().values
+        _hours_n = np.array([int(str(iv)[:2]) for iv in _df_n["interval"].astype(str)])[:len(_pn)]
+        _morning_next = float(np.mean(_pn[(_hours_n >= 6) & (_hours_n < 10)]))
+        _p_today = np.asarray(price_arr_today, float)
+        _evening_today = float(np.mean(_p_today[17:23])) if len(_p_today) >= 23 else float(np.mean(_p_today))
+        _eff_rt = float(fp.get("eff_c", DEF["eff_c"])) * float(fp.get("eff_d", DEF["eff_d"]))
+        _breakeven = (_evening_today * (1.0 / max(_eff_rt, 0.5) - 1.0)
+                      + float(fp.get("cycle_cost", DEF["cycle_cost"]))
+                      + 2.0 * float(fp.get("grid_fee", DEF["grid_fee"])))
+        if _morning_next > _evening_today + _breakeven:
+            _term_hi = min(float(fp.get("soc_max", DEF["soc_max"])), 90.0)
+            print(f"[TERMINAL-SOC-MODE] {date_iso}: zajtra ráno {_morning_next:.1f} > "
+                  f"dnes večer {_evening_today:.1f} + breakeven {_breakeven:.1f} "
+                  f"→ terminál {_term_hi:.0f}% (podrž energiu)")
+            return _term_hi
+        print(f"[TERMINAL-SOC-MODE] {date_iso}: zajtra ráno {_morning_next:.1f} ≤ "
+              f"večer {_evening_today:.1f} + breakeven {_breakeven:.1f} → fixed {base_term:.0f}%")
+        return base_term
+    except Exception as _e_t:
+        print(f"[TERMINAL-SOC-MODE] {date_iso}: forecast nedostupný ({_e_t}) → fixed")
+        return base_term
+
+
 def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
     """Internal helper pre /plan a /plan_batch. Spustí kompletnú generáciu pre jeden deň + uloží plán.
     Vracia cestu k uloženému súboru. Pri chybe hodí výnimku."""
@@ -706,7 +748,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             soc_init_pct=_soc_init_use,
             soc_reserve_pct=float(fp.get("soc_reserve_pct", 0.0) or 0.0),
             rt_grid_reserve_pct=float(fp.get("rt_grid_reserve_pct", 0.0) or 0.0),
-            terminal_soc_pct=float(fp.get("terminal_soc", DEF["terminal_soc"])),
+            terminal_soc_pct=_resolve_terminal_soc(date_iso, fp, price_arr),
             grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
             grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
             cycle_cost=float(fp.get("cycle_cost", DEF["cycle_cost"])),
@@ -800,7 +842,10 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                                   soc_init_pct=_soc_init_use15,
                                   soc_reserve_pct=float(fp.get("soc_reserve_pct", 0.0) or 0.0),
                                   rt_grid_reserve_pct=float(fp.get("rt_grid_reserve_pct", 0.0) or 0.0),
-                                  terminal_soc_pct=float(fp.get("terminal_soc", DEF["terminal_soc"])),
+                                  terminal_soc_pct=_resolve_terminal_soc(
+                                      date_iso, fp,
+                                      (np.asarray(price15[:96], float).reshape(24, 4).mean(axis=1)
+                                       if n >= 96 else np.asarray(price15[:n], float))),
                                   grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
                                   grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
                                   cycle_cost=float(fp.get("cycle_cost", DEF["cycle_cost"])),
