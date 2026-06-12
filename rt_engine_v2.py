@@ -35,8 +35,9 @@ DEFAULTS = dict(
     rt2_restore_weight=0.5,     # váha nákladu obnovy energie: 1.0 = plný round-trip
                                 # (konzervatívne), 0.0 = zásah len posúva plán (optimistické).
                                 # 0.5 = vyvážený default; ladiť podľa ex-post efektivity.
-    rt2_restore_mode="fixed",   # "fixed" = rt2_restore_weight; "auto" = váha per smer
-                                # z plán-kontextu (zostávajúce plánované nabíjanie/vybíjanie)
+    rt2_restore_mode="auto",    # "auto" = substitučné marže + denné kotvy (DEFAULT od
+                                # 2026-06-12, user: "treba auto nastaviť globálne");
+                                # "fixed" = paušálna váha rt2_restore_weight
     rt2_margin_min_chg_eur=None,  # samostatný (vyšší) prah pre NABÍJANIE; None = spoločný.
                                   # Plán sa intradenne nereoptimalizuje → RT nákup má istú
                                   # hodnotu len pri extrémnej ZCO; odporúčané 40-60 €/MWh.
@@ -191,14 +192,22 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
     #     → marža = E[ZCO] − ref_dis_price − cc   (bez budúceho plán. vybíjania:
     #       obnova stojí DT/η → marža = E[ZCO] − DT/η − cc)
     if str(p.get("rt2_restore_mode", "fixed")) == "auto":
+        # Bug RT2-DAY-ANCHOR (2026-06-12, user: "bez obchodu ohromná pokuta; nabíja
+        # za 120, vybíja za 81"): bez plánovanej akcie sa marže kotvili na DT cenu
+        # TEJ ISTEJ minúty → večer pri DT 135 vyzeral nákup za ZCO 120 "lacný",
+        # v noci pri DT 63 predaj za 80 "drahý" — absolútna hladina dňa unikala.
+        # rt_controller teraz posiela aj fallback kotvy z kvantilov DT cien zvyšku
+        # dňa (ref_chg=p25 ako lacná obnova/nákup, ref_dis=p75 ako drahý odbyt).
         if ref_dis_price is not None and (future_dis_kwh or 0) > 1.0:
             margin_dis = zco_exp - float(ref_dis_price) - cc
         else:
-            margin_dis = zco_exp - dtp / eff - cc
+            _restore = float(ref_chg_price) if ref_chg_price is not None else dtp
+            margin_dis = zco_exp - _restore / eff - cc
         if ref_chg_price is not None and (future_chg_kwh or 0) > 1.0:
             margin_chg = float(ref_chg_price) - zco_exp - cc
         else:
-            margin_chg = dtp * eff - zco_exp - cc
+            _resale = float(ref_dis_price) if ref_dis_price is not None else dtp
+            margin_chg = _resale * eff - zco_exp - cc
         # SURPLUS/DEFICIT bilancia (2026-06-12, user: "vysoké SOC, nákup z DT sa
         # nezmestí, pri deficite sa batéria nevybila"). Substitučná referencia
         # platí len pre energiu, ktorú plán reálne uplatní:

@@ -407,6 +407,21 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                                                         weights=_fut_plan[_m_dis]))
             except Exception:
                 pass
+            # Bug RT2-DAY-ANCHOR (2026-06-12): bez plánovanej akcie kotvi marže na
+            # kvantily DT cien ZVYŠKU dňa — nákup len pod lacnou hladinou (p25),
+            # predaj len nad drahou (p75). Bez toho čistý RT profil (žiadny obchod)
+            # nakupoval večer za drahé ZCO 120 a predával v noci za lacné 81
+            # (smer voči DT OK, absolútna hladina dňa zlá).
+            try:
+                _pp_rest = _price_per_period[pidx + 1:]
+                _pp_fin = _pp_rest[_np.isfinite(_pp_rest)]
+                if _pp_fin.size >= 4:
+                    if _ref_chg_v2 is None:
+                        _ref_chg_v2 = float(_np.quantile(_pp_fin, 0.25))
+                    if _ref_dis_v2 is None:
+                        _ref_dis_v2 = float(_np.quantile(_pp_fin, 0.75))
+            except Exception:
+                pass
             # SURPLUS/DEFICIT bilancia: koľko energie nad SOC floor batéria má vs
             # koľko jej plán ešte reálne uplatní (predaj/η_d − nákup×η_c). Plus
             # overflow: časť plánovaného nákupu, ktorá sa už NEZMESTÍ pod strop.
