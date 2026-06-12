@@ -37,6 +37,9 @@ DEFAULTS = dict(
                                 # 0.5 = vyvážený default; ladiť podľa ex-post efektivity.
     rt2_restore_mode="fixed",   # "fixed" = rt2_restore_weight; "auto" = váha per smer
                                 # z plán-kontextu (zostávajúce plánované nabíjanie/vybíjanie)
+    rt2_margin_min_chg_eur=None,  # samostatný (vyšší) prah pre NABÍJANIE; None = spoločný.
+                                  # Plán sa intradenne nereoptimalizuje → RT nákup má istú
+                                  # hodnotu len pri extrémnej ZCO; odporúčané 40-60 €/MWh.
 )
 
 
@@ -191,11 +194,16 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
     else:
         margin_dis = zco_exp - dtp - w_fix * dtp * (1.0 / eff - 1.0) - cc
         margin_chg = dtp - zco_exp - w_fix * dtp * (1.0 - eff) - cc
+    _m_min_chg_raw = p.get("rt2_margin_min_chg_eur")
+    try:
+        m_min_chg = float(_m_min_chg_raw) if _m_min_chg_raw is not None else m_min
+    except (TypeError, ValueError):
+        m_min_chg = m_min
     if margin_dis >= m_min:
         f = min(1.0, (margin_dis - m_min) / (m_full - m_min) + 0.15)
         return 1, round(f, 3), f"v2:dis m={margin_dis:.0f} ({src})"
-    if margin_chg >= m_min:
-        f = min(1.0, (margin_chg - m_min) / (m_full - m_min) + 0.15)
+    if margin_chg >= m_min_chg:
+        f = min(1.0, (margin_chg - m_min_chg) / (m_full - m_min_chg) + 0.15)
         return -1, round(f, 3), f"v2:chg m={margin_chg:.0f} ({src})"
     return 0, 0.0, f"v2:idle m={max(margin_dis, margin_chg):.0f}"
 
@@ -211,7 +219,7 @@ def params_from_profile_rt(rt_cfg: Dict[str, Any],
         except (TypeError, ValueError):
             pass
     for k in ("rt2_margin_min_eur", "rt2_margin_full_eur", "rt2_zco_k",
-              "rt2_cycle_cost", "rt2_restore_weight"):
+              "rt2_cycle_cost", "rt2_restore_weight", "rt2_margin_min_chg_eur"):
         v = (rt_cfg or {}).get(k)
         if v is not None:
             try:
