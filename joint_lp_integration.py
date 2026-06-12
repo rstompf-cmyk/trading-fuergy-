@@ -245,6 +245,7 @@ def optimize_day_or_joint(
         max_import_kwh_day: Optional[float] = None,
         dt: float = 1.0,
         vdt_committed_kw=None,   # Bug LP-VDT-BOUNDS: per-slot kW uzavretých VDT obchodov dňa
+        vdt_capacity_reserve_kw: float = 0.0,   # Bug VDT-CAP-RESERVE: headroom kW pre VDT/RT
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Drop-in nahradenie optimize_day s podporou Joint LP.
 
@@ -302,6 +303,20 @@ def optimize_day_or_joint(
                       f"{np.max(np.abs(_vdt_arr)):.0f} kW)")
         except Exception as _e_vb:
             print(f"[LP-VDT-BOUNDS] príprava stropov zlyhala: {_e_vb}")
+    # Bug VDT-CAP-RESERVE (2026-06-11): explicitný headroom pre VDT/RT — D-1 LP
+    # nominuje max (batt_kw − rezerva) v oboch smeroch. Kombinuje sa (min) so
+    # stropmi z už uzavretých obchodov. Generické: hodnota z parametra profilu.
+    try:
+        _res_kw = max(0.0, float(vdt_capacity_reserve_kw or 0.0))
+    except (TypeError, ValueError):
+        _res_kw = 0.0
+    if _res_kw > 0:
+        _cap_base = max(0.0, float(batt_kw) - _res_kw)
+        _base_arr = np.full(len(pv_arr_real), _cap_base, dtype=float)
+        _vdt_dis_cap = _base_arr if _vdt_dis_cap is None else np.minimum(_vdt_dis_cap, _base_arr)
+        _vdt_chg_cap = _base_arr if _vdt_chg_cap is None else np.minimum(_vdt_chg_cap, _base_arr)
+        print(f"[VDT-CAP-RESERVE] {profile}: D-1 LP strop {float(batt_kw):.0f}−{_res_kw:.0f}"
+              f" = {_cap_base:.0f} kW (headroom pre VDT/RT)")
 
     if joint_flags.get("enabled"):
         if not joint_flags.get("trade_ftv", True):

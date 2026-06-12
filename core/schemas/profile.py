@@ -63,6 +63,10 @@ class PlanConfig(BaseModel):
     # nákladov obchodu (straty účinnosti + 2×fee + cycle_cost) namiesto fixného
     # min_spread_eur. Fix hodnota ostáva ako minimum.
     vdt_breakeven_auto: bool = False
+    # Bug VDT-CAP-RESERVE (2026-06-11): explicitná rezerva výkonu batérie [kW] pre
+    # VDT/RT — D-1 LP nominuje max (batt_kw − rezerva). Nahrádza nešikovný denný
+    # kWh strop (max_*_kwh_day) ako nástroj na delenie kapacity DAM vs intraday.
+    vdt_capacity_reserve_kw: float = Field(default=0.0, ge=0.0)
 
     # Sieť
     grid_kw: float = Field(default=200.0, ge=0.0)

@@ -740,6 +740,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             pv_arr, decision_price,
             joint_flags=_joint_flags_b, profile=_jb_prof,
             vdt_committed_kw=_vdt_committed,
+            vdt_capacity_reserve_kw=float(fp.get("vdt_capacity_reserve_kw", 0) or 0),
             settle_price=price_arr,
             batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])), batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
             eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
@@ -834,6 +835,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         sch, summ = _od_or_joint_batch15(pv15[:n], price15[:n], dt=0.25,
                                   joint_flags=_joint_flags_b15, profile=_jb_prof15,
                                   vdt_committed_kw=_vdt_committed15,
+                                  vdt_capacity_reserve_kw=float(fp.get("vdt_capacity_reserve_kw", 0) or 0),
                                   batt_kw=float(fp.get("batt_kw", DEF["batt_kw"])),
                                   batt_kwh=float(fp.get("batt_kwh", DEF["batt_kwh"])),
                                   eff_c=float(fp.get("eff_c", DEF["eff_c"])), eff_d=float(fp.get("eff_d", DEF["eff_d"])),
@@ -2318,6 +2320,15 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 <span>⏱ RT lookahead na plán [hodín]</span><input name="ftv_lookahead_h" type="number" step="0.5" min="0" max="12" value="{f.get('ftv_lookahead_h', 4.0)}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#e6f4ea;padding:4px 8px;border-radius:6px" title="Audit RT cez SOC kapacitu pozrie N hodín dopredu na plán — ak v okolí je plánované nabíjanie, RT nabíjanie sa orezáva (chráni soc_max); ak je plánované vybíjanie, RT vybíjanie sa orezáva (chráni soc_min). Default 1.0 h = audit zachytí len najbližšiu hodinu plánu. Pre konzervatívnejšie nastavenie: 2–4 h. 0 = vypnuté (RT len cez okamžitú SOC kapacitu).">
 <span>🛂 <b>Audit horizon [hodín]</b> (kapacita pre RT cez plán)</span><input name="rt_audit_horizon_h" type="number" step="0.5" min="0" max="12" value="{f.get('rt_audit_horizon_h', 1.0)}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="fixed = terminál dňa podľa poľa 'SOC koniec'. next_day_price = ak je zajtrajšie ráno (06-10 h, reálny DAM) drahšie než dnešný večer + breakeven round-tripu, terminál sa zdvihne na min(soc_max, 90 %) — energia sa podrží cez polnoc. LP je inak cez polnoc myopický.">
+<span>🌅 <b>Terminál podľa zajtrajška</b> (terminal_soc_mode)</span><select name="terminal_soc_mode" style="padding:4px;border:1px solid #ccc;border-radius:6px">
+<option value="fixed" {"selected" if f.get("terminal_soc_mode", "fixed") != "next_day_price" else ""}>fixed</option>
+<option value="next_day_price" {"selected" if f.get("terminal_soc_mode") == "next_day_price" else ""}>next_day_price</option>
+</select></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="VDT advisor si prah spreadu počíta z reálnych nákladov obchodu: cena × (1/η−1) + 2×fee + cycle_cost. Fixný 'min spread VDT' ostáva ako minimum. Bráni obchodom ziskovým len na papieri (bez strát účinnosti).">
+<span>⚖️ <b>VDT breakeven auto</b> (prah z účinnosti + fees)</span><input name="vdt_breakeven_auto" type="checkbox" {"checked" if f.get("vdt_breakeven_auto", False) else ""}></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Explicitná rezerva výkonu batérie pre VDT/RT: D-1 LP nominuje max (batt_kw − rezerva) v oboch smeroch. Nahrádza denný kWh strop ako nástroj delenia kapacity DAM vs intraday. 0 = bez rezervy.">
+<span>🪫 <b>VDT kapacitná rezerva [kW]</b> (headroom pre intraday)</span><input name="vdt_capacity_reserve_kw" type="number" step="100" min="0" value="{f.get('vdt_capacity_reserve_kw', 0.0)}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Keď systémový signál pretrváva v jednom smere (príležitostí je veľa), agresivita FTV-balance sa zníži (~50 % pri silnej persistencii). Nechá priestor pre plán a iné zásahy.">
 <span>🌊 Persistencia signálu throttle</span><input name="ftv_persistence_throttle" type="checkbox" {"checked" if f.get("ftv_persistence_throttle", True) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#e6f4ea;padding:4px 8px;border-radius:6px" title="RT zásah (MW signal + FTV balance) nesmie nikdy zhoršiť threshold odchýlku voči obchodnému plánu. Keď FTV nedoposlúchne plán (under-deliver, pre_dev<0), RT nesmie batériu nabíjať navyše; keď FTV preteká (over-deliver), RT nesmie ďalej vybíjať. Plán adherence má prednosť pred MW signal arbitrážou.">
@@ -14399,6 +14410,9 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          ftv_balance: str = Form(default=""),
          ftv_lookahead_h: float = Form(default=4.0),
          rt_audit_horizon_h: float = Form(default=1.0),
+         terminal_soc_mode: str = Form(default="fixed"),
+         vdt_breakeven_auto: str = Form(default=""),
+         vdt_capacity_reserve_kw: float = Form(default=0.0),
          ftv_persistence_throttle: str = Form(default=""),
          rt_no_worsen_dev: str = Form(default=""),
          ftv_strict_plan: str = Form(default=""),
@@ -14447,6 +14461,9 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
     fbal = bool(ftv_balance)                                    # default True; ak True → FTV-driven RT balansovanie
     flah = max(0.0, min(12.0, float(ftv_lookahead_h or 4.0)))   # 0..12 hodín lookahead
     rah = max(0.0, min(12.0, float(rt_audit_horizon_h or 1.0)))   # 0..12 hodín audit horizon
+    tsm = "next_day_price" if str(terminal_soc_mode) == "next_day_price" else "fixed"
+    vba = bool(vdt_breakeven_auto)                              # auto breakeven prah pre VDT advisor
+    vcr = max(0.0, float(vdt_capacity_reserve_kw or 0.0))       # kW headroom pre VDT/RT v D-1 LP
     fpth = bool(ftv_persistence_throttle)                       # default True; persistencia throttle
     rnwd = bool(rt_no_worsen_dev)                               # default True; RT nesmie zhoršovať threshold
     fsp = bool(ftv_strict_plan)                                 # default True; FTV-balance vždy fire keď pre_dev≠0
@@ -14491,6 +14508,9 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
                           aggressive_rt=aggr, ftv_balance=fbal,
                           ftv_lookahead_h=flah,
                           rt_audit_horizon_h=rah,  # Bug AUDIT-HORIZON-SAVE (2026-06-11): chýbal v _ui_save → neuložil sa do šablóny
+                          terminal_soc_mode=tsm,
+                          vdt_breakeven_auto=vba,
+                          vdt_capacity_reserve_kw=vcr,
                           ftv_persistence_throttle=fpth,
                           rt_no_worsen_dev=rnwd, ftv_strict_plan=fsp,
                           ftv_strict_deadband_kw=fsdb,
@@ -14603,6 +14623,12 @@ a{{color:#1F4E78}}</style></head><body>
         # baseline (NÁVRH) — bez akéhokoľvek overridu, na porovnanie s FINÁL
         # Joint LP integrácia: ak _joint_flags["enabled"], použije sa optimize_joint_day
         from joint_lp_integration import optimize_day_or_joint as _od_or_joint
+        # Bug TERMINAL-SOC-MODE: efektívny terminál podľa zajtrajších cien (generické z form/profilu)
+        _term_eff = _resolve_terminal_soc(d.isoformat(),
+                                          dict(terminal_soc=terminal_soc, terminal_soc_mode=tsm,
+                                               eff_c=eff_c, eff_d=eff_d, cycle_cost=cycle_cost,
+                                               grid_fee=grid_fee, soc_max=soc_max),
+                                          price_arr)
         # Bug LP-VDT-BOUNDS: uzavreté VDT obchody dňa = smerové stropy pre LP
         from joint_lp_integration import vdt_committed_kw_for_day as _vdtb_p
         try:
@@ -14614,6 +14640,7 @@ a{{color:#1F4E78}}</style></head><body>
         sch_base, summ_base = _od_or_joint(pv_arr, decision_price,
                                  joint_flags=_joint_flags,
                                  vdt_committed_kw=_vdt_committed_p,
+                                 vdt_capacity_reserve_kw=vcr,
                                  settle_price=price_arr,
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
@@ -14621,7 +14648,7 @@ a{{color:#1F4E78}}</style></head><body>
                                  rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
-                                 allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
+                                 allow_grid_charge=agc, terminal_soc_pct=_term_eff,
                                  allow_curtail=acu,
                                  min_spread_eur=min_spread, min_trade_mwh=min_trade,
                                  block_neg_import=bool(block_neg_import),
@@ -14635,6 +14662,7 @@ a{{color:#1F4E78}}</style></head><body>
             sch, summ = _od_or_joint(pv_arr, decision_price,
                                  joint_flags=_joint_flags,
                                  vdt_committed_kw=_vdt_committed_p,
+                                 vdt_capacity_reserve_kw=vcr,
                                  settle_price=price_arr,
                                  batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
                                  soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
@@ -14642,7 +14670,7 @@ a{{color:#1F4E78}}</style></head><body>
                                  rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                                  grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                                  grid_fee=grid_fee, cycle_cost=cycle_cost,
-                                 allow_grid_charge=agc, terminal_soc_pct=terminal_soc,
+                                 allow_grid_charge=agc, terminal_soc_pct=_term_eff,
                                  allow_curtail=acu,
                                  min_spread_eur=min_spread, min_trade_mwh=min_trade,
                                  block_neg_import=bool(block_neg_import),
