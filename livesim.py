@@ -1018,7 +1018,9 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     import rt_engine_v2 as _rte2
                     _rt_engine_sel = "v2"
                     _rt2_params = _rte2.params_from_profile_rt(
-                        _rt_cfg_sel, cycle_cost_plan=getattr(cfg, "cycle_cost", None))
+                        _rt_cfg_sel, cycle_cost_plan=getattr(cfg, "cycle_cost", None),
+                        eff_rt=(float(getattr(cfg, "eff_c", 0.95) or 0.95)
+                                * float(getattr(cfg, "eff_d", 0.95) or 0.95)))
                     print(f"[RT-ENGINE] {d}: v2 (ekonomický, params={_rt2_params})")
             except Exception as _e_rte:
                 print(f"[RT-ENGINE] výber zlyhal ({_e_rte}) → v1")

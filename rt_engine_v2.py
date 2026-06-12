@@ -31,6 +31,7 @@ DEFAULTS = dict(
     rt2_margin_full_eur=60.0,   # marža pri ktorej ide RT na plný výkon
     rt2_zco_k=0.6,              # fallback slope €/MWh za MW signálu (keď kalibrácia chýba)
     rt2_cycle_cost=5.0,         # opotrebenie €/MWh pre RT cyklus
+    rt2_eff_rt=0.9025,          # round-trip účinnosť (eff_c × eff_d) — dedí sa z profilu
 )
 
 
@@ -111,8 +112,16 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
     cc = float(p["rt2_cycle_cost"])
     m_min = float(p["rt2_margin_min_eur"])
     m_full = max(m_min + 1e-6, float(p["rt2_margin_full_eur"]))
-    margin_dis = spread - cc          # E[ZCO] − DT − cycle  (spread = E[ZCO] − DT)
-    margin_chg = -spread - cc         # DT − E[ZCO] − cycle
+    # Bug RT2-EFF (2026-06-12, user: "pokuta každý deň, pravidlo nabíjania príliš
+    # jemné"): marže MUSIA zahŕňať round-trip straty účinnosti — pri η≈0.90 a cene
+    # ~130 €/MWh je to ~13 € skrytého nákladu na každý kWh, ktorý v marži chýbal.
+    #   vybi 1 kWh teraz za E[ZCO]; obnova SOC neskôr stojí DT/η  → marža = ZCO − DT/η − cc
+    #   nabi 1 kWh teraz za E[ZCO]; neskôr predáš η×DT            → marža = η×DT − ZCO − cc
+    eff = max(0.5, min(1.0, float(p.get("rt2_eff_rt") or 0.9025)))
+    dtp = max(0.0, float(dt_eur or 0.0))
+    zco_exp = dtp + spread
+    margin_dis = zco_exp - dtp / eff - cc
+    margin_chg = dtp * eff - zco_exp - cc
     if margin_dis >= m_min:
         f = min(1.0, (margin_dis - m_min) / (m_full - m_min) + 0.15)
         return 1, round(f, 3), f"v2:dis m={margin_dis:.0f} ({src})"
@@ -123,9 +132,15 @@ def decide_v2(sig_avg_mw: float, dt_eur: float, soc_pct: float,
 
 
 def params_from_profile_rt(rt_cfg: Dict[str, Any],
-                           cycle_cost_plan: float = None) -> Dict[str, Any]:
+                           cycle_cost_plan: float = None,
+                           eff_rt: float = None) -> Dict[str, Any]:
     """Vyber v2 parametre z profilu rt sekcie (generické, žiadny hardcode profilu)."""
     out = dict(DEFAULTS)
+    if eff_rt is not None:
+        try:
+            out["rt2_eff_rt"] = float(eff_rt)
+        except (TypeError, ValueError):
+            pass
     for k in ("rt2_margin_min_eur", "rt2_margin_full_eur", "rt2_zco_k", "rt2_cycle_cost"):
         v = (rt_cfg or {}).get(k)
         if v is not None:
