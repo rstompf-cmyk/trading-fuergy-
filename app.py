@@ -2036,13 +2036,17 @@ def form_page(msg=""):
         _jl_flags = {"enabled": False, "trade_batt": True, "trade_ftv": True,
                      "trade_load": True, "use_vdt": False,
                      "optimize_distribution": False}
-    # RT poradca 2.0: aktuálny engine z profilu rt sekcie (pre select v forme)
+    # RT poradca 2.0: aktuálny engine + v2 parametre z profilu rt sekcie (pre formu)
     try:
         import profiles as _pr_rteF
-        _rt_engine_cur = str((((_pr_rteF.load_profile(_active_prof_jli) or {})
-                               .get("rt") or {}).get("engine", "v1")) or "v1")
+        _rt_sec_F = ((_pr_rteF.load_profile(_active_prof_jli) or {}).get("rt") or {})
+        _rt_engine_cur = str(_rt_sec_F.get("engine", "v1") or "v1")
+        _rt2_mmin_cur = float(_rt_sec_F.get("rt2_margin_min_eur", 10.0) or 10.0)
+        _rt2_mfull_cur = float(_rt_sec_F.get("rt2_margin_full_eur", 60.0) or 60.0)
+        _rt2_zcok_cur = float(_rt_sec_F.get("rt2_zco_k", 0.6) or 0.6)
     except Exception:
         _rt_engine_cur = "v1"
+        _rt2_mmin_cur, _rt2_mfull_cur, _rt2_zcok_cur = 10.0, 60.0, 0.6
     # Distribučný poplatok — single source of truth.
     # Pole sa zobrazí 3 spôsobmi podľa stavu distribúcie v profile:
     #   • _dist_enabled=True  → readonly, vypočítaná hodnota (master toggle ON)
@@ -2341,6 +2345,12 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 <option value="v1" {"selected" if _rt_engine_cur != "v2" else ""}>v1 — signálový</option>
 <option value="v2" {"selected" if _rt_engine_cur == "v2" else ""}>v2 — ekonomický (SK)</option>
 </select></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="v2: minimálna čistá marža €/MWh (E[ZCO]−DT−cycle), pod ktorou RT nezasahuje. Vyššie = konzervatívnejšie, menej zásahov.">
+<span>&nbsp;&nbsp;↳ v2: prah marže [€/MWh]</span><input name="rt2_margin_min_eur" type="number" step="1" min="0" value="{_rt2_mmin_cur:g}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="v2: marža €/MWh pri ktorej ide RT na plný výkon batérie. Medzi prahom a touto hodnotou rastie výkon lineárne.">
+<span>&nbsp;&nbsp;↳ v2: plný výkon pri marži [€/MWh]</span><input name="rt2_margin_full_eur" type="number" step="5" min="1" value="{_rt2_mfull_cur:g}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#33506e" title="v2: fallback citlivosť €/MWh za MW signálu — použije sa LEN keď kalibrácia z imbalance_history nie je dostupná (inak sa berie kalibrovaný spread).">
+<span>&nbsp;&nbsp;↳ v2: fallback slope [€/MWh za MW]</span><input name="rt2_zco_k" type="number" step="0.1" min="0" value="{_rt2_zcok_cur:g}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Keď systémový signál pretrváva v jednom smere (príležitostí je veľa), agresivita FTV-balance sa zníži (~50 % pri silnej persistencii). Nechá priestor pre plán a iné zásahy.">
 <span>🌊 Persistencia signálu throttle</span><input name="ftv_persistence_throttle" type="checkbox" {"checked" if f.get("ftv_persistence_throttle", True) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#e6f4ea;padding:4px 8px;border-radius:6px" title="RT zásah (MW signal + FTV balance) nesmie nikdy zhoršiť threshold odchýlku voči obchodnému plánu. Keď FTV nedoposlúchne plán (under-deliver, pre_dev<0), RT nesmie batériu nabíjať navyše; keď FTV preteká (over-deliver), RT nesmie ďalej vybíjať. Plán adherence má prednosť pred MW signal arbitrážou.">
@@ -14426,6 +14436,9 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          vdt_breakeven_auto: str = Form(default=""),
          vdt_capacity_reserve_kw: float = Form(default=0.0),
          rt_engine: str = Form(default="v1"),
+         rt2_margin_min_eur: float = Form(default=10.0),
+         rt2_margin_full_eur: float = Form(default=60.0),
+         rt2_zco_k: float = Form(default=0.6),
          ftv_persistence_throttle: str = Form(default=""),
          rt_no_worsen_dev: str = Form(default=""),
          ftv_strict_plan: str = Form(default=""),
@@ -14485,11 +14498,15 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
             _eng_new = "v2" if str(rt_engine) == "v2" else "v1"
             _pobj_rte = _pr_rteS.load_profile(_prof_rteS) or {}
             _rt_sec = _pobj_rte.get("rt") or {}
-            if str(_rt_sec.get("engine", "v1")) != _eng_new:
-                _rt_sec["engine"] = _eng_new
+            _rt2_new = dict(engine=_eng_new,
+                            rt2_margin_min_eur=max(0.0, float(rt2_margin_min_eur or 10.0)),
+                            rt2_margin_full_eur=max(1.0, float(rt2_margin_full_eur or 60.0)),
+                            rt2_zco_k=max(0.0, float(rt2_zco_k or 0.6)))
+            if any(_rt_sec.get(k) != v for k, v in _rt2_new.items()):
+                _rt_sec.update(_rt2_new)
                 _pobj_rte["rt"] = _rt_sec
                 _pr_rteS.save_profile(_prof_rteS, _pobj_rte)
-                print(f"[RT-ENGINE] profil {_prof_rteS}: engine → {_eng_new}")
+                print(f"[RT-ENGINE] profil {_prof_rteS}: {_rt2_new}")
     except Exception as _e_rteS:
         print(f"[RT-ENGINE] uloženie voľby zlyhalo: {_e_rteS}")
     fpth = bool(ftv_persistence_throttle)                       # default True; persistencia throttle
