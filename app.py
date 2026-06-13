@@ -7056,6 +7056,48 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             AC_AGG = "[" + ",".join(_js(float(x)) for x in _slot_mean) + "]"
         except Exception:
             AC_AGG = AC
+        # Bug SOC-FORECAST-EOD (2026-06-13, user: "oranžová sa má projektovať vždy do
+        # konca dňa, aby bolo vidieť ako na tom je"): pre BUDÚCE minúty dnešného dňa
+        # (po „teraz") soc_pct zo živej simulácie zaostáva (RT=0 pre budúcnosť → krivka
+        # sa zarovná). Dopočítaj ju dopredu z poslednej REÁLNEJ SOC integráciou
+        # plan_batt_kw (= clipnutý plán+VDT, post-kapacitná poistka), clip na [min,max].
+        try:
+            if ("soc_pct" in dview.columns and "plan_batt_kw" in dview.columns
+                    and "time" in dview.columns and len(dview) > 1):
+                import profiles as _pr_eod
+                _pl_eod = ((_pr_eod.load_profile(_active_profile_eff) or {}).get("plan")
+                           if _active_profile_eff else {}) or {}
+                _bk_eod = float(_pl_eod.get("batt_kwh", 800.0) or 800.0)
+                _smin = float(_pl_eod.get("soc_min", _pl_eod.get("soc_min_pct", 5.0)) or 5.0)
+                _smax = float(_pl_eod.get("soc_max", _pl_eod.get("soc_max_pct", 100.0)) or 100.0)
+                _ec = float(_pl_eod.get("eff_c", 0.95) or 0.95)
+                _ed = float(_pl_eod.get("eff_d", 0.95) or 0.95)
+                _lo_eod = _smin / 100.0 * _bk_eod
+                _hi_eod = _smax / 100.0 * _bk_eod
+                _t_now_eod = pd.Timestamp.now()
+                _times_eod = pd.to_datetime(dview["time"], errors="coerce")
+                _soc_eod = pd.to_numeric(dview["soc_pct"], errors="coerce").tolist()
+                _pb_eod = pd.to_numeric(dview["plan_batt_kw"], errors="coerce").fillna(0.0).tolist()
+                # posledná reálna minúta (≤ teraz) s platnou SOC
+                _last_real = -1
+                for _i in range(len(dview)):
+                    _ti = _times_eod.iloc[_i]
+                    if pd.notna(_ti) and _ti <= _t_now_eod and _soc_eod[_i] == _soc_eod[_i]:
+                        _last_real = _i
+                if 0 <= _last_real < len(dview) - 1 and _bk_eod > 0:
+                    _soc_kwh_eod = float(_soc_eod[_last_real]) / 100.0 * _bk_eod
+                    for _i in range(_last_real + 1, len(dview)):
+                        _eg = float(_pb_eod[_i]) / 60.0          # kWh/min (+vybíja −nabíja)
+                        if _eg > 0:
+                            _soc_kwh_eod -= _eg / max(_ed, 0.5)
+                        else:
+                            _soc_kwh_eod += (-_eg) * _ec
+                        _soc_kwh_eod = max(_lo_eod, min(_hi_eod, _soc_kwh_eod))
+                        _soc_eod[_i] = _soc_kwh_eod / _bk_eod * 100.0
+                    dview = dview.copy()
+                    dview["soc_pct"] = _soc_eod
+        except Exception as _e_eod:
+            print(f"[SOC-FORECAST-EOD] {_e_eod}")
         # SOC PREDIKCIA: z trace (plánovaný/projektovaný SOC, výsledok RT engine + plánu)
         SO = "[" + ",".join(_js(x) for x in dview["soc_pct"]) + "]"
         # SOC PLÁN: full-day predikcia z plan_batt_kw (D-1 + VDT realized + plánované VDT)
