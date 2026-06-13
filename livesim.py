@@ -93,6 +93,23 @@ CAL_JSON = "out/pv_calibration.json"
 PRICE_TRAIN_CSV = "out/price_train_2026.csv"      # reálne hodinové clearing DT ceny (CZ — rovnako ako /simulacia)
 
 
+# Perf DT-PRICE-CACHE (2026-06-13, user: "nepočítajú sa veci zbytočne?"): DT
+# clearing ceny pre dátum sú NEMENNÉ (D-1 známe, market-level, nie per profil).
+# Predtým sa _real_dt_hourly/_quarterly volali až 4× za deň × 44 dní a zakaždým
+# čítali historian. Cache per (market, date) → načíta raz, zdieľané naprieč
+# profilmi aj volaniami. Cache len NON-None (None = dáta ešte nie sú, retry).
+_DT_HOURLY_CACHE = {}
+_DT_QUARTERLY_CACHE = {}
+
+
+def _dt_cache_key(date_iso: str) -> str:
+    try:
+        import market as _mk
+        return f"{_mk.get_active_market()}:{date_iso}"
+    except Exception:
+        return f"?:{date_iso}"
+
+
 def _real_dt_hourly(date_iso: str):
     """Vráti 24-prvkový rad reálnych hodinových DT clearing cien pre dátum, alebo None.
 
@@ -100,11 +117,17 @@ def _real_dt_hourly(date_iso: str):
       - CZ → price_train_2026.csv (isot_eur)
       - SK → seps_sk historian (load_okte_dt_for_day, agreguje 15-min na hodiny)
     """
+    _k = _dt_cache_key(date_iso)
+    if _k in _DT_HOURLY_CACHE:
+        return _DT_HOURLY_CACHE[_k]
     try:
         import settlement as _settlement
-        return _settlement.get_dt_real_hourly(date_iso)
+        _v = _settlement.get_dt_real_hourly(date_iso)
     except Exception:
-        return None
+        _v = None
+    if _v is not None:
+        _DT_HOURLY_CACHE[_k] = _v
+    return _v
 
 
 def _real_dt_quarterly(date_iso: str):
@@ -112,9 +135,15 @@ def _real_dt_quarterly(date_iso: str):
 
     Pre CZ rozšíri 24h ceny na 4× quarter; pre SK použije autentické 15-min ceny.
     """
+    _kq = _dt_cache_key(date_iso)
+    if _kq in _DT_QUARTERLY_CACHE:
+        return _DT_QUARTERLY_CACHE[_kq]
     try:
         import settlement as _settlement
-        return _settlement.get_dt_real_quarterly(date_iso)
+        _vq = _settlement.get_dt_real_quarterly(date_iso)
+        if _vq is not None:
+            _DT_QUARTERLY_CACHE[_kq] = _vq
+        return _vq
     except Exception:
         return None
 
@@ -1518,8 +1547,8 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         from core.paths import vdt_trades_csv_path as _vdtpath
                         _prof_vdt = _ga_vdt(profile)
                         _vdt_csv = _vdtpath(profile=_prof_vdt) if _prof_vdt else None
-                        if _vdt_csv and os.path.exists(_vdt_csv):
-                            _vt = pd.read_csv(_vdt_csv, low_memory=False)
+                        _vt = _load_vdt_trades_cached(_vdt_csv) if _vdt_csv else None
+                        if _vt is not None:
                             # Filter na profil + dnešný deň + iba BUY/SELL/CHARGE/DISCHARGE (nie IDLE)
                             if "profile" in _vt.columns and _prof_vdt:
                                 _vt = _vt[_vt["profile"].astype(str) == str(_prof_vdt)]
@@ -1886,6 +1915,26 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
 
 
 _LIVESIM_CSV_CACHE = {}                                   # (csv_path) → (mtime, DataFrame)
+_VDT_TRADES_CACHE = {}                                    # path → (mtime, DataFrame)
+
+
+def _load_vdt_trades_cached(path):
+    """Načíta VDT paper trades CSV s cache per mtime. Perf PLAN-VDT-READ-ONCE
+    (2026-06-13, user: "nepočítajú sa veci zbytočne?"): predtým sa CSV čítal a
+    parsoval V KAŽDOM dni backfillu (44×), hoci sa počas behu nemení. Teraz raz."""
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return None
+    c = _VDT_TRADES_CACHE.get(path)
+    if c is not None and c[0] == mt:
+        return c[1]
+    try:
+        df = pd.read_csv(path, low_memory=False)
+    except Exception:
+        return None
+    _VDT_TRADES_CACHE[path] = (mt, df)
+    return df
 
 
 def _read_csv(case: str, port: str = "8000", profile=None):
