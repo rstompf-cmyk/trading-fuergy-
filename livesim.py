@@ -242,7 +242,7 @@ def _cal_factor(month: str) -> float:
 _MN_CACHE = {"mtime": None, "df": None}
 
 
-def _minute_all(live_minutes=None, min_from_date=None) -> pd.DataFrame:
+def _minute_all(live_minutes=None, min_from_date=None, progress_cb=None) -> pd.DataFrame:
     """Všetky dostupné minútové dáta (sys, aktivácia, zco, isot=DT).
 
     CZ trh: zo `out/imbalance_minute.csv` (s mtime cache).
@@ -285,7 +285,8 @@ def _minute_all(live_minutes=None, min_from_date=None) -> pd.DataFrame:
         else:
             try:
                 import seps_sk as _seps_h
-                mn = _seps_h.build_sk_minute_history(from_date=from_d, to_date=to_d)
+                mn = _seps_h.build_sk_minute_history(from_date=from_d, to_date=to_d,
+                                                     progress_cb=progress_cb)
                 if mn is not None and not mn.empty:
                     if "time" in mn.columns:
                         mn["time"] = pd.to_datetime(mn["time"], errors="coerce")

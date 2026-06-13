@@ -4381,10 +4381,32 @@ def _livesim_bg_tick():
         rtp = _livesim_rt_params(cc.load_case(_bc))
         plan_pp = _ui_load("plan", DEF)
         _bg_use_rt = saved.get("use_rt", None)
+        # Bug BG-VS-GET-LOCK (2026-06-13, user: "deň 0/44 visí 466s"): bg tick aj GET
+        # worker robia ten istý advance aktívneho profilu a súťažia o _LIVESIM_LOCK.
+        # Keď bg drží lock (bez hlásenia progresu), GET worker (ktorého progress
+        # stránka ukazuje) hladuje → bar zamrznutý na init 0/44. Fix: ak GET worker
+        # už počíta tento profil (_INFLIGHT), bg tick PRESKOČ — nech to dokončí GET
+        # worker, ktorý hlási progres. (Inak by sme robili dvojitú prácu + skrytý lock.)
+        try:
+            from core.profile_resolver import get_active as _ga_bg
+            _act_bg = str(_ga_bg() or "")
+        except Exception:
+            _act_bg = ""
+        with _LIVESIM_R_CACHE_LOCK:
+            _get_busy = any(k[2] == _act_bg for k in _LIVESIM_COMPUTE_INFLIGHT)
+        if _get_busy:
+            return 0          # GET worker to počíta s progresom → nelez mu do zámku
+        import time as _t_bgp
+        _bg_key = (case, _PORT, _act_bg)
+        def _bg_progress(d, t, day):
+            with _LIVESIM_R_CACHE_LOCK:
+                _LIVESIM_COMPUTE_PROGRESS[_bg_key] = {"done": int(d), "total": int(t),
+                                                      "day": day, "ts": _t_bgp.time()}
         with _LIVESIM_LOCK:
             r = lsim.advance(case, start, port=_PORT, base_case=_bc, d1_step_min=_st,
                              live_minutes=live, rt_params=rtp, plan_params=plan_pp,
-                             use_rt_override=_bg_use_rt)
+                             use_rt_override=_bg_use_rt, profile=_act_bg or None,
+                             progress_cb=_bg_progress)
         try:
             _auto_regen_stale_plans(case, _PORT)
         except Exception as _e_v3:

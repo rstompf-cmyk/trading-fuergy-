@@ -718,7 +718,8 @@ def load_okte_dam_for_day(date_iso: str) -> "pd.DataFrame":
 
 
 def build_sk_minute_history(from_date: "pd.Timestamp",
-                              to_date: "pd.Timestamp") -> "pd.DataFrame":
+                              to_date: "pd.Timestamp",
+                              progress_cb=None) -> "pd.DataFrame":
     """Postaviť SK ekvivalent imbalance_minute.csv z historian dát.
 
     Range from_date → to_date (vrátane). Pre každý deň: 1-min mriežka 00:00–23:59
@@ -746,8 +747,16 @@ def build_sk_minute_history(from_date: "pd.Timestamp",
 
     frames = []
     cur = f
+    _total = max(1, int((t - f).days) + 1)
+    _i = 0
     while cur <= t:
         d_iso = cur.strftime("%Y-%m-%d")
+        if progress_cb is not None:
+            try:
+                progress_cb(_i, _total, d_iso)        # fáza načítavania dát (pred RT slučkou)
+            except Exception:
+                pass
+        _i += 1
         try:
             day_df = build_sk_live_minutes(today=cur)                 # bez CZ proxy
             if day_df is not None and not day_df.empty:
