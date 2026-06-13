@@ -826,20 +826,22 @@ def purge_full_profile(profile: Optional[str] = None) -> Dict[str, int]:
                             pass
         except Exception as e2:
             print(f"[purge_full_profile] plan_overrides cleanup zlyhal: {e} / {e2}")
-    # ── 7. Livesim CSV + meta — VŠETKY livesim súbory v out/sk + out/cz ──
-    # Bug FULL-RESET-GHOSTS (2026-06-11): pôvodný pattern `livesim_*_{port}.csv`
-    # NIKDY nematchol default port 8000 (paths() suffix pridáva len pre != 8000,
-    # súbory sa volajú livesim_plan_d1.csv) → história prežila "úplný reset"
-    # a naháňali sa duchovia. Livesim CSV je zdieľaný per trh+case; po resete
-    # sa pre KAŽDÝ profil aj tak re-simuluje (profil je v settings_sig), takže
-    # zmazať všetky je bezpečné a zodpovedá "ako nový profil".
+    # ── 7. Livesim CSV + meta — LEN súbory TOHTO profilu ──
+    # Bug LIVESIM-PER-PROFILE (2026-06-13): od per-profil úložiska (livesim_<case>__
+    # <profile>[_<port>].csv) reset profilu X MUSÍ zmazať LEN súbory X, nie všetkých
+    # (inak by zmazal background-spočítané dáta ostatných profilov). Mažeme aj
+    # legacy zdieľaný livesim_<case>.csv (bez profilu) — ten patril aktívnemu.
     try:
         import glob as _g
+        import re as _re
+        _ptag = _re.sub(r"[^A-Za-z0-9_.-]", "_", str(prof or "default"))[:48]
         for market_sub in ["sk", "cz"]:
             md = os.path.join("out", market_sub)
             if not os.path.isdir(md):
                 continue
-            for pattern in ["livesim_*.csv", "livesim_*.meta.json", "livesim_*_meta.json"]:
+            patterns = [f"livesim_*__{_ptag}.csv", f"livesim_*__{_ptag}.meta.json",
+                        f"livesim_*__{_ptag}_*.csv", f"livesim_*__{_ptag}_*.meta.json"]
+            for pattern in patterns:
                 for fp in _g.glob(os.path.join(md, pattern)):
                     try:
                         os.remove(fp); counts["livesim_files"] += 1

@@ -586,6 +586,8 @@ def get_live_recommendation(*,
         from core.vdt_capacity_guard import clip_extras_to_capacity as _clip_cap
         import d1_planner as _d1c
         _dam_net = _d1c.get_dam_commitments(today, profile=active_profile, basis="batt")  # 96, +vybíja −nabíja
+        print(f"[VDT-CAPACITY/diag] {active_profile}: dam_net={'OK('+str(len(_dam_net))+')' if _dam_net else 'None'} "
+              f"trades={len(trades) if trades else 0} soc_now={float(soc_pct):.1f}%")
         if _dam_net and len(_dam_net) == 96 and trades:
             _bk = float(batt_kwh)
             _soc0 = float(soc_pct) / 100.0 * _bk           # štart = AKTUÁLNA reálna SOC

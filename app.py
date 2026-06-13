@@ -3921,12 +3921,12 @@ _LIVESIM_COMPUTE_INFLIGHT = {}    # key → started_ts (epoch s)
 _LIVESIM_COMPUTE_ERR = {}         # key → posledná chyba background behu (str)
 
 
-def _livesim_meta_mtime(case: str, port: str) -> float:
-    """Vráti mtime meta.json pre livesim CSV (0.0 ak neexistuje)."""
+def _livesim_meta_mtime(case: str, port: str, profile=None) -> float:
+    """Vráti mtime meta.json pre livesim CSV (0.0 ak neexistuje). Per-profil."""
     try:
         if lsim is None:
             return 0.0
-        _, meta_path = lsim.paths(case, port)
+        _, meta_path = lsim.paths(case, port, profile or None)
         return os.path.getmtime(meta_path)
     except Exception:
         return 0.0
@@ -3943,7 +3943,7 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
     fungovala (rovnaky port, rozne profily by mali samostatne caches).
     """
     key = (case, port, profile_key)
-    mtime_before = _livesim_meta_mtime(case, port)
+    mtime_before = _livesim_meta_mtime(case, port, profile_key)
     with _LIVESIM_R_CACHE_LOCK:
         cached = _LIVESIM_R_CACHE.get(key)
         if cached is not None and cached[0] == mtime_before and mtime_before > 0:
@@ -3959,20 +3959,22 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
                 r_bg = lsim.advance(case, start, port=port, base_case=base_case,
                                     d1_step_min=d1_step_min,
                                     live_minutes=live_minutes, rt_params=rt_params,
-                                    plan_params=plan_params, use_rt_override=use_rt_override)
+                                    plan_params=plan_params, use_rt_override=use_rt_override,
+                                    profile=profile_key or None)
             # Bug SOC-CONT-V3: po advance over drift LP plánov budúcich dní voči
             # meta.soc_after_done → auto-regen + prepočet projekcie.
             try:
-                if _auto_regen_stale_plans(case, port):
+                if _auto_regen_stale_plans(case, port, profile=profile_key or None):
                     with _LIVESIM_LOCK:
                         r_bg = lsim.advance(case, start, port=port, base_case=base_case,
                                             d1_step_min=d1_step_min,
                                             live_minutes=live_minutes, rt_params=rt_params,
                                             plan_params=plan_params,
-                                            use_rt_override=use_rt_override)
+                                            use_rt_override=use_rt_override,
+                                            profile=profile_key or None)
             except Exception as _e_v3:
                 print(f"[SOC-CONT-V3] auto-regen check zlyhal: {_e_v3}")
-            m_after = _livesim_meta_mtime(case, port)
+            m_after = _livesim_meta_mtime(case, port, profile_key)
             with _LIVESIM_R_CACHE_LOCK:
                 _LIVESIM_R_CACHE[key] = (m_after, r_bg)
                 _LIVESIM_COMPUTE_ERR.pop(key, None)
@@ -4038,7 +4040,7 @@ def _livesim_cache_invalidate(case: str = None):
                     _LIVESIM_R_CACHE.pop(k, None)
 
 
-def _find_stale_future_plans(case: str = "plan_d1", port: str = None, max_days: int = 7):
+def _find_stale_future_plans(case: str = "plan_d1", port: str = None, max_days: int = 7, profile=None):
     """Bug SOC-CONT-V3 (2026-06-11): nájde LP plány pre BUDÚCE dni (date > meta.done_through)
     ktorých soc_init (schedule.soc_pct[0]) sa líši od meta.soc_after_done o > 1 %.
     Také plány boli generované PRED livesim regenom (race condition) → graf má SOC skok
@@ -4049,7 +4051,7 @@ def _find_stale_future_plans(case: str = "plan_d1", port: str = None, max_days: 
     if lsim is None or ps is None:
         return None
     try:
-        _, meta_path = lsim.paths(case, port or _PORT)
+        _, meta_path = lsim.paths(case, port or _PORT, profile or None)
         with open(meta_path) as f:
             meta = json.load(f)
     except Exception:
@@ -4093,13 +4095,13 @@ _PLAN_AUTOREGEN_GUARD = {}
 _PLAN_AUTOREGEN_LOCK = _threading.Lock()
 
 
-def _auto_regen_stale_plans(case: str, port: str = None) -> list:
+def _auto_regen_stale_plans(case: str, port: str = None, profile=None) -> list:
     """Bug SOC-CONT-V3 (2026-06-11): po livesim advance automaticky regeneruje LP plány
     pre budúce dni ktorých soc_init je zastaraný voči meta.soc_after_done (drift > 1 %).
     Tým graf aj nominácia ostanú kontinuálne bez ručného /plan_batch hotfixu.
 
     Vracia zoznam regenerovaných dátumov (prázdny ak nič netreba)."""
-    found = _find_stale_future_plans(case, port)
+    found = _find_stale_future_plans(case, port, profile=profile)
     if not found or not found["stale"]:
         return []
     try:
@@ -4289,11 +4291,19 @@ def _livesim_rt_params_from_profile(prof_plan_rt: dict, cfg):
 
 def _livesim_bg_profiles():
     """Profily, ktoré sa majú posúvať na pozadí: všetky v aktívnom trhu.
-    (Rovnaký rozsah ako VDT scheduler — list_profiles. Background sa tým robí
-    pre VŠETKY profily, nie len naposledy zvolený v UI.)"""
+    AKTÍVNY profil je PRVÝ — jeho stav (užívateľov pohľad) je hotový najskôr,
+    najmä pri dopočte po reštarte. (Rozsah ako VDT scheduler — list_profiles.)"""
     try:
         import profiles as _pr
-        return [p for p in (_pr.list_profiles() or []) if p and p != "default"]
+        profs = [p for p in (_pr.list_profiles() or []) if p and p != "default"]
+        try:
+            from core.profile_resolver import get_active as _ga
+            act = _ga(None)
+            if act in profs:
+                profs = [act] + [p for p in profs if p != act]
+        except Exception:
+            pass
+        return profs
     except Exception:
         return []
 
@@ -4313,7 +4323,7 @@ def _livesim_bg_tick_one(case, start, _bc, _st, live, profile):
                              live_minutes=live, rt_params=rtp, plan_params=plan_pp,
                              use_rt_override=None, profile=profile)
         try:
-            _auto_regen_stale_plans(case, _PORT)
+            _auto_regen_stale_plans(case, _PORT, profile=profile)
         except Exception as _e_v3:
             print(f"[SOC-CONT-V3 bg/{profile}] {_e_v3}")
         return int(r.get("appended", 0))
@@ -4323,14 +4333,11 @@ def _livesim_bg_tick_one(case, start, _bc, _st, live, profile):
 
 
 def _livesim_bg_tick():
-    """Jeden krok simulácie NA POZADÍ (bez prehliadača). Použije naposledy zvolený režim z UI stavu.
-    Vracia počet pridaných minút, alebo -1 pri chybe. Serializované zámkom voči požiadavkám z prehliadača.
-
-    POZN (BG-ALL-PROFILES, 2026-06-13): zatiaľ posúva LEN aktívny profil. Posun
-    všetkých background profilov nie je možný kým je livesim CSV ZDIEĽANÝ per
-    (trh, case) — viac profilov do jedného súboru = full-backfill thrashing
-    (settings_sig je per-profil). Vyžaduje per-profil úložisko = migrácia CSV→DB
-    (úloha project-csv-to-db). advance() už má `profile` param pripravený."""
+    """Jeden krok simulácie NA POZADÍ pre VŠETKY profily (BG-ALL-PROFILES, 2026-06-13).
+    Per-profil úložisko (LIVESIM-PER-PROFILE) umožňuje posúvať každý profil nezávisle
+    do JEHO súboru — žiadny thrashing. Po reštarte sa tým dopočítajú chýbajúce
+    intervaly pre VŠETKY profily, takže otvorenie ktoréhokoľvek profilu = len cache.
+    Vracia súčet pridaných minút. Jedno zlyhanie neblokuje ostatné."""
     try:
         MODES = _livesim_modes()
         saved = _ui_load("livesim", {"case": "plan_d1",
@@ -4341,18 +4348,13 @@ def _livesim_bg_tick():
         start = saved.get("start")
         _lbl, _bc, _st = MODES[case]
         live = _livesim_live_minutes()
-        rtp = _livesim_rt_params(cc.load_case(_bc))
-        plan_pp = _ui_load("plan", DEF)
-        _bg_use_rt = saved.get("use_rt", None)                  # rovnaký toggle ako v UI
-        with _LIVESIM_LOCK:
-            r = lsim.advance(case, start, port=_PORT, base_case=_bc, d1_step_min=_st,
-                             live_minutes=live, rt_params=rtp, plan_params=plan_pp,
-                             use_rt_override=_bg_use_rt)
-        try:
-            _auto_regen_stale_plans(case, _PORT)
-        except Exception as _e_v3:
-            print(f"[SOC-CONT-V3 bg] {_e_v3}")
-        return int(r.get("appended", 0))
+        profs = _livesim_bg_profiles()
+        if not profs:
+            return 0
+        total = 0
+        for _p in profs:
+            total += _livesim_bg_tick_one(case, start, _bc, _st, live, _p)
+        return total
     except Exception as e:
         print("[livesim-bg] preskočené:", e)
         return -1

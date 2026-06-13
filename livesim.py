@@ -144,24 +144,70 @@ CSV_COLS = ["time", "date", "ts15",
 # Reindex na CSV_COLS pri zápise ich automaticky odfiltruje.
 
 
-def paths(case: str, port: str = "8000"):
-    """Market-aware livesim CSV/meta paths — out/<market>/livesim_<case>[_<port>].csv.
+def _safe_prof_tag(name: str) -> str:
+    """Bezpečný kúsok mena profilu do názvu súboru (alfanum + _- )."""
+    import re as _re
+    return _re.sub(r"[^A-Za-z0-9_.-]", "_", str(name or "default"))[:48]
 
-    SK trh má vlastnú simuláciu (SEPS sys_MW + OKTE ceny + ZCO),
-    CZ má svoje (ČEPS sys_MW + OTE ceny). Súbory NESMÚ byť zdieľané.
-    Env var LIVESIM_DIR má vyššiu prioritu (test isolation).
+
+def paths(case: str, port: str = "8000", profile=None):
+    """Market-aware + PER-PROFIL livesim CSV/meta paths —
+    out/<market>/livesim_<case>__<profile>[_<port>].csv.
+
+    Bug LIVESIM-PER-PROFILE (2026-06-13, krok 1 migrácie CSV→DB): livesim CSV bol
+    ZDIEĽANÝ per (trh, case) → viac profilov do jedného súboru = full-backfill
+    thrashing pri prepnutí (settings_sig je per-profil). Teraz je súbor PER-PROFIL
+    → každý profil má vlastnú trajektóriu, dá sa posúvať na pozadí nezávisle
+    (odomyká úlohu BG-ALL-PROFILES). profile=None → aktívny profil (back-compat:
+    každý existujúci caller dostane súbor aktívneho profilu).
+
+    SK/CZ trh má vlastné súbory (NESMÚ byť zdieľané). LIVESIM_DIR má prioritu (testy).
     """
-    tag = case + ("" if str(port) == "8000" else f"_{port}")
+    _is_active = False
+    try:
+        from core.profile_resolver import get_active as _ga_p
+        _prof = _safe_prof_tag(_ga_p(profile))
+        _is_active = (_prof == _safe_prof_tag(_ga_p(None)))   # legacy súbor patrí AKTÍVNEMU profilu
+    except Exception:
+        _prof = _safe_prof_tag(profile)
+    tag = f"{case}__{_prof}" + ("" if str(port) == "8000" else f"_{port}")
     env = os.environ.get("LIVESIM_DIR")
     if env:
-        return os.path.join(env, f"livesim_{tag}.csv"), os.path.join(env, f"livesim_{tag}.meta.json")
+        _csv = os.path.join(env, f"livesim_{tag}.csv")
+        _meta = os.path.join(env, f"livesim_{tag}.meta.json")
+        if _is_active:
+            _migrate_legacy_livesim(env, case, port, _csv, _meta)
+        return _csv, _meta
     try:
         import market as _mk
         d = _mk.data_dir()                                                # out/cz alebo out/sk
     except Exception:
         d = os.path.join("out", "cz")
     os.makedirs(d, exist_ok=True)
-    return os.path.join(d, f"livesim_{tag}.csv"), os.path.join(d, f"livesim_{tag}.meta.json")
+    _csv = os.path.join(d, f"livesim_{tag}.csv")
+    _meta = os.path.join(d, f"livesim_{tag}.meta.json")
+    if _is_active:
+        _migrate_legacy_livesim(d, case, port, _csv, _meta)
+    return _csv, _meta
+
+
+def _migrate_legacy_livesim(d, case, port, new_csv, new_meta):
+    """Jednorázová migrácia: ak per-profil súbor ešte neexistuje, ale starý
+    ZDIEĽANÝ (livesim_<case>[_<port>].csv) áno, premenuj ho na per-profil názov
+    AKTÍVNEHO profilu — zachová doterajšiu trajektóriu (žiadny re-backfill od nuly
+    pre profil, ktorý práve bežal). Ostatné profily sa dopočítajú na pozadí."""
+    try:
+        if os.path.exists(new_csv):
+            return
+        legacy_tag = case + ("" if str(port) == "8000" else f"_{port}")
+        legacy_csv = os.path.join(d, f"livesim_{legacy_tag}.csv")
+        legacy_meta = os.path.join(d, f"livesim_{legacy_tag}.meta.json")
+        if os.path.exists(legacy_csv):
+            os.rename(legacy_csv, new_csv)
+            if os.path.exists(legacy_meta):
+                os.rename(legacy_meta, new_meta)
+    except Exception:
+        pass
 
 
 def _cal_factor(month: str) -> float:
@@ -434,14 +480,14 @@ def _load_meta(meta_path):
         return None
 
 
-def carried_soc_for_date(case: str, port: str = "8000", date=None) -> dict:
+def carried_soc_for_date(case: str, port: str = "8000", date=None, profile=None) -> dict:
     """Vráti dict so SOC ktoré livesim použije ako soc_init pre daný dátum (carried z predošlého dňa).
     Pri date=None vráti aktuálny soc_after_done. Pri date=zajtra vráti predpoklad = soc_after_done.
     Pri date=minulosť (už spočítané v CSV) vráti SOC z konca predošlého dňa.
 
     Vracia: {'soc_kwh': float, 'soc_pct': float, 'as_of_date': str, 'note': str} alebo None ak nie sú dáta.
     """
-    csv_path, meta_path = paths(case, port)
+    csv_path, meta_path = paths(case, port, profile)
     meta = _load_meta(meta_path)
     if meta is None:
         return None
@@ -580,7 +626,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     except Exception as _e_ssot:
         print(f"[livesim PROFILE-CFG-SSOT] zlyhal: {_e_ssot}")
     rtc.apply_case(cfg)
-    csv_path, meta_path = paths(case, port)
+    csv_path, meta_path = paths(case, port, profile)
     now = pd.Timestamp(now) if now is not None else pd.Timestamp(dt.datetime.now())
     now = now.tz_localize(None) if now.tzinfo else now
     today = now.normalize()
@@ -1767,8 +1813,8 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
 _LIVESIM_CSV_CACHE = {}                                   # (csv_path) → (mtime, DataFrame)
 
 
-def _read_csv(case: str, port: str = "8000"):
-    csv_path, _ = paths(case, port)
+def _read_csv(case: str, port: str = "8000", profile=None):
+    csv_path, _ = paths(case, port, profile)
     try:
         mtime = os.path.getmtime(csv_path)
     except OSError:
