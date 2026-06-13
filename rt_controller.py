@@ -645,6 +645,21 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                         tot = max(tot, -_avail_chg_re)
             except Exception:
                 pass
+        # RT-PRIORITY kompozícia (2026-06-13, user: "ak je RT− tak batéria ide do −
+        # aby sa mohla nabíjať; RT povel víťazí nad plánom"). Samotné uvoľnenie
+        # dev_budget nestačí — keď |RT| < |plán| a opačný smer, additívne plán+RT ostane
+        # v smere plánu (napr. plán +4830 vybi, RT −4440 nabi → netto +390 vybi → batéria
+        # sa NEnabíja). Tu plán prispieva LEN zložkou v smere RT, zvyšok prevezme RT:
+        #   RT+ (vybi):  tot = max(plán,0) + RT  (vybíja nad plán)
+        #   RT− (nabi):  tot = min(plán,0) + RT  (plán-vybíjanie sa zahodí → batéria nabíja)
+        # PRED auditom, aby audit oškáloval túto (zosilnenú) odchýlku na SOC rezervu.
+        if rt_overrides_plan:
+            _rt_dev = tot - plan_kw
+            if _rt_dev > 1.0:
+                tot = max(plan_kw, 0.0) + _rt_dev
+            elif _rt_dev < -1.0:
+                tot = min(plan_kw, 0.0) + _rt_dev
+            tot = max(-BK, min(BK, tot))
         # Audit per minútu: orež RT zložku ak by porušila SOC rezervu pre budúce sloty
         if audit_today_state is not None and abs(tot - plan_kw) >= 1.0:
             try:
