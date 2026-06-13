@@ -678,15 +678,25 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     # nepotrebuje. Pôvodne tu bol aj today → každý regen dnešného plánu (vrátane
     # SOC-CONT-V3 auto-regenu PO advance!) zmenil sig → FULL backfill celej histórie
     # pri ďalšom requeste → /livesim sa otváral "neskutočne dlho", opakovane.
+    # Bug PLAN-SIG-CONTENT (2026-06-13, user: "výpočty sa robia znova po reštarte"):
+    # plan_sigs predtým používal `generated_at` (timestamp regenu). Auto-regen
+    # (SOC-CONT-V3) počas backfillu regeneroval plány → generated_at sa zmenil →
+    # pri ďalšom advance/reštarte sig NESEDEL → FULL reset → backfill → auto-regen →
+    # nekonečná slučka, hotový backfill sa zahodil. Fix: sig = CONTENT HASH plánu
+    # (bez timestamp polí). Regen s rovnakým OBSAHOM → rovnaký hash → žiadny reset.
     plan_sigs = {}
     try:
+        import hashlib as _hl
+        _vol_keys = {"generated_at", "saved_at", "updated_at", "created_at", "ts"}
         _sig_end = pd.Timestamp(today).normalize() - pd.Timedelta(days=1)
         if _sig_end >= pd.Timestamp(start_date).normalize():
             for _d in pd.date_range(pd.Timestamp(start_date), _sig_end, freq="D"):
                 _diso = _d.date().isoformat()
                 _p = ps.load_plan_safe(_diso, step_min_now, kind_now)
                 if _p:
-                    plan_sigs[_diso] = _p.get("generated_at", "?")
+                    _pc = {k: v for k, v in _p.items() if k not in _vol_keys}
+                    _pj = json.dumps(_pc, sort_keys=True, default=str)
+                    plan_sigs[_diso] = _hl.md5(_pj.encode("utf-8")).hexdigest()[:16]
     except Exception:
         pass
     # FTV scenáre per-dátum — keď user pridá/zmení scenár, log sa resetuje a livesim ho prevezme
