@@ -3934,6 +3934,27 @@ def _livesim_meta_mtime(case: str, port: str, profile=None) -> float:
         return 0.0
 
 
+def _livesim_cache_store(case, port, profile, r):
+    """BG tick po advance uloží svoj výsledok `r` do render-cache, aby OTVORENIE
+    profilu bolo OKAMŽITÉ (cache hit, žiadny prepočet).
+
+    Bug BG-INVALIDATES-CACHE (2026-06-13, user: "druhé otvorenie toho istého profilu
+    zas prepočítava"): _LIVESIM_R_CACHE je platná len kým sa meta.json mtime nezmení.
+    Lenže bg-all každý tick posúva profil → prepíše meta → mtime sa zmení → GET cache
+    VŽDY padne → re-open prepočítava. bg pritom `r` už má spočítané — len ho zahadzoval.
+    Teraz ho uloží pod kľúč (case, port, profile) s aktuálnym mtime → GET ho rovno vráti.
+    Kľúč = surové meno profilu (zhodné s GET `_profile_key = get_active()` a bg list_profiles)."""
+    try:
+        if not isinstance(r, dict):
+            return
+        m = _livesim_meta_mtime(case, port, profile or None)
+        if m > 0:
+            with _LIVESIM_R_CACHE_LOCK:
+                _LIVESIM_R_CACHE[(case, port, str(profile or ""))] = (m, r)
+    except Exception:
+        pass
+
+
 def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
                               live_minutes, rt_params, plan_params,
                               use_rt_override, profile_key: str = ""):
@@ -4347,6 +4368,8 @@ def _livesim_bg_tick_one(case, start, _bc, _st, live, profile):
             _auto_regen_stale_plans(case, _PORT, profile=profile)
         except Exception as _e_v3:
             print(f"[SOC-CONT-V3 bg/{profile}] {_e_v3}")
+        # BG-INVALIDATES-CACHE fix: ulož `r` do render-cache → otvorenie tohto profilu okamžité
+        _livesim_cache_store(case, _PORT, profile or None, r)
         return int(r.get("appended", 0))
     except Exception as _e_one:
         print(f"[livesim-bg/{profile}] preskočené: {_e_one}")
@@ -4411,6 +4434,8 @@ def _livesim_bg_tick():
             _auto_regen_stale_plans(case, _PORT)
         except Exception as _e_v3:
             print(f"[SOC-CONT-V3 bg] {_e_v3}")
+        # BG-INVALIDATES-CACHE fix: ulož `r` aktívneho profilu do render-cache → otvorenie okamžité
+        _livesim_cache_store(case, _PORT, _act_bg or None, r)
         # Úloha #7 BG-ALL-PROFILES (re-enable 2026-06-13): keď LIVESIM_BG_ALL=1, posúvaj
         # na pozadí aj OSTATNÉ profily, ktorých súbor UŽ EXISTUJE (= inkrementálny
         # catch-up, lacné) → prepnutie na ne je okamžité (len cache). PLAN-SIG-CONTENT
