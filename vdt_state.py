@@ -126,6 +126,60 @@ def _get_start_soc_from_livesim_yesterday(profile: str) -> Optional[Dict[str, An
     return None
 
 
+def _get_current_soc_from_livesim_today(profile: str, today: dt.date,
+                                          now: dt.datetime) -> Optional[Dict[str, Any]]:
+    """Bug SOC-UNIFY (2026-06-13): kanonický REÁLNY „aktuálny SOC" — posledný
+    non-null soc_pct z DNEŠNÉHO livesim traceu v čase <= now.
+
+    Toto je engine pravda (plán + VDT + RT po clipe). Slúži na to, aby audit,
+    VDT advisor, auto_control aj zobrazenie mali identický SOC — všetci ho
+    dostanú cez compute_current_state. Vracia {"soc_pct", "source"} alebo None
+    ak dnešný trace ešte neexistuje (vtedy fallback na plán projekciu).
+    """
+    try:
+        import livesim as _ls
+        import pandas as _pd
+    except Exception:
+        return None
+    port = os.environ.get("PORT") or os.environ.get("APP_PORT") or "8000"
+    day_iso = today.isoformat()
+    _cases = ["dt_15min", "plan_d1"]
+    try:
+        def _meta_mtime(_c):
+            try:
+                _, _mp = _ls.paths(_c, port)
+                return os.path.getmtime(_mp)
+            except OSError:
+                return 0.0
+        _cases.sort(key=_meta_mtime, reverse=True)
+    except Exception:
+        pass
+    for case in _cases:
+        try:
+            df = _ls.load_series(case, port=port, day=day_iso, max_points=10**9)
+        except Exception:
+            continue
+        if (df is None or df.empty or "soc_pct" not in df.columns
+                or "time" not in df.columns):
+            continue
+        sub = df[df["soc_pct"].notna()]
+        if sub.empty:
+            continue
+        # Iba realizované minúty <= now (nie projekcia budúcnosti).
+        try:
+            _t = _pd.to_datetime(sub["time"], errors="coerce")
+            sub = sub[_t <= _pd.Timestamp(now)]
+        except Exception:
+            pass
+        if sub.empty:
+            continue
+        soc = float(sub["soc_pct"].iloc[-1])
+        ts = str(sub["time"].iloc[-1])[:19]
+        return {"soc_pct": soc,
+                "source": f"livesim dnešok trace ({case}, profile={profile}, ts={ts})"}
+    return None
+
+
 def _get_start_soc_from_d1_yesterday(profile: str) -> Optional[Dict[str, Any]]:
     """SOC z včerajšieho D-1 plánu — soc_pct[-1] = terminal SOC slot."""
     yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
@@ -491,6 +545,22 @@ def compute_current_state(profile: str,
     cur_idx = _slot_idx_for_time(now, step_min=15)
     # current_soc_pct = SOC na začiatku aktuálneho slotu (= koniec predchádzajúceho)
     current_soc = float(soc_path[cur_idx])      # soc_path[0]=start, soc_path[1]=koniec slotu 0
+    current_soc_source = "plán projekcia (DAM+VDT)"
+
+    # Bug SOC-UNIFY (2026-06-13): kanonický „aktuálny SOC" = engine livesim trace
+    # (plán + VDT + RT po clipe), NIE plán DAM+VDT projekcia. Tým majú audit, VDT
+    # advisor, auto_control aj zobrazenie identický SOC (všetci volajú toto). Plán
+    # soc_path ostáva pre forecast budúcich slotov + fallback keď dnešný trace ešte
+    # nie je. Override len pre REÁLNY dnešok — historický backfill audit ostáva
+    # nezmenený (číta plán projekciu ako doteraz, nulové riziko regresie).
+    if today == dt.date.today():
+        try:
+            _realized = _get_current_soc_from_livesim_today(profile, today, now)
+        except Exception:
+            _realized = None
+        if _realized is not None:
+            current_soc = float(_realized["soc_pct"])
+            current_soc_source = _realized["source"]
 
     # 6. Data completeness final check
     data_completeness = (len(missing) == 0)
@@ -513,6 +583,7 @@ def compute_current_state(profile: str,
             "vdt_realized_source": vdt["source"],
             "soc_path_pct": soc_path,
             "current_soc_pct": current_soc,
+            "current_soc_source": current_soc_source,
             "current_slot_idx": cur_idx,
             "batt_kwh": cap,
             "batt_kw": batt_kw,

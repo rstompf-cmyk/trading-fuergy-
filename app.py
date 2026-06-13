@@ -3121,6 +3121,8 @@ def dashboard(profile: str = ""):
         f'<div style="font-size:12px;color:#555;line-height:1.6">'
         f'<b>Start SOC:</b> {state.get("start_soc_pct", 0):.1f}% '
         f'<span style="color:#888">({_html.escape(str(state.get("start_soc_source", "?")))})</span><br>'
+        f'<b>Aktuálny SOC:</b> {state.get("current_soc_pct", 0):.1f}% '
+        f'<span style="color:#888">({_html.escape(str(state.get("current_soc_source", "?")))})</span><br>'
         f'<b>DAM kind:</b> {_html.escape(str(state.get("dam_kind", "?")))} · '
         f'<b>VDT realized:</b> {vdt_n} trades<br>'
         f'{("<b>Missing:</b> " + ", ".join(state.get("missing_items", []))) if not data_ok else ""}'
@@ -6298,23 +6300,25 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                 _soc_pct = max(_soc_min_p, min(_soc_max_p, _soc_pct))
                                 _socs.append(_soc_pct)
                                 _pb_realiz.append(_pb_real)
-                            # Bug SOC-ENGINE-SSOT (2026-06-11 večer): engine livesim je JEDINÝ
-                            # zdroj SOC. Po Bug VDT-DATE-ISO engine aplikuje VDT (aj večerné
-                            # nabíjanie), takže trace/CSV soc_pct je úplná pravda. Render
-                            # integrácia (bez RT audit clipu + engine sekvencie) divergovala
-                            # na konci dňa (graf 100 % vs engine 53 %) → skok na hranici dní.
-                            # Integrované _socs použijeme IBA na doplnenie NaN dier — NIKDY
-                            # na prepis engine hodnôt. Tým koniec dňa N == štart dňa N+1
-                            # z konštrukcie (oba = engine).
+                            # Bug SOC-UNIFY (2026-06-13): engine livesim je JEDINÝ zdroj
+                            # reálneho soc_pct — render ho už NEPREPOČÍTAVA, len číta engine
+                            # trace. (Render integrácia _socs divergovala od engine: chýbal
+                            # RT audit clip + engine sekvencia → skok na hranici dní.) Overené:
+                            # engine CSV soc_pct má 0 NaN naprieč všetkými traceami, takže
+                            # bývalý fill bol no-op. Prípadné medzery doplníme engine vlastnými
+                            # susedmi (ffill/bfill), NIE paralelnou integráciou. _socs zostáva
+                            # nižšie len ako power-clip (_pb_realiz, Bug MM), nie pre soc_pct.
                             _soc_eng = (pd.to_numeric(dview["soc_pct"], errors="coerce")
                                         if "soc_pct" in dview.columns else None)
                             if _soc_eng is None or _soc_eng.isna().all():
+                                # engine soc_pct úplne chýba (legacy CSV) → posledná záchrana
                                 dview["soc_pct"] = _socs
-                                _vdt_diag["soc_source"] = "render-integracia (engine soc chýba)"
+                                _vdt_diag["soc_source"] = "render-fallback (engine soc chýba)"
                             else:
-                                _fill_socs = pd.Series(_socs, index=dview.index)
-                                dview["soc_pct"] = _soc_eng.fillna(_fill_socs)
-                                _vdt_diag["soc_source"] = "engine (NaN doplnené integráciou)"
+                                if _soc_eng.isna().any():
+                                    _soc_eng = _soc_eng.ffill().bfill()
+                                dview["soc_pct"] = _soc_eng
+                                _vdt_diag["soc_source"] = "engine (jediný zdroj)"
                             # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
                             # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
                             # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
