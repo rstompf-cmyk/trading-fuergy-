@@ -61,7 +61,9 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
                        slot_minutes: int = 15,
                        use_orderbook: bool = True,
                        future_only: bool = True,
-                       dam_commitments: Optional[list] = None) -> Dict[str, Any]:
+                       dam_commitments: Optional[list] = None,
+                       soc_neutral: bool = True,
+                       soc_neutral_tol_pct: float = 1.0) -> Dict[str, Any]:
     """LP optimalizácia denného obchodovania.
 
     Args:
@@ -199,16 +201,30 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
     #             = (sell/1000 − fee/1000 − cycle/2000) · d
     #             − (buy/1000 + fee/1000 + cycle/2000) · c
     # ──────────────────────────────────────────────────────────────────────
-    coeff_d = sell_price_arr / 1000.0 - grid_fee / 1000.0 - cycle_cost / 2000.0
-    coeff_c = -(buy_price_arr / 1000.0 + grid_fee / 1000.0 + cycle_cost / 2000.0)
+    # Bug VDT-HARD-SPREAD (2026-06-12, user: "obchody by sa mali uzatvárať vždy
+    # so ziskom, min spread je v pláne — ako môže prerobiť?"): min_spread je teraz
+    # TVRDÝ gate zapečený do LP účelovej funkcie, nie len post-hoc filter. Pridáme
+    # min_spread/2 ako extra prekážku na KAŽDÚ nohu → dobrovoľný round-trip sa
+    # oplatí LP iba ak sell − buy ≥ 2·fee + cycle + min_spread. Vynútené DAM
+    # commitments (lower bounds nižšie) prejdú tak či tak — gate platí len pre
+    # VDT obchody NAD rámec záväzku (presne to, čo prerábalo: koncové vybitia
+    # a páry tesne nad nulou). Predaj DAM-energie ostáva povolený (lacný buyback
+    # neskôr), ale len keď spread prekročí prah — to zabráni stratovým re-tradom.
+    # VDT-HARD-SPREAD (2026-06-12): min_spread ako TVRDÝ gate v účelovej funkcii.
+    # Prah min_spread/2 na každú nohu → dobrovoľný round-trip sa oplatí iba ak
+    # sell − buy ≥ 2·fee + cycle + min_spread. Cross-slot arbitráž (kúp v lacnom
+    # slote, predaj v drahom) funguje normálne. Dumping uskladnenej DAM-energie
+    # bez kúpy späť rieši SOC-neutralita nižšie (VDT-SOC-NEUTRAL).
+    _hurdle = max(0.0, float(min_spread)) / 2000.0
+    coeff_d = sell_price_arr / 1000.0 - grid_fee / 1000.0 - cycle_cost / 2000.0 - _hurdle
+    coeff_c = -(buy_price_arr / 1000.0 + grid_fee / 1000.0 + cycle_cost / 2000.0 + _hurdle)
     # c[t] na párnych pozíciách, d[t] na nepárnych
     c_obj = np.zeros(2 * n)
     c_obj[0::2] = -coeff_c   # min = -max, but coeff_c je už negative → -coeff_c je positive cost
     c_obj[1::2] = -coeff_d   # min: chceme maximalizovať d → c_obj záporné pre d
 
-    # Min-spread gate: nepovoľ nabíjať/vybíjať ak round-trip spread nedosiahne min_spread.
-    # Skipped v LP formulácii — kontrolujeme post-hoc cez profitabilitu.
-    # Použijeme to ako filter v report (idle ak charge*discharge < threshold).
+    # Min-spread gate je teraz v účelovej funkcii (viď VDT-HARD-SPREAD vyššie).
+    # Post-hoc filter ostáva ako poistka pri klipovaní šumu.
 
     # Bounds: dam_chg[t] ≤ c[t] ≤ max_buy_kwh[t], dam_dis[t] ≤ d[t] ≤ max_sell_kwh[t]
     # Lower bound = DAM commitment (kontrakt musí prejsť cez batt).
@@ -251,6 +267,7 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
         A_ub.append(row)
         b_ub.append(soc_start_kwh - soc_end_min_kwh)
 
+
     # Max počet cyklov za deň: Σ discharge[t] ≤ max_cycles × batt_kwh
     # Cykly počítame ako sumu vybitej energie / batt_kwh (= 1 cyklus = full discharge).
     if max_cycles_per_day is not None and max_cycles_per_day > 0:
@@ -259,6 +276,24 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
             row[2 * i + 1] = 1.0   # discharge
         A_ub.append(row)
         b_ub.append(float(max_cycles_per_day) * batt_kwh)
+
+    # Bug VDT-SOC-NEUTRAL (2026-06-12, user: "obchody by sa mali uzatvárať vždy so
+    # ziskom; predaj DT-energiu a kúp ju späť lacnejšie inokedy"): VDT je OVERLAY
+    # nad DAM plánom — jeho čistá zmena SOC za deň musí byť ≈ 0 (nad rámec DAM
+    # záväzkov). Bez tohto LP DUMPOVAL uskladnenú DAM-energiu (predaj bez kúpy
+    # späť) za hocijakú cenu nad nulou → koncové stratové vybitia (−472 €). S
+    # neutralitou je KAŽDÝ predaj spárovaný s kúpou → round-trip → platí min_spread
+    # gate. DAM čistá zmena ostáva povolená (kontrakt). PRIDANÉ AKO POSLEDNÉ 2
+    # riadky → fallback ich vie odstrániť pri infeasible. Tolerancia ±tol% kapacity.
+    if soc_neutral:
+        _dam_net = float(np.sum(eff_c * dam_chg - dam_dis / eff_d))
+        _tol = max(1.0, float(soc_neutral_tol_pct) / 100.0 * batt_kwh)
+        _row_net = np.zeros(2 * n)
+        for i in range(n):
+            _row_net[2 * i] = eff_c
+            _row_net[2 * i + 1] = -1.0 / eff_d
+        A_ub.append(_row_net.copy()); b_ub.append(_dam_net + _tol)
+        A_ub.append(-_row_net); b_ub.append(-(_dam_net - _tol))
 
     A_ub = np.array(A_ub) if A_ub else None
     b_ub = np.array(b_ub) if b_ub else None
@@ -273,6 +308,17 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
         )
     except Exception as e:
         return {"ok": False, "error": f"LP solver zlyhal: {e}", "trades": []}
+
+    # VDT-SOC-NEUTRAL fallback: ak neutralita spôsobí infeasible (napr. soc_end_min
+    # nad rámec start+DAM_net), skús ešte raz bez neutrality (degradované, logované).
+    if (not res.success) and soc_neutral and len(A_ub) >= 2:
+        try:
+            _Aub2 = np.array(A_ub[:-2]); _bub2 = np.array(b_ub[:-2])
+            res = linprog(c_obj, A_ub=_Aub2, b_ub=_bub2, bounds=bounds, method="highs")
+            if res.success:
+                print("[VDT-SOC-NEUTRAL] infeasible s neutralitou → bez nej (degradované)")
+        except Exception:
+            pass
 
     if not res.success:
         return {"ok": False, "error": f"LP nemá riešenie: {res.message}",
