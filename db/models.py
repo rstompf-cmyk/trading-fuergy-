@@ -578,6 +578,72 @@ class ActiveMarket(Base):
     set_at: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# LIVESIM STORAGE — migrácia CSV→DB (krok 2). Nahrádza per-profil livesim CSV +
+# meta.json. Flag-gated (LIVESIM_STORE=db) — kým off, tieto tabuľky sa nepoužívajú.
+# ════════════════════════════════════════════════════════════════════════════
+
+class LivesimMeta(Base):
+    """Meta stav livesim per (profil, trh, case) — nahrádza livesim_*.meta.json.
+
+    Štruktúrované polia (done_through, settings_sig, soc_after_done) v DB →
+    žiadny súborový race (KeyError 'time' z rozpísaného CSV), čistá perzistencia
+    cez reštart, atomický UPSERT. params/skipped ako JSON."""
+    __tablename__ = "livesim_meta"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"),
+                                              nullable=False, index=True)
+    market: Mapped[str] = mapped_column(String(2), nullable=False)
+    case: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    start_date: Mapped[Optional[str]] = mapped_column(String(10))
+    done_through: Mapped[Optional[str]] = mapped_column(String(10))
+    last_min: Mapped[Optional[str]] = mapped_column(String(20))
+    soc_after_done: Mapped[Optional[float]] = mapped_column(Float)
+    cum_dt_done: Mapped[float] = mapped_column(Float, default=0.0)
+    cum_rt_done: Mapped[float] = mapped_column(Float, default=0.0)
+    settings_sig: Mapped[Optional[str]] = mapped_column(Text)
+    params: Mapped[Optional[dict]] = mapped_column(JSON)
+    skipped: Mapped[Optional[dict]] = mapped_column(JSON)        # {no_data:[], no_sys_mw:[]}
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("profile_id", "market", "case", name="uq_livesim_meta_pmc"),
+        CheckConstraint("market IN ('cz','sk')", name="ck_livesim_meta_market"),
+    )
+    profile: Mapped["Profile"] = relationship()
+
+
+class LivesimTraceDay(Base):
+    """Minútový livesim trace per (profil, trh, case, deň) — nahrádza livesim_*.csv.
+
+    payload = gzip+base64 JSON {cols:[...], rows:[[...],...]} celého dňa (≤1440 min).
+    Per-deň blob (nie 40-stĺpcová tabuľka × 1440 riadkov) — kompaktné, perzistentné,
+    bez súborových race-ov; UI číta po dňoch (load_series(day)) tak či tak.
+    soc_end = SOC na konci dňa (carry pre ďalší deň)."""
+    __tablename__ = "livesim_trace_day"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profile.id", ondelete="CASCADE"),
+                                              nullable=False, index=True)
+    market: Mapped[str] = mapped_column(String(2), nullable=False)
+    case: Mapped[str] = mapped_column(String(32), nullable=False)
+    day: Mapped[str] = mapped_column(String(10), nullable=False)        # 'YYYY-MM-DD'
+
+    payload: Mapped[str] = mapped_column(Text, nullable=False)          # gzip+b64 JSON
+    n_rows: Mapped[int] = mapped_column(Integer, default=0)
+    soc_end: Mapped[Optional[float]] = mapped_column(Float)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("profile_id", "market", "case", "day", name="uq_livesim_trace_pmcd"),
+        Index("idx_livesim_trace_range", "profile_id", "market", "case", "day"),
+        CheckConstraint("market IN ('cz','sk')", name="ck_livesim_trace_market"),
+    )
+    profile: Mapped["Profile"] = relationship()
+
+
 __all__ = [
     # auth
     "User", "UserProfileAccess", "AuthSession", "AuditLog",
@@ -589,4 +655,6 @@ __all__ = [
     "LoadProfile", "FtvScenario", "VdtPaperTrade", "AutoControlEvent",
     # system
     "UiSettings", "Case", "RealioConfig", "ActiveMarket",
+    # livesim storage (CSV→DB)
+    "LivesimMeta", "LivesimTraceDay",
 ]
