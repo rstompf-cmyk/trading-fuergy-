@@ -517,7 +517,9 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
                                 audit_soc_reserve_pct=audit_soc_reserve_pct,
                                 audit_rt_persistence_slots=audit_rt_persistence_slots,
                                 audit_future_horizon_slots=audit_future_horizon_slots,
-                                rt_engine=rt_engine, rt2_params=rt2_params)
+                                rt_engine=rt_engine, rt2_params=rt2_params,
+                                # RT-PRIORITY: z cfg (plan_params), default False = staré správanie
+                                rt_overrides_plan=bool(getattr(cfg, "rt_overrides_plan", False)))
 
 
 def _load_meta(meta_path):
@@ -658,6 +660,14 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         if "allow_curtail" in plan_params and plan_params["allow_curtail"] is not None:
             try: cfg.allow_curtail = bool(plan_params["allow_curtail"])
             except Exception: pass
+        # RT-PRIORITY (2026-06-13): keď True, RT povel preváži plán (audit jediná brzda) —
+        # dev_budget strop neobmedzuje RT odchýlku. Default False = staré správanie.
+        if "rt_overrides_plan" in plan_params and plan_params["rt_overrides_plan"] is not None:
+            try: cfg.rt_overrides_plan = bool(plan_params["rt_overrides_plan"])
+            except Exception: pass
+        # ENV fallback pre rýchly test na deve (RT_OVERRIDES_PLAN=1) bez UI toggle
+        if os.environ.get("RT_OVERRIDES_PLAN") == "1":
+            cfg.rt_overrides_plan = True
         print(f"[livesim.advance] cfg merge z plan_params: "
               f"batt={cfg.batt_kw:.0f}kW/{cfg.batt_kwh:.0f}kWh, "
               f"FTV={cfg.kwp:.0f}kWp, "

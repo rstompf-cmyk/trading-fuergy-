@@ -210,7 +210,15 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                      # (E[ZCO] z kalibrovaného spreadu vs náklady) namiesto signálovej
                      # heuristiky v1. Downstream vrstvy (no-worsen, lookahead, persistencia,
                      # grid, inline audit) ostávajú IDENTICKÉ pre obe verzie.
-                     rt_engine: str = "v1", rt2_params=None):
+                     rt_engine: str = "v1", rt2_params=None,
+                     # Úloha RT-PRIORITY (2026-06-13, user: "ak príde povel z RT, plán mu
+                     # nesmie prebiť — RT ho mení, audit je jediná brzda"): keď True, RT
+                     # odchýlka NIE je obmedzená dev_budget stropom (ekonomický cap). eg je
+                     # pred týmto blokom už SOC-clipnuté (riadky ~662-665) + auditované
+                     # (~641-659) + lookahead (~564-597) → SOC ostáva bezpečné, len RT smie
+                     # plán zvrátiť (RT− → batéria do nabíjania, RT+ → nad plán). Default
+                     # False = pôvodné správanie (golden test nedotknutý).
+                     rt_overrides_plan: bool = False):
     """JEDNA fyzická batéria: plán (nominácia, plan_kw_arr po periódach, +vybi/−nabi) + RT odchýlka
     zdieľajú SOC aj výkon (±BATT_KW). Odchýlka = skutočná práca − plán, zúčtovaná na ZCO.
     grid_kw_arr/grid_cap: nominovaná sieťová pozícia [kW] po periódach (už ZAHŔŇA FTV) a limit prípojky;
@@ -665,7 +673,9 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
             eg = max(eg, -max(0.0, (hi-soc))/EFFC)
         plan_eg = plan_kw*e_h
         dev_eg = eg - plan_eg
-        if abs(dev_eg) > dev_budget:
+        # RT-PRIORITY: keď rt_overrides_plan, dev_budget strop NEobmedzuje RT odchýlku
+        # (audit + SOC clip vyššie sú jediná brzda). Inak pôvodné ekonomické obmedzenie.
+        if not rt_overrides_plan and abs(dev_eg) > dev_budget:
             dev_eg = _np.copysign(dev_budget, dev_eg)
             eg = plan_eg + dev_eg
             eg = max(-BK*e_h, min(BK*e_h, eg))

@@ -56,6 +56,9 @@ services:
       PORT: "8000"
       # Fáza B.1: sandbox layout — per-profile súbory v out/profiles/<name>/
       FTV_SANDBOX: "1"
+      # RT-PRIORITY (2026-06-13): RT povel preváži plán (audit jediná brzda) — dev_budget
+      # strop neobmedzuje RT odchýlku. Test na prode. Vypnúť = "0" alebo riadok zmazať.
+      RT_OVERRIDES_PLAN: "1"
       # VypnĂşĹĄ background Ăşlohy pri prvom spustenĂ­ (kĂ˝m neoverĂ­Ĺˇ Ĺľe appka beĹľĂ­)
       # Po prvom ĂşspeĹˇnom Ĺˇtarte odkomentuj na produkÄŤnĂ© fungovanie:
       # NO_BACKFILL: "1"
