@@ -7,6 +7,7 @@ SOC drží simulátor (to, čo by si inak zadával v /rt). Všetky vstupy/parame
 """
 from __future__ import annotations
 import os, json, math, datetime as dt
+from typing import Optional
 import numpy as np, pandas as pd
 import case_config as cc, rt_controller as rtc, data_sources as ds
 from optimizer import optimize_day
@@ -482,7 +483,8 @@ def carried_soc_for_date(case: str, port: str = "8000", date=None) -> dict:
 
 
 def advance(case: str, start_date, port: str = "8000", now=None, base_case=None, d1_step_min=None,
-            live_minutes=None, rt_params=None, plan_params=None, use_rt_override=None) -> dict:
+            live_minutes=None, rt_params=None, plan_params=None, use_rt_override=None,
+            profile: Optional[str] = None) -> dict:
     """Posunie simuláciu po teraz (alebo `now`). Dopočíta nové minúty, APPENDuje do CSV, uloží meta.
     base_case: z ktorého prípadu vziať NASTAVENIA (cfg); `case` ostáva kľúčom logu/súboru.
     d1_step_min: prepíše granularitu plánu (60=D-1 hodinový, 15=denný trh 15-min).
@@ -545,7 +547,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     try:
         from core.profile_resolver import get_active as _ga_cfg
         import profiles as _pr_cfg
-        _prof_cfg_name = _ga_cfg()
+        _prof_cfg_name = _ga_cfg(profile)
         _prof_plan_cfg = (((_pr_cfg.load_profile(_prof_cfg_name) or {}).get("plan") or {})
                           if _prof_cfg_name else {})
         _PHYS_KEYS = ["batt_kw", "batt_kwh", "eff_c", "eff_d", "kwp",
@@ -642,7 +644,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     # Profil v sig ⇒ prepnutie profilu vyvolá reset + backfill pod novým profilom.
     try:
         from core.profile_resolver import get_active as _ga_sig
-        _prof_sig = str(_ga_sig() or "")
+        _prof_sig = str(_ga_sig(profile) or "")
     except Exception:
         _prof_sig = ""
     # Bug PROFILE-RT2-SIG (2026-06-12): sig obsahoval len MENO profilu — zmena rt
@@ -838,7 +840,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         try:
                             import settlement as _stl_tou
                             from core.profile_resolver import get_active as _ga_tou
-                            _prof_tou = _ga_tou()
+                            _prof_tou = _ga_tou(profile)
                             if _stl_tou.profile_uses_tou(_prof_tou):
                                 _tou_arr = _stl_tou.get_tou_for_day(
                                     _prof_tou, d.isoformat(),
@@ -962,7 +964,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             try:
                 import vdt_state as _vs_sch
                 from core.profile_resolver import get_active as _ga_sch
-                _prof_sch = _ga_sch()
+                _prof_sch = _ga_sch(profile)
                 _bkw_max_clip = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
                 if _prof_sch:
                     _vdt_kw_96 = _vs_sch.get_realized_batt_kw(_prof_sch,
@@ -1018,7 +1020,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             try:
                 import vdt_state as _vs_a
                 from core.profile_resolver import get_active as _ga_a
-                _prof_a = _ga_a()
+                _prof_a = _ga_a(profile)
                 if _prof_a:
                     _audit_today_state = _vs_a.compute_current_state(_prof_a, today=day.date()) or {}
                     _audit_reserve = float((plan_params or {}).get("soc_reserve_pct", 0.0) or 0.0)
@@ -1031,7 +1033,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             try:
                 from core.profile_resolver import get_active as _ga_rte
                 import profiles as _pr_rte
-                _rt_cfg_sel = ((_pr_rte.load_profile(_ga_rte()) or {}).get("rt") or {})
+                _rt_cfg_sel = ((_pr_rte.load_profile(_ga_rte(profile)) or {}).get("rt") or {})
                 _eng_sel = str(_rt_cfg_sel.get("engine", "v1"))
                 if _eng_sel in ("v2", "v3"):
                     import rt_engine_v2 as _rte2
@@ -1084,7 +1086,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 try:
                     import vdt_state as _vs
                     from core.profile_resolver import get_active as _ga
-                    _profile = _ga()
+                    _profile = _ga(profile)
                     if _profile:
                         # VDT je VŽDY 15-min granularita → pidx15 nezávislé od `step`.
                         pidx15 = [min(95, max(0, _period_index(t, day, 15))) for t in tr["ts15"]]
@@ -1118,7 +1120,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     except Exception:
                         pass
                     if _ga2 is not None:
-                        _prof2 = _ga2()
+                        _prof2 = _ga2(profile)
                         if _prof2:
                             _vdt_st = _vs2._load_vdt_realized(_prof2, d.isoformat())
                             _vdt_kwh_arr = (_vdt_st or {}).get("kwh_batt_view") or [0.0] * 96
@@ -1218,7 +1220,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         try:
                             from core.rt_audit import audit_rt_slot as _audit_rt
                             from core.profile_resolver import get_active as _ga_rt
-                            _prof_rt = _ga_rt()
+                            _prof_rt = _ga_rt(profile)
                             if _prof_rt and _bkw_max_rt > 0:
                                 # ts15 = 15-min slot timestamp v tr
                                 _ts15_arr = tr["ts15"].values if "ts15" in tr.columns else None
@@ -1413,7 +1415,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     try:
                         from core.profile_resolver import get_active as _ga_vdt
                         from core.paths import vdt_trades_csv_path as _vdtpath
-                        _prof_vdt = _ga_vdt()
+                        _prof_vdt = _ga_vdt(profile)
                         _vdt_csv = _vdtpath(profile=_prof_vdt) if _prof_vdt else None
                         if _vdt_csv and os.path.exists(_vdt_csv):
                             _vt = pd.read_csv(_vdt_csv, low_memory=False)
@@ -1556,7 +1558,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         from core import effect_db as _eff_db
                         from core.profile_resolver import get_active as _ga_db
                         import market as _mk_db
-                        _prof_db = _ga_db()
+                        _prof_db = _ga_db(profile)
                         _market_db = str(_mk_db.get_active_market()).lower()
                         if _prof_db and not tr.empty:
                             _eff_db.upsert_minute_batch(_prof_db, _market_db, tr)
@@ -1594,7 +1596,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             try:
                                 import vdt_state as _vs_socpre
                                 from core.profile_resolver import get_active as _ga_socpre
-                                _prof_socpre = _ga_socpre()
+                                _prof_socpre = _ga_socpre(profile)
                                 if _prof_socpre:
                                     _vdt_kw_arr_pre = _vs_socpre.get_realized_batt_kw(
                                         _prof_socpre, today_iso=d.isoformat(), dt_h=0.25)
@@ -1624,7 +1626,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             try:
                                 import vdt_state as _vs_fut
                                 from core.profile_resolver import get_active as _ga_fut
-                                _prof_fut = _ga_fut()
+                                _prof_fut = _ga_fut(profile)
                                 if _prof_fut:
                                     _vdt_kw_arr = _vs_fut.get_realized_batt_kw(_prof_fut,
                                                                                 today_iso=d.isoformat(),
@@ -1639,7 +1641,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             _fut_grid_dam = [float(sch["grid_kwh"].values[i]) for i in pj]
                             _fut_grid_vdt = [0.0] * len(_fut_grid_dam)
                             try:
-                                _prof_g = _ga_fut() if _ga_fut else None
+                                _prof_g = _ga_fut(profile) if _ga_fut else None
                                 if _prof_g:
                                     _vdt_st_fut = _vs_fut._load_vdt_realized(_prof_g, d.isoformat())
                                     _vdt_kwh_fut = (_vdt_st_fut or {}).get("kwh_batt_view") or [0.0] * 96

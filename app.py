@@ -4273,9 +4273,64 @@ def _livesim_modes():
             "dt_15min": ("Denný trh 15-min", base, 15)}
 
 
+def _livesim_rt_params_from_profile(prof_plan_rt: dict, cfg):
+    """RT signál params (kdis/kchg/dtk/rboost) z PROFILU (nie UI stavu) — pre bg tick
+    per profil. Fallback na hodnoty z prípadu keď v profile chýbajú."""
+    rt = prof_plan_rt or {}
+    def g(key, caseval):
+        v = rt.get(key, None)
+        try:
+            return float(v) if v is not None else float(caseval)
+        except Exception:
+            return float(caseval)
+    return dict(kdis=g("kdis", cfg.rt_kdis), kchg=g("kchg", cfg.rt_kchg),
+                dtk=g("dtk", cfg.dt_bias_k), rboost=g("rboost", getattr(cfg, "reversal_boost", 0.0)))
+
+
+def _livesim_bg_profiles():
+    """Profily, ktoré sa majú posúvať na pozadí: všetky v aktívnom trhu.
+    (Rovnaký rozsah ako VDT scheduler — list_profiles. Background sa tým robí
+    pre VŠETKY profily, nie len naposledy zvolený v UI.)"""
+    try:
+        import profiles as _pr
+        return [p for p in (_pr.list_profiles() or []) if p and p != "default"]
+    except Exception:
+        return []
+
+
+def _livesim_bg_tick_one(case, start, _bc, _st, live, profile):
+    """Posun jedného profilu na pozadí s JEHO vlastnými params z profilu.
+    Bug BG-ALL-PROFILES (2026-06-13, user: "DT sa má počítať automaticky podľa
+    nastavených parametrov pre všetky background profily; pri zobrazení sa len
+    načíta aktuálny stav; po reštarte sa dopočítajú chýbajúce intervaly")."""
+    try:
+        import profiles as _pr
+        _pdata = _pr.load_profile(profile) or {}
+        plan_pp = dict(_pdata.get("plan") or DEF)
+        rtp = _livesim_rt_params_from_profile(_pdata.get("rt") or {}, cc.load_case(_bc))
+        with _LIVESIM_LOCK:
+            r = lsim.advance(case, start, port=_PORT, base_case=_bc, d1_step_min=_st,
+                             live_minutes=live, rt_params=rtp, plan_params=plan_pp,
+                             use_rt_override=None, profile=profile)
+        try:
+            _auto_regen_stale_plans(case, _PORT)
+        except Exception as _e_v3:
+            print(f"[SOC-CONT-V3 bg/{profile}] {_e_v3}")
+        return int(r.get("appended", 0))
+    except Exception as _e_one:
+        print(f"[livesim-bg/{profile}] preskočené: {_e_one}")
+        return 0
+
+
 def _livesim_bg_tick():
     """Jeden krok simulácie NA POZADÍ (bez prehliadača). Použije naposledy zvolený režim z UI stavu.
-    Vracia počet pridaných minút, alebo -1 pri chybe. Serializované zámkom voči požiadavkám z prehliadača."""
+    Vracia počet pridaných minút, alebo -1 pri chybe. Serializované zámkom voči požiadavkám z prehliadača.
+
+    POZN (BG-ALL-PROFILES, 2026-06-13): zatiaľ posúva LEN aktívny profil. Posun
+    všetkých background profilov nie je možný kým je livesim CSV ZDIEĽANÝ per
+    (trh, case) — viac profilov do jedného súboru = full-backfill thrashing
+    (settings_sig je per-profil). Vyžaduje per-profil úložisko = migrácia CSV→DB
+    (úloha project-csv-to-db). advance() už má `profile` param pripravený."""
     try:
         MODES = _livesim_modes()
         saved = _ui_load("livesim", {"case": "plan_d1",
@@ -4293,8 +4348,6 @@ def _livesim_bg_tick():
             r = lsim.advance(case, start, port=_PORT, base_case=_bc, d1_step_min=_st,
                              live_minutes=live, rt_params=rtp, plan_params=plan_pp,
                              use_rt_override=_bg_use_rt)
-        # Bug SOC-CONT-V3: aj BG tick spúšťa drift check — regen invaliduje R cache,
-        # takže najbližší GET z prehliadača prepočíta projekciu s novým plánom.
         try:
             _auto_regen_stale_plans(case, _PORT)
         except Exception as _e_v3:
