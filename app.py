@@ -3919,6 +3919,7 @@ _LIVESIM_R_CACHE_LOCK = _threading.Lock()
 # Bug COMPUTE-WORKER (2026-06-11): background compute stav — request nikdy nepočíta.
 _LIVESIM_COMPUTE_INFLIGHT = {}    # key → started_ts (epoch s)
 _LIVESIM_COMPUTE_ERR = {}         # key → posledná chyba background behu (str)
+_LIVESIM_BG_RR = 0                # round-robin offset pre bg tick (BG-STAMPEDE throttle)
 
 
 def _livesim_meta_mtime(case: str, port: str, profile=None) -> float:
@@ -4348,11 +4349,33 @@ def _livesim_bg_tick():
         start = saved.get("start")
         _lbl, _bc, _st = MODES[case]
         live = _livesim_live_minutes()
-        profs = _livesim_bg_profiles()
+        profs = _livesim_bg_profiles()       # aktívny prvý
         if not profs:
             return 0
+        # Bug BG-STAMPEDE (2026-06-13, user: "na 8000 stále počíta a nezobrazí sa nič"):
+        # po per-profil deployi sa VŠETKY profily backfillovali naraz a súťažili o
+        # _LIVESIM_LOCK s GET workerom aktívneho profilu → dnešok dlho nenabehol.
+        # Throttle: (1) preskoč profil, ktorý už počíta GET worker (_INFLIGHT) — nech
+        # ho nerobíme 2×; (2) okrem aktívneho posúvaj len _BG_MAX_PER_TICK profilov
+        # za tik, round-robin → backfill sa rozloží, aktívny pohľad nabehne prvý.
+        _BG_MAX_PER_TICK = int(os.environ.get("LIVESIM_BG_MAX_PER_TICK", "2"))
+        global _LIVESIM_BG_RR
+        _active = profs[0]
+        _others = profs[1:]
+        # round-robin okno cez ostatné profily
+        if _others:
+            _n = len(_others)
+            _off = _LIVESIM_BG_RR % _n
+            _sel_others = [_others[(_off + k) % _n] for k in range(min(_BG_MAX_PER_TICK, _n))]
+            _LIVESIM_BG_RR = (_off + len(_sel_others)) % _n
+        else:
+            _sel_others = []
         total = 0
-        for _p in profs:
+        for _p in [_active] + _sel_others:
+            with _LIVESIM_R_CACHE_LOCK:
+                _busy = any(k[2] == _p for k in _LIVESIM_COMPUTE_INFLIGHT)
+            if _busy:                          # GET worker už počíta tento profil
+                continue
             total += _livesim_bg_tick_one(case, start, _bc, _st, live, _p)
         return total
     except Exception as e:
