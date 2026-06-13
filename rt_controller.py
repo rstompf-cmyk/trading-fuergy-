@@ -205,6 +205,7 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                      enforce_realistic=False, audit_today_state=None,
                      audit_soc_reserve_pct=0.0,
                      audit_rt_persistence_slots=4,
+                     audit_future_horizon_slots=96,
                      # RT poradca 2.0 (2026-06-11): rt_engine="v2" → ekonomické rozhodnutie
                      # (E[ZCO] z kalibrovaného spreadu vs náklady) namiesto signálovej
                      # heuristiky v1. Downstream vrstvy (no-worsen, lookahead, persistencia,
@@ -648,7 +649,8 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                                      step_min=15,
                                      soc_reserve_pct=float(audit_soc_reserve_pct or 0.0),
                                      si=si_15,
-                                     rt_persistence_slots=int(audit_rt_persistence_slots or 4))
+                                     rt_persistence_slots=int(audit_rt_persistence_slots or 4),
+                                     future_horizon_slots=int(audit_future_horizon_slots or 96))
                 _scale_in = float(_ax.get("scale_factor", 1.0))
                 if _scale_in < 0.999:
                     _rt_new = _rt_int_kw * _scale_in

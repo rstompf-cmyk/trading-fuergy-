@@ -133,7 +133,8 @@ def audit_capacity(current_soc_pct: float,
                     step_min: int = 15,
                     soc_reserve_pct: float = 0.0,
                     si: int = 0,
-                    rt_persistence_slots: int = 4) -> Dict[str, Any]:
+                    rt_persistence_slots: int = 4,
+                    future_horizon_slots: int = 96) -> Dict[str, Any]:
     """Vráti max povolený RT (v rovnakom smere ako rt_intent_kw) podľa kapacity.
 
     Args:
@@ -189,30 +190,42 @@ def audit_capacity(current_soc_pct: float,
     vdt_kwh = list(today_state.get("vdt_realized_kwh") or [0.0] * 96)
     while len(dam_kwh) < 96: dam_kwh.append(0.0)
     while len(vdt_kwh) < 96: vdt_kwh.append(0.0)
-    # Bug AUDIT-FUTURE-CHARGE (2026-06-11): pôvodný `future_charge = -min(0, NET)`
-    # IGNOROVAL nabíjanie keď v budúcnosti je dostatok vybi (=net positive). Príklad:
-    # 11:00 plán -3631 (nabi), 19:00 plán +4000 (vybi). NET = +369 → future_charge = 0 →
-    # audit povolí RT nabi navyše plánu → batt prekročí soc_max v 11:00.
-    # Fix: future_charge = Σ záporných slotov, ALE LIMITOVANÉ na persistence horizon
-    # (default 4 sloty = 1h). Pôvodne som počítal cez CELÝ DEŇ, ale to bolo príliš
-    # konzervatívne — audit blokoval skoro všetko RT (user postreh: "vypadlo skoro
-    # uplne RT z simulacie"). Lokálny horizont 1h zachytí aj "neskorú reakciu" v 11h
-    # plus nechá legitne RT cez ostatok dňa.
-    persistence_calc = max(1, int(rt_persistence_slots or 1))
-    si_end = min(96, int(si) + persistence_calc)
-    future_net_kwh = sum(dam_kwh[i] + vdt_kwh[i] for i in range(int(si), si_end))
-    future_charge_kwh = sum(-min(0.0, dam_kwh[i] + vdt_kwh[i]) for i in range(int(si), si_end))
-    future_discharge_kwh = sum(max(0.0, dam_kwh[i] + vdt_kwh[i]) for i in range(int(si), si_end))
+    # Bug AUDIT-SOC-TRAJECTORY (2026-06-13, user: "oranžová SOC skončí na 0 skôr
+    # ako sa pokryje plán+VDT — pri obchode si musí pozrieť očakávanú SOC v tom
+    # čase a či to vydá"): pôvodne sa budúci plán SČÍTAL cez FIXNÉ krátke okno
+    # [si, si+persistence) (= audit horizon ~1h). Keď bol plánovaný vybíjací blok
+    # DLHŠÍ než okno (napr. 20:00–22:00), SOC sa pre vzdialenejšie sloty NEREZERVOVALA
+    # → RT/VDT navyše vybilo skoro a SOC padla na 0 pred dokončením plánu.
+    #
+    # Fix: forward-simuluj SOC trajektóriu committed plánu po koniec dňa a rezervuj
+    # podľa EXTRÉMU trajektórie (nie sumy v okne):
+    #   extra vybíjanie zníži CELÚ budúcu krivku → najnižší budúci bod musí ostať
+    #   ≥ eff_min  ⇒ headroom_dis = min_t(SOC_committed[t]) − eff_min
+    #   extra nabíjanie zdvihne celú krivku → najvyšší bod ≤ eff_max
+    #   ⇒ headroom_chg = eff_max − max_t(SOC_committed[t])
+    # Toto NIE je príliš konzervatívne (zahŕňa dobíjanie — krivka sa po nabití
+    # vráti hore), ale na rozdiel od fixného okna VIDÍ celý committed blok.
+    # rt_persistence_slots ostáva LEN pre odhad RT priepustnosti (nižšie), NIE pre
+    # rezerváciu — tým sa rozpojili dva rôzne horizonty.
+    _horizon_end = min(96, int(si) + max(1, int(future_horizon_slots or 96)))
+    _soc_t = soc_kwh
+    _min_future = _max_future = soc_kwh
+    for i in range(int(si), _horizon_end):
+        _net = dam_kwh[i] + vdt_kwh[i]          # + = vybíja, − = nabíja
+        if _net > 0:
+            _soc_t -= _net / max(eff_d, 0.01)
+        elif _net < 0:
+            _soc_t += (-_net) * eff_c
+        if _soc_t < _min_future:
+            _min_future = _soc_t
+        if _soc_t > _max_future:
+            _max_future = _soc_t
 
-    # Headroom pre RT charge (=nabíjanie navyše k plánu):
-    # SOC_now + RT_charge_kwh + plan_future_net_charge ≤ eff_max_kwh
-    # → RT_charge_kwh ≤ eff_max_kwh - SOC_now - future_charge_kwh
-    headroom_chg = max(0.0, eff_max_kwh - soc_kwh - future_charge_kwh)
-
-    # Headroom pre RT discharge (=vybíjanie navyše k plánu):
-    # SOC_now − RT_discharge_kwh − plan_future_net_discharge ≥ eff_min_kwh
-    # → RT_discharge_kwh ≤ SOC_now − eff_min_kwh − future_discharge_kwh
-    headroom_dis = max(0.0, soc_kwh - eff_min_kwh - future_discharge_kwh)
+    # Headroom pre RT charge: najvyšší budúci bod committed krivky nesmie po
+    # pridaní RT nabíjania prekročiť eff_max.
+    headroom_chg = max(0.0, eff_max_kwh - _max_future)
+    # Headroom pre RT discharge: najnižší budúci bod nesmie klesnúť pod eff_min.
+    headroom_dis = max(0.0, _min_future - eff_min_kwh)
 
     out["headroom_charge_kwh"] = headroom_chg
     out["headroom_discharge_kwh"] = headroom_dis
@@ -247,7 +260,7 @@ def audit_capacity(current_soc_pct: float,
         out["decision"] = "reject"
         out["reason"] = (f"headroom={headroom_chg:.0f}/{headroom_dis:.0f} kWh "
                           f"SOC={current_soc_pct:.1f}% [{eff_min:.0f}-{eff_max:.0f}], "
-                          f"future_net={future_net_kwh:.0f} kWh")
+                          f"future SOC min/max={_min_future:.0f}/{_max_future:.0f} kWh")
     else:
         out["decision"] = "downscale"
         out["reason"] = (f"capacity limit: max_rt={max_rt_abs_kw:.0f} kW "

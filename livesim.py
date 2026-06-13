@@ -390,6 +390,7 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
                        enforce_realistic=True, audit_today_state=None,
                        audit_soc_reserve_pct=0.0,
                        audit_rt_persistence_slots=4,
+                       audit_future_horizon_slots=96,
                        rt_engine="v1", rt2_params=None):
     """Jedna fyzická batéria – deleguje na rt_controller.run_day_physical (jeden zdroj pravdy).
 
@@ -420,6 +421,7 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
                                 audit_today_state=audit_today_state,
                                 audit_soc_reserve_pct=audit_soc_reserve_pct,
                                 audit_rt_persistence_slots=audit_rt_persistence_slots,
+                                audit_future_horizon_slots=audit_future_horizon_slots,
                                 rt_engine=rt_engine, rt2_params=rt2_params)
 
 
@@ -1059,6 +1061,11 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                              audit_today_state=_audit_today_state,
                                              audit_soc_reserve_pct=_audit_reserve,
                                              audit_rt_persistence_slots=_audit_horizon_slots,
+                                             # Bug AUDIT-SOC-TRAJECTORY: rezervácia SOC
+                                             # ide na CELÝ deň (forward trajektória, vidí
+                                             # celý committed vybíjací/nabíjací blok). Nie
+                                             # je príliš konzervatívna — dobíjanie sa ráta.
+                                             audit_future_horizon_slots=96,
                                              rt_engine=_rt_engine_sel, rt2_params=_rt2_params)
             day_dt_total = float(np.nansum(dtprof))
             # SK fallback odstránený — rt_controller.run_day_physical teraz akceptuje
