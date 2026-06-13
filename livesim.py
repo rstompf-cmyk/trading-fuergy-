@@ -1853,12 +1853,20 @@ def _read_csv(case: str, port: str = "8000", profile=None):
     return df
 
 
-def available_days(case: str, port: str = "8000"):
-    """Zoznam dní prítomných v logu (na prehliadanie histórie)."""
-    df = _read_csv(case, port)
-    if df is None or df.empty:
+def available_days(case: str, port: str = "8000", profile=None):
+    """Zoznam dní prítomných v logu (na prehliadanie histórie).
+
+    Bug AVAILABLE-DAYS-NO-TIME (2026-06-13, user log: KeyError 'time'): _read_csv
+    môže vrátiť df BEZ stĺpca 'time' (prázdny/rozpísaný/poškodený CSV počas backfillu)
+    — vtedy crashol celý /livesim GET handler a nezobrazilo sa NIČ. Guard: ak 'time'
+    chýba alebo je df prázdny, vráť [] (= zobrazí sa progress page, nie 500)."""
+    df = _read_csv(case, port, profile)
+    if df is None or df.empty or "time" not in getattr(df, "columns", []):
         return []
-    return sorted(set(df["time"].dt.date))
+    try:
+        return sorted(set(df["time"].dt.date))
+    except Exception:
+        return []
 
 
 def load_series(case: str, port: str = "8000", day=None, max_points: int = 2000):
@@ -1869,8 +1877,10 @@ def load_series(case: str, port: str = "8000", day=None, max_points: int = 2000)
     výskyt (= najnovší výpočet). Tým sa grafy nezdvojnásobia.
     """
     df = _read_csv(case, port)
-    if df is None or df.empty:
-        return df
+    # Bug AVAILABLE-DAYS-NO-TIME: df môže prísť bez stĺpca 'time' (rozpísaný CSV
+    # počas backfillu) → nepadni, vráť None (volajúci to zvládne / ukáže progress).
+    if df is None or df.empty or "time" not in getattr(df, "columns", []):
+        return None
     if day is not None:
         dd = pd.Timestamp(day).date()
         df = df[df["time"].dt.date == dd]

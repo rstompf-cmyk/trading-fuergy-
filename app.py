@@ -4349,35 +4349,27 @@ def _livesim_bg_tick():
         start = saved.get("start")
         _lbl, _bc, _st = MODES[case]
         live = _livesim_live_minutes()
-        profs = _livesim_bg_profiles()       # aktívny prvý
-        if not profs:
-            return 0
-        # Bug BG-STAMPEDE (2026-06-13, user: "na 8000 stále počíta a nezobrazí sa nič"):
-        # po per-profil deployi sa VŠETKY profily backfillovali naraz a súťažili o
-        # _LIVESIM_LOCK s GET workerom aktívneho profilu → dnešok dlho nenabehol.
-        # Throttle: (1) preskoč profil, ktorý už počíta GET worker (_INFLIGHT) — nech
-        # ho nerobíme 2×; (2) okrem aktívneho posúvaj len _BG_MAX_PER_TICK profilov
-        # za tik, round-robin → backfill sa rozloží, aktívny pohľad nabehne prvý.
-        _BG_MAX_PER_TICK = int(os.environ.get("LIVESIM_BG_MAX_PER_TICK", "2"))
-        global _LIVESIM_BG_RR
-        _active = profs[0]
-        _others = profs[1:]
-        # round-robin okno cez ostatné profily
-        if _others:
-            _n = len(_others)
-            _off = _LIVESIM_BG_RR % _n
-            _sel_others = [_others[(_off + k) % _n] for k in range(min(_BG_MAX_PER_TICK, _n))]
-            _LIVESIM_BG_RR = (_off + len(_sel_others)) % _n
-        else:
-            _sel_others = []
-        total = 0
-        for _p in [_active] + _sel_others:
-            with _LIVESIM_R_CACHE_LOCK:
-                _busy = any(k[2] == _p for k in _LIVESIM_COMPUTE_INFLIGHT)
-            if _busy:                          # GET worker už počíta tento profil
-                continue
-            total += _livesim_bg_tick_one(case, start, _bc, _st, live, _p)
-        return total
+        # Bug BG-LOOP-REVERT (2026-06-13, user: "5+ h sa nič nezapísalo, zacyklené"):
+        # BG-ALL-PROFILES posúval každý profil s PROFILE.plan parametrami, kým GET
+        # používa UI plan → rozdielne settings_sig → každý beh full re-backfill +
+        # auto-regen menil plány → sig churn → nekonečný loop, ktorý držal lock a
+        # GET worker aktívneho profilu hladoval. Návrat na pôvodné, OVERENÉ správanie:
+        # bg tick posúva LEN aktívny profil s UI parametrami (zhodné s GET cestou →
+        # stabilný sig, inkrementálne). Per-profil úložisko ostáva; ostatné profily
+        # sa dopočítajú keď ich užívateľ otvorí (GET worker). BG-ALL-PROFILES späť až
+        # po vyriešení sig-konzistencie (úloha #7).
+        rtp = _livesim_rt_params(cc.load_case(_bc))
+        plan_pp = _ui_load("plan", DEF)
+        _bg_use_rt = saved.get("use_rt", None)
+        with _LIVESIM_LOCK:
+            r = lsim.advance(case, start, port=_PORT, base_case=_bc, d1_step_min=_st,
+                             live_minutes=live, rt_params=rtp, plan_params=plan_pp,
+                             use_rt_override=_bg_use_rt)
+        try:
+            _auto_regen_stale_plans(case, _PORT)
+        except Exception as _e_v3:
+            print(f"[SOC-CONT-V3 bg] {_e_v3}")
+        return int(r.get("appended", 0))
     except Exception as e:
         print("[livesim-bg] preskočené:", e)
         return -1
