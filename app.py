@@ -6473,15 +6473,38 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         # Bug COMPUTE-WORKER: stale dáta (background prepočet beží) → banner + rýchlejší refresh
         stale_banner = ""
         _refresh_s = "60"
-        if isinstance(r, dict) and r.get("_stale"):
+        # BG-PROGRESS-INLINE (2026-06-13, user: "doplniť progress bar do živej simulácie
+        # — stránka sa zobrazí, ale nie sú všetky dni prepočítané"): ak na pozadí beží
+        # backfill (compute worker), ukáž progress bar aj na vykreslenej stránke.
+        _cw_live = _livesim_compute_status(case, _PORT, _profile_key)
+        _show_banner = (isinstance(r, dict) and r.get("_stale")) or _cw_live.get("running")
+        if _show_banner:
             import time as _t_sb
-            _sb_run = int(_t_sb.time() - float(r.get("_stale_since") or _t_sb.time()))
+            _sb_run = int(_t_sb.time() - float((r.get("_stale_since") if isinstance(r, dict) else None)
+                                               or _cw_live.get("started") or _t_sb.time()))
+            _pgl = _cw_live.get("progress") or {}
+            _dl = int(_pgl.get("done", 0)); _tl = int(_pgl.get("total", 0))
+            _barl = ""
+            if _tl > 0:
+                _pctl = max(0, min(100, int(_dl / _tl * 100)))
+                _etal = ""
+                if _dl > 0 and _sb_run > 2:
+                    _reml = int((_sb_run / _dl) * (_tl - _dl))
+                    _etal = (f" · ostáva ~{_reml//60} min {_reml%60} s" if _reml >= 60
+                             else f" · ostáva ~{_reml} s")
+                _barl = (
+                    f"<div style='background:#cfe0f0;border-radius:8px;height:18px;overflow:hidden;margin:8px 0 4px'>"
+                    f"<div style='background:#1F4E78;height:100%;width:{_pctl}%;transition:width .4s;"
+                    f"display:flex;align-items:center;justify-content:flex-end;padding-right:8px;"
+                    f"color:#fff;font-size:11px;font-weight:600'>{_pctl}%</div></div>"
+                    f"<div style='color:#666;font-size:12px'>deň {_dl}/{_tl}"
+                    f"{(' · ' + _pgl.get('day','')) if _pgl.get('day') else ''}{_etal}</div>")
             stale_banner = (
                 "<div style='background:#e3f2fd;border-left:5px solid #1F4E78;padding:10px 14px;"
                 "border-radius:8px;margin:10px 0;font-size:14px'>"
-                f"⏳ <b>Prepočet beží na pozadí</b> ({_sb_run} s) — zobrazené dáta sú z posledného "
-                "dokončeného behu. Stránka sa obnoví automaticky.</div>")
-            _refresh_s = "15"
+                f"⏳ <b>Prepočet beží na pozadí</b> ({_sb_run} s) — zobrazené dáta môžu byť neúplné "
+                f"(nie všetky dni sú dopočítané). Stránka sa obnoví automaticky.{_barl}</div>")
+            _refresh_s = "10"
         return (head.replace("</head>", f'<meta http-equiv="refresh" content="{_refresh_s}">' + "</head>")
                 + form + plan_warn + plan_only_warn + zero_plan_warn + realio_banner + stale_banner + body + "</body></html>")
     except Exception as ex:
