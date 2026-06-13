@@ -215,7 +215,15 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
     # sell − buy ≥ 2·fee + cycle + min_spread. Cross-slot arbitráž (kúp v lacnom
     # slote, predaj v drahom) funguje normálne. Dumping uskladnenej DAM-energie
     # bez kúpy späť rieši SOC-neutralita nižšie (VDT-SOC-NEUTRAL).
-    _hurdle = max(0.0, float(min_spread)) / 2000.0
+    # Bug VDT-GATE-DOUBLECOUNT (2026-06-13, user: "zrazu žiadne VDT obchody"):
+    # objektív UŽ obsahuje 2·fee + cycle. Keď je vdt_breakeven_auto ON, min_spread
+    # = efektivita + 2·fee + cycle (≈63 €/MWh pri DT 130) → prah min_spread/2 na
+    # nohu PRIDAL fee+cycle DRUHÝ raz → požadovaný spread ~112 €/MWh → 0 obchodov.
+    # Fix: prah = ČISTÁ marža nad rámec toho, čo objektív už účtuje:
+    #   pure = max(0, min_spread − 2·fee − cycle). Fixný min_spread=5 → pure=0
+    #   (fee+cycle v objektíve stačia); breakeven_auto 63 → pure≈14 (efektivita).
+    _pure_spread = max(0.0, float(min_spread) - 2.0 * float(grid_fee) - float(cycle_cost))
+    _hurdle = _pure_spread / 2000.0
     coeff_d = sell_price_arr / 1000.0 - grid_fee / 1000.0 - cycle_cost / 2000.0 - _hurdle
     coeff_c = -(buy_price_arr / 1000.0 + grid_fee / 1000.0 + cycle_cost / 2000.0 + _hurdle)
     # c[t] na párnych pozíciách, d[t] na nepárnych
