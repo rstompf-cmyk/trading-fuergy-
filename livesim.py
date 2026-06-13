@@ -548,7 +548,7 @@ def carried_soc_for_date(case: str, port: str = "8000", date=None, profile=None)
 
 def advance(case: str, start_date, port: str = "8000", now=None, base_case=None, d1_step_min=None,
             live_minutes=None, rt_params=None, plan_params=None, use_rt_override=None,
-            profile: Optional[str] = None) -> dict:
+            profile: Optional[str] = None, progress_cb=None) -> dict:
     """Posunie simuláciu po teraz (alebo `now`). Dopočíta nové minúty, APPENDuje do CSV, uloží meta.
     base_case: z ktorého prípadu vziať NASTAVENIA (cfg); `case` ostáva kľúčom logu/súboru.
     d1_step_min: prepíše granularitu plánu (60=D-1 hodinový, 15=denný trh 15-min).
@@ -840,7 +840,21 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     last_err = None
     skipped_no_data = []                # #600: zoznam dní bez minute dát
     skipped_no_sys_mw = []              # #600: zoznam dní bez sys_MW (historian gap)
+    # Progress reporting (BG-PROGRESS, 2026-06-13, user: "chýba info koľko sa má
+    # ešte prepočítať, ideálne progress bar"). Spočítaj celkový počet dní backfillu
+    # a hlás postup cez progress_cb(done_days, total_days, day_iso).
+    try:
+        _total_days = max(1, (today.normalize() - pd.Timestamp(first_day).normalize()).days + 1)
+    except Exception:
+        _total_days = 1
+    _done_days = 0
     while day <= today:
+        if progress_cb is not None:
+            try:
+                progress_cb(_done_days, _total_days, day.date().isoformat())
+            except Exception:
+                pass
+        _done_days += 1
         d = day.date()
         mn_day_full = mn[mn.date == d].sort_values("time")   # CELÝ deň (DT známe D-1) – pre plán
         mn_day = mn_day_full

@@ -3920,6 +3920,7 @@ _LIVESIM_R_CACHE_LOCK = _threading.Lock()
 _LIVESIM_COMPUTE_INFLIGHT = {}    # key → started_ts (epoch s)
 _LIVESIM_COMPUTE_ERR = {}         # key → posledná chyba background behu (str)
 _LIVESIM_BG_RR = 0                # round-robin offset pre bg tick (BG-STAMPEDE throttle)
+_LIVESIM_COMPUTE_PROGRESS = {}    # key → {done, total, day} pre progress bar (BG-PROGRESS)
 
 
 def _livesim_meta_mtime(case: str, port: str, profile=None) -> float:
@@ -3954,6 +3955,11 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
     # (= prvý beh bez akéhokoľvek stavu → volajúci ukáže progress stránku).
     import time as _t_cw
 
+    def _progress_cb(done, total, day_iso):
+        with _LIVESIM_R_CACHE_LOCK:
+            _LIVESIM_COMPUTE_PROGRESS[key] = {"done": int(done), "total": int(total),
+                                              "day": day_iso, "ts": _t_cw.time()}
+
     def _do_compute():
         try:
             with _LIVESIM_LOCK:
@@ -3961,7 +3967,7 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
                                     d1_step_min=d1_step_min,
                                     live_minutes=live_minutes, rt_params=rt_params,
                                     plan_params=plan_params, use_rt_override=use_rt_override,
-                                    profile=profile_key or None)
+                                    profile=profile_key or None, progress_cb=_progress_cb)
             # Bug SOC-CONT-V3: po advance over drift LP plánov budúcich dní voči
             # meta.soc_after_done → auto-regen + prepočet projekcie.
             try:
@@ -3987,6 +3993,7 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
         finally:
             with _LIVESIM_R_CACHE_LOCK:
                 _LIVESIM_COMPUTE_INFLIGHT.pop(key, None)
+                _LIVESIM_COMPUTE_PROGRESS.pop(key, None)
 
     with _LIVESIM_R_CACHE_LOCK:
         _already_running = key in _LIVESIM_COMPUTE_INFLIGHT
@@ -4025,7 +4032,8 @@ def _livesim_compute_status(case: str, port: str, profile_key: str = "") -> dict
     with _LIVESIM_R_CACHE_LOCK:
         return dict(running=key in _LIVESIM_COMPUTE_INFLIGHT,
                     started=_LIVESIM_COMPUTE_INFLIGHT.get(key),
-                    err=_LIVESIM_COMPUTE_ERR.get(key))
+                    err=_LIVESIM_COMPUTE_ERR.get(key),
+                    progress=dict(_LIVESIM_COMPUTE_PROGRESS.get(key) or {}))
 
 
 def _livesim_cache_invalidate(case: str = None):
@@ -5872,6 +5880,29 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     raise RuntimeError(_cw_st["err"])
                 import time as _t_pp
                 _cw_run_s = int(_t_pp.time() - float(_cw_st.get("started") or _t_pp.time()))
+                # BG-PROGRESS: progress bar z _LIVESIM_COMPUTE_PROGRESS (done/total dní)
+                _pg = _cw_st.get("progress") or {}
+                _pg_done = int(_pg.get("done", 0)); _pg_total = int(_pg.get("total", 0))
+                _pg_day = _pg.get("day", "")
+                if _pg_total > 0:
+                    _pct = max(0, min(100, int(_pg_done / _pg_total * 100)))
+                    _eta = ""
+                    if _pg_done > 0 and _cw_run_s > 2:
+                        _per = _cw_run_s / _pg_done
+                        _rem = int(_per * (_pg_total - _pg_done))
+                        _eta = f" · ostáva ~{_rem//60} min {_rem%60} s" if _rem >= 60 else f" · ostáva ~{_rem} s"
+                    _bar = (
+                        f"<div style='margin:14px 0 6px'>"
+                        f"<div style='background:#cfe0f0;border-radius:8px;height:22px;overflow:hidden'>"
+                        f"<div style='background:#1F4E78;height:100%;width:{_pct}%;"
+                        f"transition:width .4s;display:flex;align-items:center;justify-content:flex-end;"
+                        f"padding-right:8px;color:#fff;font-size:12px;font-weight:600'>{_pct}%</div></div>"
+                        f"<div style='color:#666;font-size:13px;margin-top:6px'>"
+                        f"deň {_pg_done}/{_pg_total}{(' · ' + _pg_day) if _pg_day else ''}{_eta}</div>"
+                        f"</div>")
+                else:
+                    _bar = ("<div style='color:#666;font-size:13px;margin-top:8px'>"
+                            "pripravujem dáta…</div>")
                 return (
                     f"<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
                     f"<meta http-equiv='refresh' content='5'>"
@@ -5883,11 +5914,11 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     f"<h1 style='color:#1F4E78'>🟢 Živá simulácia</h1>"
                     f"<div style='background:#e3f2fd;border-left:5px solid #1F4E78;"
                     f"border-radius:8px;padding:16px 20px;font-size:15px'>"
-                    f"⏳ <b>Prepočítavam históriu simulácie…</b> beží {_cw_run_s} s.<br>"
+                    f"⏳ <b>Prepočítavam históriu simulácie…</b> beží {_cw_run_s} s."
+                    f"{_bar}"
                     f"<span style='color:#666;font-size:13px'>Prvý beh po resete / zmene "
-                    f"nastavení simuluje celú históriu minútu po minúte — môže trvať "
-                    f"niekoľko minút. Stránka sa obnovuje automaticky každých 5 s; "
-                    f"výpočet beží na pozadí aj keď okno zavrieš.</span></div>"
+                    f"nastavení simuluje celú históriu minútu po minúte. Stránka sa obnovuje "
+                    f"automaticky každých 5 s; výpočet beží na pozadí aj keď okno zavrieš.</span></div>"
                     f"</body></html>")
         except RuntimeError as _adv_err:
             # Typicky: žiadny deň v rozsahu nemá plán v plan_store → strict mode raise.
