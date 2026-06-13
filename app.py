@@ -6966,10 +6966,12 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"<div class='v' style='color:#2E7D32'>{_benefit:+.1f} €</div></div>")
         except Exception:
             bl_cum_card = ""
-    # Bug #608: VDT arbitráž karta (delta VDT cena vs DT clearing)
+    # Bug #608: VDT arbitráž karta (delta VDT cena vs DT clearing). VŽDY zobraz
+    # (user: "chýba z toho VDT tak ako DT a RT") — aj keď 0, nech je breakdown
+    # Zisk SPOLU = DT + RT + VDT kompletný a konzistentný.
     _cum_vdt_arb = float(r.get("cum_vdt_arb", 0) or 0)
-    _vdt_arb_card = (f"<div class='card'><div class='l'>z toho VDT arbitráž</div>"
-                      f"<div class='v'>{_cum_vdt_arb:+.1f} €</div></div>") if _cum_vdt_arb else ""
+    _vdt_arb_card = (f"<div class='card'><div class='l'>z toho VDT</div>"
+                      f"<div class='v'>{_cum_vdt_arb:+.1f} €</div></div>")
     # Bug VDT-EFEKTIVITA (2026-06-11): karty efektivity obchodovania — objemy +
     # vážené ceny nákup/predaj za zobrazený deň aj od štartu.
     _vdt_eff_cards = ""

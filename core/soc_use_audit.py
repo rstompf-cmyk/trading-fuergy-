@@ -246,32 +246,23 @@ def audit_capacity(current_soc_pct: float,
     # vráti hore), ale na rozdiel od fixného okna VIDÍ celý committed blok.
     # rt_persistence_slots ostáva LEN pre odhad RT priepustnosti (nižšie), NIE pre
     # rezerváciu — tým sa rozpojili dva rôzne horizonty.
-    _horizon = max(1, int(future_horizon_slots or 96))
-    _horizon_end = min(96, int(si) + _horizon)
-    # Perf AUDIT-TRAJ-PRECOMP (2026-06-13, user: "skontroluj či sa nedá zrýchliť bez
-    # straty kvality"): forward-sim bol O(96) KAŽDÚ minútu (regresia z AUDIT-SOC-
-    # TRAJECTORY). Pri plnom dni (future_horizon_slots≥96) predpočítaj prefix-sumy
-    # SOC delt + suffix min/max RAZ per deň (cache na id(today_state)) → per-call O(1)
-    # s IDENTICKÝMI výsledkami. Pre kratší horizont (zriedkavé) ostáva pôvodný loop.
-    if int(si) + _horizon >= 96:
-        _pmin, _pmax, _P = _audit_traj_precomp(today_state, dam_kwh, vdt_kwh,
-                                               float(eff_c), float(eff_d))
-        _p_prev = _P[int(si) - 1] if int(si) > 0 else 0.0
-        _min_future = soc_kwh + min(0.0, _pmin[int(si)] - _p_prev)
-        _max_future = soc_kwh + max(0.0, _pmax[int(si)] - _p_prev)
-    else:
-        _soc_t = soc_kwh
-        _min_future = _max_future = soc_kwh
-        for i in range(int(si), _horizon_end):
-            _net = dam_kwh[i] + vdt_kwh[i]          # + = vybíja, − = nabíja
-            if _net > 0:
-                _soc_t -= _net / max(eff_d, 0.01)
-            elif _net < 0:
-                _soc_t += (-_net) * eff_c
-            if _soc_t < _min_future:
-                _min_future = _soc_t
-            if _soc_t > _max_future:
-                _max_future = _soc_t
+    # AUDIT-TRAJ-PRECOMP REVERT (2026-06-13): predošlý pokus o cache podľa
+    # id(dam_kwh)/id(vdt_kwh) NIKDY netrafil (zoznamy sa tvoria nanovo každé volanie)
+    # → počítal O(96) + réžia navyše = POMALŠIE. Späť na priamy O(96) loop (korektný,
+    # predvídateľný; O(96) je zanedbateľné vs per-minútová Python réžia).
+    _horizon_end = min(96, int(si) + max(1, int(future_horizon_slots or 96)))
+    _soc_t = soc_kwh
+    _min_future = _max_future = soc_kwh
+    for i in range(int(si), _horizon_end):
+        _net = dam_kwh[i] + vdt_kwh[i]          # + = vybíja, − = nabíja
+        if _net > 0:
+            _soc_t -= _net / max(eff_d, 0.01)
+        elif _net < 0:
+            _soc_t += (-_net) * eff_c
+        if _soc_t < _min_future:
+            _min_future = _soc_t
+        if _soc_t > _max_future:
+            _max_future = _soc_t
 
     # Headroom pre RT charge: najvyšší budúci bod committed krivky nesmie po
     # pridaní RT nabíjania prekročiť eff_max.
