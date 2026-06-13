@@ -163,11 +163,9 @@ def paths(case: str, port: str = "8000", profile=None):
 
     SK/CZ trh má vlastné súbory (NESMÚ byť zdieľané). LIVESIM_DIR má prioritu (testy).
     """
-    _is_active = False
     try:
         from core.profile_resolver import get_active as _ga_p
         _prof = _safe_prof_tag(_ga_p(profile))
-        _is_active = (_prof == _safe_prof_tag(_ga_p(None)))   # legacy súbor patrí AKTÍVNEMU profilu
     except Exception:
         _prof = _safe_prof_tag(profile)
     tag = f"{case}__{_prof}" + ("" if str(port) == "8000" else f"_{port}")
@@ -175,8 +173,8 @@ def paths(case: str, port: str = "8000", profile=None):
     if env:
         _csv = os.path.join(env, f"livesim_{tag}.csv")
         _meta = os.path.join(env, f"livesim_{tag}.meta.json")
-        if _is_active:
-            _migrate_legacy_livesim(env, case, port, _csv, _meta)
+        # migrácia self-checkne, či legacy dáta patria práve tomuto profilu
+        _migrate_legacy_livesim(env, case, port, _csv, _meta, _prof)
         return _csv, _meta
     try:
         import market as _mk
@@ -186,23 +184,43 @@ def paths(case: str, port: str = "8000", profile=None):
     os.makedirs(d, exist_ok=True)
     _csv = os.path.join(d, f"livesim_{tag}.csv")
     _meta = os.path.join(d, f"livesim_{tag}.meta.json")
-    if _is_active:
-        _migrate_legacy_livesim(d, case, port, _csv, _meta)
+    _migrate_legacy_livesim(d, case, port, _csv, _meta, _prof)
     return _csv, _meta
 
 
-def _migrate_legacy_livesim(d, case, port, new_csv, new_meta):
-    """Jednorázová migrácia: ak per-profil súbor ešte neexistuje, ale starý
-    ZDIEĽANÝ (livesim_<case>[_<port>].csv) áno, premenuj ho na per-profil názov
-    AKTÍVNEHO profilu — zachová doterajšiu trajektóriu (žiadny re-backfill od nuly
-    pre profil, ktorý práve bežal). Ostatné profily sa dopočítajú na pozadí."""
+def _migrate_legacy_livesim(d, case, port, new_csv, new_meta, want_prof):
+    """Jednorázová migrácia starého ZDIEĽANÉHO súboru (livesim_<case>[_<port>].csv)
+    na per-profil názov — ALE len pre profil, ktorému dáta SKUTOČNE patria.
+
+    Bug LEGACY-MIGRATE-WRONG-PROFILE (2026-06-13, user: "Simulacia_Coop mala obsah
+    WV_simulacia"): zdieľaný súbor patril NAPOSLEDY simulovanému profilu, nie
+    aktuálne aktívnemu. Pôvodná migrácia ho priradila aktívnemu → cross-kontaminácia.
+    Fix: prečítaj profil zo settings_sig v legacy meta a migruj IBA ak sa zhoduje s
+    `want_prof`. Inak legacy NEPREMENUJ (nový profil začne čerstvo = bezpečné)."""
     try:
         if os.path.exists(new_csv):
             return
         legacy_tag = case + ("" if str(port) == "8000" else f"_{port}")
         legacy_csv = os.path.join(d, f"livesim_{legacy_tag}.csv")
         legacy_meta = os.path.join(d, f"livesim_{legacy_tag}.meta.json")
-        if os.path.exists(legacy_csv):
+        if not os.path.exists(legacy_csv):
+            return
+        # over, komu legacy dáta patria — profil zo settings_sig v legacy meta
+        _legacy_prof = None
+        try:
+            if os.path.exists(legacy_meta):
+                with open(legacy_meta) as _f:
+                    _lm = json.load(_f)
+                _sig = _lm.get("settings_sig") or ""
+                import re as _re
+                _m = _re.search(r'"profile"\s*:\s*"([^"]+)"', _sig if isinstance(_sig, str) else json.dumps(_sig))
+                if _m:
+                    _legacy_prof = _safe_prof_tag(_m.group(1))
+        except Exception:
+            _legacy_prof = None
+        # migruj len keď dáta patria práve tomuto profilu (alebo profil sa nedá zistiť
+        # → legacy je neistý, radšej NEpremenuj). want_prof je už safe-tag.
+        if _legacy_prof is not None and _legacy_prof == want_prof:
             os.rename(legacy_csv, new_csv)
             if os.path.exists(legacy_meta):
                 os.rename(legacy_meta, new_meta)
