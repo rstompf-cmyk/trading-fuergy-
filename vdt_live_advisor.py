@@ -573,6 +573,65 @@ def get_live_recommendation(*,
                 "profile": active_profile}
 
     trades = result["trades"]
+
+    # Bug VDT-CAPACITY (2026-06-13, user: "pred uzavretím nákupu a predaja musí
+    # prebehnúť simulácia SOC aj s rezervou; ak niekde prekročí, musí sa upraviť
+    # a až potom uzavrieť"). LP optimalizátor plánuje future-only z aktuálnej SOC
+    # a jeho interný pohľad sa rozchádza s PLNOU dennou trajektóriou DAM plánu →
+    # kombinovaná SOC (DAM+VDT) prerážala kapacitu (overené VW_3 06-13: −12 %..+158 %).
+    # Tu prebehne pre-commit forward simulácia kombinovanej SOC a každý VDT EXTRA
+    # nad DAM sa oreže tak, aby SOC ostala v [soc_min+rezerva, soc_max−rezerva]
+    # vo všetkých slotoch. Fail-open: pri chybe dát sa generovanie nezastaví.
+    try:
+        from core.vdt_capacity_guard import clip_extras_to_capacity as _clip_cap
+        import d1_planner as _d1c
+        _dam_net = _d1c.get_dam_commitments(today, profile=active_profile, basis="batt")  # 96, +vybíja −nabíja
+        if _dam_net and len(_dam_net) == 96 and trades:
+            _bk = float(batt_kwh)
+            _soc0 = float(soc_pct) / 100.0 * _bk           # štart = AKTUÁLNA reálna SOC
+            _now_ts = pd.Timestamp.now()
+            _si_now = int((_now_ts.hour * 60 + _now_ts.minute) // 15)
+            # minulé sloty vynuluj — trajektória ide od TERAZ (real SOC) dopredu
+            _dam_chg = [(max(0.0, -float(x)) if i >= _si_now else 0.0) for i, x in enumerate(_dam_net)]
+            _dam_dis = [(max(0.0, float(x)) if i >= _si_now else 0.0) for i, x in enumerate(_dam_net)]
+            # VDT extra (nad DAM) per absolútny 15-min slot
+            _ex = {}
+            for _tr in trades:
+                _sl = pd.Timestamp(_tr["start_local"])
+                _si = int((_sl.hour * 60 + _sl.minute) // 15)
+                if _si < _si_now:
+                    continue
+                _net_tr = float(_tr.get("discharge_kwh", 0.0)) - float(_tr.get("charge_kwh", 0.0))
+                _extra = _net_tr - float(_dam_net[_si])
+                if _extra > 0.5:
+                    _ex[_si] = ("SELL", _extra)
+                elif _extra < -0.5:
+                    _ex[_si] = ("BUY", -_extra)
+            _clipped, _rep = _clip_cap(_soc0, _dam_chg, _dam_dis, _ex, _bk,
+                                       eff_c, eff_d, soc_min_pct, soc_max_pct,
+                                       reserve_pct=0.0)
+            if _rep:
+                # zapíš orezané extras späť do trades (trade = DAM + orezaný extra)
+                for _tr in trades:
+                    _sl = pd.Timestamp(_tr["start_local"])
+                    _si = int((_sl.hour * 60 + _sl.minute) // 15)
+                    _new_extra = _clipped.get(_si)
+                    _ev = (_new_extra[1] if _new_extra and _new_extra[0] == "SELL"
+                           else (-_new_extra[1] if _new_extra else 0.0))
+                    _net_new = float(_dam_net[_si]) + _ev
+                    _tr["discharge_kwh"] = max(0.0, _net_new)
+                    _tr["charge_kwh"] = max(0.0, -_net_new)
+                    if _tr["charge_kwh"] > 0.01:
+                        _tr["action"] = "charge"
+                    elif _tr["discharge_kwh"] > 0.01:
+                        _tr["action"] = "discharge"
+                    else:
+                        _tr["action"] = "idle"
+                print(f"[VDT-CAPACITY] {active_profile}: orezaných {len(_rep)} slotov "
+                      f"(SOC by inak prekročila kapacitu): {_rep[:4]}")
+    except Exception as _e_cap:
+        print(f"[VDT-CAPACITY] poistka preskočená ({_e_cap})")
+
     if not trades:
         return {"ok": True, "ts": dt.datetime.now().isoformat(timespec="seconds"),
                 "soc": soc_source,
