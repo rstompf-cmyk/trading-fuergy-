@@ -590,19 +590,27 @@ def get_live_recommendation(*,
               f"trades={len(trades) if trades else 0} soc_now={float(soc_pct):.1f}%")
         if _dam_net and len(_dam_net) == 96 and trades:
             _bk = float(batt_kwh)
-            _soc0 = float(soc_pct) / 100.0 * _bk           # štart = AKTUÁLNA reálna SOC
-            _now_ts = pd.Timestamp.now()
-            _si_now = int((_now_ts.hour * 60 + _now_ts.minute) // 15)
-            # minulé sloty vynuluj — trajektória ide od TERAZ (real SOC) dopredu
-            _dam_chg = [(max(0.0, -float(x)) if i >= _si_now else 0.0) for i, x in enumerate(_dam_net)]
-            _dam_dis = [(max(0.0, float(x)) if i >= _si_now else 0.0) for i, x in enumerate(_dam_net)]
+            # Bug VDT-CAPACITY-BASELINE (2026-06-13, user: "obchody čo pri simulovanej
+            # SOC nemôžu vyjsť, úplne bez zmeny"): predtým poistka štartovala z AKTUÁLNEJ
+            # SOC + budúce sloty, ale graf (a teda fyzika) ide z DENNEJ trajektórie
+            # plánu od soc_init s PLNÝM DAM. Tie dve sa rozchádzali → poistka nechytila
+            # prebitie o 13h (DAM nabíja na 100 % + VDT dokúpi → 154 %). Teraz baseline
+            # = soc_init + PLNÝ DAM (presne ako projekcia) → reprodukuje graf.
+            try:
+                import profiles as _pr_cap
+                _pl_cap = (_pr_cap.load_profile(active_profile) or {}).get("plan") or {}
+                _soc_init_pct = float(_pl_cap.get("soc_init_pct",
+                                      _pl_cap.get("soc_init", soc_pct)) or soc_pct)
+            except Exception:
+                _soc_init_pct = float(soc_pct)
+            _soc0 = _soc_init_pct / 100.0 * _bk            # ŠTART = soc_init plánu (deň)
+            _dam_chg = [max(0.0, -float(x)) for x in _dam_net]   # PLNÝ deň, bez zeroingu
+            _dam_dis = [max(0.0, float(x)) for x in _dam_net]
             # VDT extra (nad DAM) per absolútny 15-min slot
             _ex = {}
             for _tr in trades:
                 _sl = pd.Timestamp(_tr["start_local"])
                 _si = int((_sl.hour * 60 + _sl.minute) // 15)
-                if _si < _si_now:
-                    continue
                 _net_tr = float(_tr.get("discharge_kwh", 0.0)) - float(_tr.get("charge_kwh", 0.0))
                 _extra = _net_tr - float(_dam_net[_si])
                 if _extra > 0.5:
