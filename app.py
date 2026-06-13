@@ -6900,10 +6900,28 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 _active_profile_eff, _eff_db_from, _eff_db_to,
                 joint_flags=_eff_joint)
             if _eff_db_period.get("days_count", 0) > 0 and isinstance(r, dict):
-                r["cum_total"] = _eff_db_period["total_eur"]
-                r["cum_dt"] = _eff_db_period["dt_eur"]
-                r["cum_rt"] = _eff_db_period["rt_eur"]
-                r["cum_vdt_arb"] = _eff_db_period["vdt_arb_eur"]
+                # Bug BREAKDOWN-INCLUDE-TODAY (2026-06-13, user: "chcem tam vidieť to
+                # čo je aktuálne zobchodované"): effect_db pokrýva len DOKONČENÉ dni
+                # (dnešok je živý, nie v effect_minute) → breakdown DT/RT/VDT aj SPOLU
+                # vynechával dnešné obchody (najmä VDT, ktoré beží len dnes → 0).
+                # Pridaj dnešné PROVIZÓRNE hodnoty: DT/RT z advance (cum_* už dnešok
+                # obsahuje → dnes = advance − completed), VDT z dnešného today_trace
+                # (vdt_arb_min sum). Tým breakdown zodpovedá tomu, čo je zobchodované.
+                _adv_dt = float(r.get("cum_dt", 0.0) or 0.0)
+                _adv_rt = float(r.get("cum_rt", 0.0) or 0.0)
+                _today_dt = _adv_dt - float(_eff_db_period["dt_eur"])
+                _today_rt = _adv_rt - float(_eff_db_period["rt_eur"])
+                _today_vdt = 0.0
+                _tt = r.get("today_trace")
+                if _tt is not None and hasattr(_tt, "columns") and "vdt_arb_min" in _tt.columns:
+                    try:
+                        _today_vdt = float(pd.to_numeric(_tt["vdt_arb_min"], errors="coerce").fillna(0).sum())
+                    except Exception:
+                        _today_vdt = 0.0
+                r["cum_dt"] = float(_eff_db_period["dt_eur"]) + _today_dt
+                r["cum_rt"] = float(_eff_db_period["rt_eur"]) + _today_rt
+                r["cum_vdt_arb"] = float(_eff_db_period["vdt_arb_eur"]) + _today_vdt
+                r["cum_total"] = r["cum_dt"] + r["cum_rt"] + r["cum_vdt_arb"]
         except Exception as _e_dbf4:
             print(f"[livesim F4] effect_db.get_period_effect zlyhal: {_e_dbf4}")
             _eff_db_period = {"_error": str(_e_dbf4)}
