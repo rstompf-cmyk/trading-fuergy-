@@ -6489,19 +6489,35 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         # — stránka sa zobrazí, ale nie sú všetky dni prepočítané"): ak na pozadí beží
         # backfill (compute worker), ukáž progress bar aj na vykreslenej stránke.
         _cw_live = _livesim_compute_status(case, _PORT, _profile_key)
-        _show_banner = (isinstance(r, dict) and r.get("_stale")) or _cw_live.get("running")
+        _running = bool(_cw_live.get("running"))
+        # Bug COVERAGE-BANNER (2026-06-13, user: "chcem progres bar keď nie sú spočítané
+        # všetky dni, nech viem že to čo vidím nie je definitívne"): okrem "worker beží"
+        # ukáž banner aj keď DÁTA sú NEÚPLNÉ — pokrytie dní v logu < očakávaný rozsah
+        # (start → dnes). Tým užívateľ vždy vidí, či je zobrazené finálne alebo čiastočné.
+        _cov_done = _cov_total = 0
+        try:
+            _cov_start = pd.to_datetime(start).date() if start else (dt.date.today() - dt.timedelta(days=7))
+            _cov_total = max(1, (dt.date.today() - _cov_start).days + 1)
+            _days_set = set(d for d in (days or []) if _cov_start <= d <= dt.date.today())
+            _cov_done = len(_days_set)
+        except Exception:
+            pass
+        _incomplete = (_cov_total > 0 and _cov_done < _cov_total)
+        _show_banner = (isinstance(r, dict) and r.get("_stale")) or _running or _incomplete
         if _show_banner:
             import time as _t_sb
             _sb_run = int(_t_sb.time() - float((r.get("_stale_since") if isinstance(r, dict) else None)
                                                or _cw_live.get("started") or _t_sb.time()))
             _pgl = _cw_live.get("progress") or {}
-            _dl = int(_pgl.get("done", 0)); _tl = int(_pgl.get("total", 0))
+            # progress z workera ak beží, inak z pokrytia dní
+            _dl = int(_pgl.get("done", 0)) or _cov_done
+            _tl = int(_pgl.get("total", 0)) or _cov_total
             _barl = ""
             if _tl > 0:
                 _pctl = max(0, min(100, int(_dl / _tl * 100)))
                 _etal = ""
-                if _dl > 0 and _sb_run > 2:
-                    _reml = int((_sb_run / _dl) * (_tl - _dl))
+                if _running and _dl > 0 and _sb_run > 2:
+                    _reml = int((_sb_run / max(_dl, 1)) * (_tl - _dl))
                     _etal = (f" · ostáva ~{_reml//60} min {_reml%60} s" if _reml >= 60
                              else f" · ostáva ~{_reml} s")
                 _barl = (
@@ -6509,14 +6525,19 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     f"<div style='background:#1F4E78;height:100%;width:{_pctl}%;transition:width .4s;"
                     f"display:flex;align-items:center;justify-content:flex-end;padding-right:8px;"
                     f"color:#fff;font-size:11px;font-weight:600'>{_pctl}%</div></div>"
-                    f"<div style='color:#666;font-size:12px'>deň {_dl}/{_tl}"
-                    f"{(' · ' + _pgl.get('day','')) if _pgl.get('day') else ''}{_etal}</div>")
+                    f"<div style='color:#666;font-size:12px'>spočítaných {_dl}/{_tl} dní"
+                    f"{(' · práve ' + _pgl.get('day','')) if (_running and _pgl.get('day')) else ''}{_etal}</div>")
+            if _running:
+                _hdr = f"⏳ <b>Prepočet beží na pozadí</b> ({_sb_run} s)"
+                _refresh_s = "10"
+            else:
+                _hdr = "⚠ <b>Zobrazené dáta NIE SÚ kompletné</b>"
+                _refresh_s = "30"
             stale_banner = (
-                "<div style='background:#e3f2fd;border-left:5px solid #1F4E78;padding:10px 14px;"
+                "<div style='background:#fff3cd;border-left:5px solid #f0b80f;padding:10px 14px;"
                 "border-radius:8px;margin:10px 0;font-size:14px'>"
-                f"⏳ <b>Prepočet beží na pozadí</b> ({_sb_run} s) — zobrazené dáta môžu byť neúplné "
-                f"(nie všetky dni sú dopočítané). Stránka sa obnoví automaticky.{_barl}</div>")
-            _refresh_s = "10"
+                f"{_hdr} — niektoré dni v rozsahu ešte nie sú dopočítané, takže súčty (Zisk SPOLU) "
+                f"nie sú definitívne. {'Klikni „Spustiť/Obnoviť“ pre dopočet.' if not _running else 'Stránka sa obnoví automaticky.'}{_barl}</div>")
         return (head.replace("</head>", f'<meta http-equiv="refresh" content="{_refresh_s}">' + "</head>")
                 + form + plan_warn + plan_only_warn + zero_plan_warn + realio_banner + stale_banner + body + "</body></html>")
     except Exception as ex:

@@ -742,6 +742,18 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     sig_s = json.dumps(sig, sort_keys=True, default=str)
     meta = _load_meta(meta_path)
     if meta is not None and meta.get("settings_sig") != sig_s:
+        # Bug SIG-RESET-DIAG (2026-06-13, user: "prepnem profil a späť → ide od znova"):
+        # log KTORÝ kľúč sigu sa líši, nech vidíme príčinu zbytočného full resetu
+        # (typicky plan_store generated_at po regeneracii, alebo plan/rt z UI stavu).
+        try:
+            _old = json.loads(meta.get("settings_sig") or "{}")
+            _new = sig if isinstance(sig, dict) else {}
+            _diff = [k for k in set(_old) | set(_new) if _old.get(k) != _new.get(k)]
+            print(f"[livesim SIG-RESET] {_prof_sig}: full reset — líšia sa kľúče sigu: {_diff}")
+            for _k in _diff[:4]:
+                print(f"    {_k}: stored={str(_old.get(_k))[:120]} != new={str(_new.get(_k))[:120]}")
+        except Exception as _e_sd:
+            print(f"[livesim SIG-RESET] diag zlyhal: {_e_sd}")
         meta = None                                   # nastavenia sa zmenili → reset
     # BACKFILL: užívateľ posunul start_date dozadu (napr. z 1.3. na 1.1.) — meta má done_through
     # neskorší než nový start, ale CSV nemá tie staršie dni. advance() forward-fillne iba
@@ -1629,6 +1641,26 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     else:
                         cum_rt_done += float(pd.Series(_rt_real_col).fillna(0).sum())
                     done_through = day
+                    # Bug LIVESIM-META-INCREMENTAL (2026-06-13, user: "každý profil sa
+                    # má uložiť a načítať komplet s dňami; nie prepočítavať od znova pri
+                    # návrate"): meta (done_through) sa predtým zapisovala až PO CELEJ
+                    # slučke → keď sa dlhý backfill (napr. 44 dní) prerušil (reštart/
+                    # deploy/prepnutie), meta nevznikla → done_through stratený → ďalší
+                    # pohľad full backfill OD NULY. Teraz persistuj meta PO KAŽDOM
+                    # dokončenom dni → backfill je resumovateľný, profil sa "uloží".
+                    try:
+                        meta.update(
+                            done_through=done_through.strftime("%Y-%m-%d"),
+                            soc_after_done=soc, cum_dt_done=cum_dt_done,
+                            cum_rt_done=cum_rt_done,
+                            last_min=(last_min.strftime("%Y-%m-%d %H:%M:%S")
+                                      if last_min is not None else None),
+                            skipped_no_sys_mw=skipped_no_sys_mw,
+                            skipped_no_data=skipped_no_data, settings_sig=sig_s)
+                        with open(meta_path, "w") as _mf_inc:
+                            json.dump(meta, _mf_inc, ensure_ascii=False, indent=1, default=str)
+                    except Exception as _e_meta_inc:
+                        print(f"[livesim meta-inc] {_e_meta_inc}")
                     # DB unify F2 (2026-06-10): paralelný zápis do DB (effect_minute + effect_daily).
                     # Jediný zdroj pravdy pre UI (karty, chC graf, Excel, PDF). CSV zostáva pre
                     # interný incremental state. Fail-soft — DB chyba neblokuje livesim.
