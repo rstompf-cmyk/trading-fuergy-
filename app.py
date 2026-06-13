@@ -3962,6 +3962,18 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
 
     def _do_compute():
         try:
+            # BG-PROGRESS init (2026-06-13, user: "pri prepnutí profilu zmizol bar"):
+            # odhadni total dní (start→dnes) a nastav progress HNEĎ — bar sa ukáže
+            # na 0 % aj počas čakania na _LIVESIM_LOCK / prípravy dát (predtým total=0
+            # → "pripravujem dáta" bez baru). advance progress_cb to potom spresní.
+            try:
+                _est_start = pd.to_datetime(start).date() if start else (dt.date.today() - dt.timedelta(days=7))
+                _est_total = max(1, (dt.date.today() - _est_start).days + 1)
+            except Exception:
+                _est_total = 1
+            with _LIVESIM_R_CACHE_LOCK:
+                _LIVESIM_COMPUTE_PROGRESS[key] = {"done": 0, "total": _est_total,
+                                                  "day": "", "ts": _t_cw.time()}
             with _LIVESIM_LOCK:
                 r_bg = lsim.advance(case, start, port=port, base_case=base_case,
                                     d1_step_min=d1_step_min,
