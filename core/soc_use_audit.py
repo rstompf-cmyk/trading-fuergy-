@@ -125,6 +125,45 @@ def _scheduled_to_direction(scheduled_kwh: List[float]) -> List[str]:
 #
 # Tým keď SOC narazí na hranu pásma → audit deterministicky vráti 0, žiadna píla.
 
+# Perf cache pre forward SOC trajektóriu (AUDIT-TRAJ-PRECOMP). Kľúč = id(today_state)
+# (dict je stabilný počas celej dennej slučky); fingerprint = id(dam)/id(vdt)/eff
+# bráni stale-hitu po recykli id. Vracia (suffix_min_P, suffix_max_P, P).
+_AUDIT_TRAJ_CACHE = {}
+
+
+def _audit_traj_precomp(today_state, dam_kwh, vdt_kwh, eff_c, eff_d):
+    """Predpočíta prefix-sumy SOC delt P[i]=Σ_{0..i} a ich SUFFIX min/max (od i po 95).
+    delta(i) = −net/eff_d ak net>0 (vybíja) inak −net·eff_c (nabíja). RAZ per deň."""
+    _key = id(today_state)
+    _fp = (id(dam_kwh), id(vdt_kwh), round(eff_c, 6), round(eff_d, 6))
+    _c = _AUDIT_TRAJ_CACHE.get(_key)
+    if _c is not None and _c[0] == _fp:
+        return _c[1]
+    n = 96
+    P = [0.0] * n
+    acc = 0.0
+    _ed = max(eff_d, 0.01)
+    for i in range(n):
+        net = float(dam_kwh[i]) + float(vdt_kwh[i])
+        d = (-net / _ed) if net > 0 else ((-net) * eff_c if net < 0 else 0.0)
+        acc += d
+        P[i] = acc
+    suf_min = [0.0] * n
+    suf_max = [0.0] * n
+    m = P[n - 1]; M = P[n - 1]
+    for i in range(n - 1, -1, -1):
+        if P[i] < m: m = P[i]
+        if P[i] > M: M = P[i]
+        suf_min[i] = m
+        suf_max[i] = M
+    res = (suf_min, suf_max, P)
+    # cache len posledných pár dní (zabráň neobmedzenému rastu)
+    if len(_AUDIT_TRAJ_CACHE) > 16:
+        _AUDIT_TRAJ_CACHE.clear()
+    _AUDIT_TRAJ_CACHE[_key] = (_fp, res)
+    return res
+
+
 def audit_capacity(current_soc_pct: float,
                     plan_kw_min: float,
                     rt_intent_kw: float,
@@ -207,19 +246,32 @@ def audit_capacity(current_soc_pct: float,
     # vráti hore), ale na rozdiel od fixného okna VIDÍ celý committed blok.
     # rt_persistence_slots ostáva LEN pre odhad RT priepustnosti (nižšie), NIE pre
     # rezerváciu — tým sa rozpojili dva rôzne horizonty.
-    _horizon_end = min(96, int(si) + max(1, int(future_horizon_slots or 96)))
-    _soc_t = soc_kwh
-    _min_future = _max_future = soc_kwh
-    for i in range(int(si), _horizon_end):
-        _net = dam_kwh[i] + vdt_kwh[i]          # + = vybíja, − = nabíja
-        if _net > 0:
-            _soc_t -= _net / max(eff_d, 0.01)
-        elif _net < 0:
-            _soc_t += (-_net) * eff_c
-        if _soc_t < _min_future:
-            _min_future = _soc_t
-        if _soc_t > _max_future:
-            _max_future = _soc_t
+    _horizon = max(1, int(future_horizon_slots or 96))
+    _horizon_end = min(96, int(si) + _horizon)
+    # Perf AUDIT-TRAJ-PRECOMP (2026-06-13, user: "skontroluj či sa nedá zrýchliť bez
+    # straty kvality"): forward-sim bol O(96) KAŽDÚ minútu (regresia z AUDIT-SOC-
+    # TRAJECTORY). Pri plnom dni (future_horizon_slots≥96) predpočítaj prefix-sumy
+    # SOC delt + suffix min/max RAZ per deň (cache na id(today_state)) → per-call O(1)
+    # s IDENTICKÝMI výsledkami. Pre kratší horizont (zriedkavé) ostáva pôvodný loop.
+    if int(si) + _horizon >= 96:
+        _pmin, _pmax, _P = _audit_traj_precomp(today_state, dam_kwh, vdt_kwh,
+                                               float(eff_c), float(eff_d))
+        _p_prev = _P[int(si) - 1] if int(si) > 0 else 0.0
+        _min_future = soc_kwh + min(0.0, _pmin[int(si)] - _p_prev)
+        _max_future = soc_kwh + max(0.0, _pmax[int(si)] - _p_prev)
+    else:
+        _soc_t = soc_kwh
+        _min_future = _max_future = soc_kwh
+        for i in range(int(si), _horizon_end):
+            _net = dam_kwh[i] + vdt_kwh[i]          # + = vybíja, − = nabíja
+            if _net > 0:
+                _soc_t -= _net / max(eff_d, 0.01)
+            elif _net < 0:
+                _soc_t += (-_net) * eff_c
+            if _soc_t < _min_future:
+                _min_future = _soc_t
+            if _soc_t > _max_future:
+                _max_future = _soc_t
 
     # Headroom pre RT charge: najvyšší budúci bod committed krivky nesmie po
     # pridaní RT nabíjania prekročiť eff_max.
