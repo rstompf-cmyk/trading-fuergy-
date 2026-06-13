@@ -619,7 +619,7 @@ def get_live_recommendation(*,
                     _ex[_si] = ("BUY", -_extra)
             _clipped, _rep = _clip_cap(_soc0, _dam_chg, _dam_dis, _ex, _bk,
                                        eff_c, eff_d, soc_min_pct, soc_max_pct,
-                                       reserve_pct=0.0)
+                                       reserve_pct=float(_pl.get("soc_reserve_pct") or 0.0))
             if _rep:
                 # zapíš orezané extras späť do trades (trade = DAM + orezaný extra)
                 for _tr in trades:
@@ -673,9 +673,13 @@ def get_live_recommendation(*,
     # soc_init+DAM baseline a výkon vôbec netestuje). Tu z REÁLNEHO aktuálneho SOC: ──
     try:
         _bk_g = float(batt_kwh)
+        # SOC tolerancia/rezerva od max aj min (user: "máme parameter čo dáva toleranciu
+        # od maxima a minima") — tá istá ako RT audit (soc_reserve_pct). Obchod nesmie SOC
+        # pretlačiť do rezervného pásma → držíme [soc_min+rez, soc_max−rez].
+        _soc_reserve = float(_pl.get("soc_reserve_pct") or 0.0)
         _soc_now_kwh = float(soc_pct) / 100.0 * _bk_g
-        _soc_lo_kwh = float(soc_min_pct) / 100.0 * _bk_g
-        _soc_hi_kwh = float(soc_max_pct) / 100.0 * _bk_g
+        _soc_lo_kwh = (float(soc_min_pct) + _soc_reserve) / 100.0 * _bk_g
+        _soc_hi_kwh = (float(soc_max_pct) - _soc_reserve) / 100.0 * _bk_g
         _g_reason = None
         # 1) VÝKON: kW obchodu nesmie prekročiť výkon batérie
         if cur_kw > float(batt_kw) + 1e-6:
