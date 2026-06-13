@@ -899,6 +899,15 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         _total_days = max(1, (today.normalize() - pd.Timestamp(first_day).normalize()).days + 1)
     except Exception:
         _total_days = 1
+    # Bug ADVANCE-DIAG (2026-06-13): prečo niekedy beží od start_date hoci meta má done_through.
+    # Vypíše: profil, meta cesta + či existuje na disku, done_through z meta, first_day, total.
+    try:
+        print(f"[livesim.advance DIAG] profil={profile!r} done_through={meta.get('done_through')!r} "
+              f"first_day={pd.Timestamp(first_day).date()} total_days={_total_days} "
+              f"start={pd.Timestamp(start_date).date()} meta_exists={os.path.exists(meta_path)} "
+              f"meta_path={os.path.basename(meta_path)}", flush=True)
+    except Exception:
+        pass
     _done_days = 0
     while day <= today:
         if progress_cb is not None:
