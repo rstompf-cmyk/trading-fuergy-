@@ -521,11 +521,42 @@ def _run_physical_day(cfg, mn_day, sch, day, step, bd, bc, soc0, dev_budget_kwh,
 
 
 def _load_meta(meta_path):
+    # Bug META-PARTIAL-READ (2026-06-13): ak sa meta práve zapisuje neatomicky, json.load
+    # padne na polovičnom súbore → None → TICHÝ reset → wipe CSV → backfill. So _save_meta_atomic
+    # je to ošetrené, ale retry na 1 pokus je lacná poistka (FileNotFound = skutočne chýba → None).
+    for _attempt in range(2):
+        try:
+            with open(meta_path) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return None
+        except Exception:
+            if _attempt == 0:
+                import time as _t
+                _t.sleep(0.05)
+                continue
+            return None
+    return None
+
+
+def _save_meta_atomic(meta_path, meta):
+    """Atomický zápis meta.json — temp súbor + os.replace (atomic rename na rovnakom FS).
+    Bez tohto open(path,'w') hneď truncatne súbor → súbežný čitateľ (GET/backfill) dostane
+    prázdny/polovičný JSON → _load_meta None → reset → wipe CSV → kaskáda backfillov
+    ("druhé otvorenie počíta od začiatku"). os.replace = čitateľ vidí starý ALEBO nový celý."""
+    import tempfile
+    _d = os.path.dirname(meta_path) or "."
+    fd, tmp = tempfile.mkstemp(dir=_d, prefix=".meta_", suffix=".tmp")
     try:
-        with open(meta_path) as f:
-            return json.load(f)
+        with os.fdopen(fd, "w") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=1, default=str)
+        os.replace(tmp, meta_path)
     except Exception:
-        return None
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        raise
 
 
 def carried_soc_for_date(case: str, port: str = "8000", date=None, profile=None) -> dict:
@@ -1697,8 +1728,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                       if last_min is not None else None),
                             skipped_no_sys_mw=skipped_no_sys_mw,
                             skipped_no_data=skipped_no_data, settings_sig=sig_s)
-                        with open(meta_path, "w") as _mf_inc:
-                            json.dump(meta, _mf_inc, ensure_ascii=False, indent=1, default=str)
+                        _save_meta_atomic(meta_path, meta)
                     except Exception as _e_meta_inc:
                         print(f"[livesim meta-inc] {_e_meta_inc}")
                     # DB unify F2 (2026-06-10): paralelný zápis do DB (effect_minute + effect_daily).
@@ -1893,8 +1923,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 skipped_no_sys_mw=skipped_no_sys_mw,        # #600: pre UI banner
                 skipped_no_data=skipped_no_data,
                 settings_sig=sig_s)
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=1, default=str)
+    _save_meta_atomic(meta_path, meta)
 
     cum_dt = cum_dt_done + today_dt
     cum_rt = cum_rt_done + today_rt
