@@ -125,9 +125,11 @@ services:
       PORT: "8000"
       # Dev flag pre prip. UI banner ze ide o dev (appka moze citat ENV=dev)
       ENV: "dev"
-      # Uloha #7 BG-ALL-PROFILES: background tick drzi teple vsetky profily (nielen aktivny)
-      # -> prepnutie profilu je okamzite. Najprv overit na deve, potom prip. zapnut aj na prode.
-      LIVESIM_BG_ALL: "1"
+      # Uloha #7 BG-ALL-PROFILES: VYPNUTE (0). bg-all kazdy tick prepisoval meta neaktivnych
+      # profilov -> render-cache padla -> navrat na profil = prepocet (presne to co nechceme).
+      # So zmrazenou metou neaktivneho profilu sedi mtime -> cache hit = okamzity navrat.
+      # Aktivny profil drzi teply normalny bg + cache_store. (kod ostava, len gated off)
+      LIVESIM_BG_ALL: "0"
 
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/me"]

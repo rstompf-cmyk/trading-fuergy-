@@ -39,12 +39,12 @@ for PORT in "${PORTS[@]}"; do
     echo "▸ Štartujem inštanciu na porte $PORT..."
     # PORT aj APP_PORT — per-port state (ui_settings, _active_market, _active profile)
     # používa PORT, uvicorn bind používa APP_PORT. Bez oboch by inštancie zdieľali state.
-    # Úloha #7 BG-ALL-PROFILES (2026-06-13): background tick drží TEPLÉ všetky profily
-    # (nielen aktívny) → prepnutie profilu = okamžité (len cache), žiadny dopočet.
-    # Bezpečné odkedy PLAN-SIG-CONTENT zastabilizoval sig (žiadny SIG-RESET v logoch).
-    # Override: LIVESIM_BG_ALL=0 ./start_dev.sh
+    # Úloha #7 BG-ALL-PROFILES: VYPNUTÉ (0). bg-all prepisoval meta neaktívnych profilov
+    # každý tick → render-cache padala → návrat na profil prepočítaval. So zmrazenou metou
+    # neaktívneho profilu mtime sedí → cache hit = okamžitý návrat. (kód ostáva, gated off)
+    # Zapnúť na test: LIVESIM_BG_ALL=1 ./start_dev.sh
     APP_HOST="${APP_HOST:-127.0.0.1}" APP_PORT="$PORT" PORT="$PORT" \
-        LIVESIM_BG_ALL="${LIVESIM_BG_ALL:-1}" nohup python app.py \
+        LIVESIM_BG_ALL="${LIVESIM_BG_ALL:-0}" nohup python app.py \
         > "out/app_${PORT}.log" 2>&1 &
     echo "$!" > "out/app_${PORT}.pid"
 done
