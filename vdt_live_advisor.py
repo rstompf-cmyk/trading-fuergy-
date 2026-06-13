@@ -667,6 +667,47 @@ def get_live_recommendation(*,
     cur_price = (cur.get("buy_price_eur_mwh") if cur_action == "charge"
                  else cur.get("sell_price_eur_mwh"))
 
+    # ── TVRDÝ VÝKON+KAPACITA GUARD na UZATVÁRANÝ obchod (2026-06-13, user: "obchody
+    # ktoré sa nedajú výkonovo ALEBO kapacitne pokryť sa NESMÚ uzavrieť — na to je tam tá
+    # ochrana"). Nezávislé od upstream clip_extras_to_capacity (ten ráta z idealizovaného
+    # soc_init+DAM baseline a výkon vôbec netestuje). Tu z REÁLNEHO aktuálneho SOC: ──
+    try:
+        _bk_g = float(batt_kwh)
+        _soc_now_kwh = float(soc_pct) / 100.0 * _bk_g
+        _soc_lo_kwh = float(soc_min_pct) / 100.0 * _bk_g
+        _soc_hi_kwh = float(soc_max_pct) / 100.0 * _bk_g
+        _g_reason = None
+        # 1) VÝKON: kW obchodu nesmie prekročiť výkon batérie
+        if cur_kw > float(batt_kw) + 1e-6:
+            _g_reason = f"výkon {cur_kw:.0f} > batt {float(batt_kw):.0f} kW"
+            cur_kwh = float(batt_kw) * 0.25
+        # 2) KAPACITA: po obchode musí SOC ostať v [soc_min, soc_max] (reálny SOC teraz)
+        if cur_action == "charge":
+            _soc_after_g = _soc_now_kwh + cur_kwh * float(eff_c)
+            if _soc_after_g > _soc_hi_kwh + 1e-6:
+                _allow = max(0.0, (_soc_hi_kwh - _soc_now_kwh) / max(float(eff_c), 0.01))
+                _g_reason = (f"nabitie by prekročilo {float(soc_max_pct):.0f}% "
+                             f"({cur_kwh:.0f}→{_allow:.0f} kWh)")
+                cur_kwh = _allow
+        elif cur_action == "discharge":
+            _soc_after_g = _soc_now_kwh - cur_kwh / max(float(eff_d), 0.01)
+            if _soc_after_g < _soc_lo_kwh - 1e-6:
+                _allow = max(0.0, (_soc_now_kwh - _soc_lo_kwh) * float(eff_d))
+                _g_reason = (f"vybitie by kleslo pod {float(soc_min_pct):.0f}% "
+                             f"({cur_kwh:.0f}→{_allow:.0f} kWh)")
+                cur_kwh = _allow
+        if _g_reason:
+            cur_kw = cur_kwh / 0.25 if cur_kwh > 0 else 0.0
+            if cur_kwh <= 1e-6:           # neostalo nič pokryteľné → obchod sa NEuzavrie
+                cur_action = "idle"; cur_kw = 0.0; cur_kwh = 0.0
+                cur["action"] = "idle"
+            cur["charge_kwh"] = cur_kwh if cur_action == "charge" else 0.0
+            cur["discharge_kwh"] = cur_kwh if cur_action == "discharge" else 0.0
+            print(f"[VDT-HARD-GUARD] {active_profile} slot {cur.get('slot')}: {_g_reason} "
+                  f"→ {cur_action} {cur_kw:.0f} kW (SOC teraz {float(soc_pct):.1f}%)")
+    except Exception as _e_hg:
+        print(f"[VDT-HARD-GUARD] preskočené: {_e_hg}")
+
     # Reason — krátky text čo robí
     if cur_action == "charge":
         reason = (f"Lacná elektrina @ {cur_price:.1f} €/MWh — nabíjam batériu. "
