@@ -4411,6 +4411,29 @@ def _livesim_bg_tick():
             _auto_regen_stale_plans(case, _PORT)
         except Exception as _e_v3:
             print(f"[SOC-CONT-V3 bg] {_e_v3}")
+        # Úloha #7 BG-ALL-PROFILES (re-enable 2026-06-13): keď LIVESIM_BG_ALL=1, posúvaj
+        # na pozadí aj OSTATNÉ profily, ktorých súbor UŽ EXISTUJE (= inkrementálny
+        # catch-up, lacné) → prepnutie na ne je okamžité (len cache). PLAN-SIG-CONTENT
+        # už bráni sig-churn loopu (predošlá katastrofa). Čerstvé profily (bez súboru)
+        # sa NEbackfillujú hromadne (žiadny stampede) — spočítajú sa pri prvom otvorení.
+        # Skip ak GET worker profil počíta. FLAG-GATED, default OFF (najprv dev 8001).
+        if os.environ.get("LIVESIM_BG_ALL") == "1":
+            try:
+                for _p2 in _livesim_bg_profiles():
+                    if _p2 == _act_bg:
+                        continue
+                    with _LIVESIM_R_CACHE_LOCK:
+                        if any(k[2] == _p2 for k in _LIVESIM_COMPUTE_INFLIGHT):
+                            continue
+                    try:
+                        _csvp2, _ = lsim.paths(case, _PORT, _p2)
+                    except Exception:
+                        continue
+                    if not os.path.exists(_csvp2):
+                        continue          # čerstvý profil → nechaj na GET (žiadny stampede)
+                    _livesim_bg_tick_one(case, start, _bc, _st, live, _p2)
+            except Exception as _e_all:
+                print(f"[livesim-bg ALL] {_e_all}")
         return int(r.get("appended", 0))
     except Exception as e:
         print("[livesim-bg] preskočené:", e)
