@@ -629,20 +629,24 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
         # SOC clip aktivoval → rt_dir=-1, rt_pct=60 → batt nevybíja plánovaný profit.
         # Fix: clip tot na fyzicky dostupný výkon (avail_for_dis/chg) + audit RT cez
         # audit_capacity PRED zápisom trace. Tým sa internal soc zhoduje s realitou.
-        if enforce_realistic and pv_min is not None and load_min is not None:
+        # Bug GRID-LIMIT-REALITY (2026-06-14): grid clip MUSÍ platiť aj keď chýba
+        # pv_min/load_min (napr. profil FTV+batéria bez load profilu) — predtým sa
+        # CELÝ blok preskočil → batéria reálne nabíjala/vybíjala NAD limit siete a SOC
+        # sa integroval z neorezaného výkonu. Teraz: clip beží vždy keď je nastavený
+        # grid limit; chýbajúce FTV/load = 0. Platí pre nabíjanie aj vybíjanie.
+        if enforce_realistic and (_grid_imp is not None or _grid_exp is not None):
             try:
                 m_idx_re = int((pd.Timestamp(rd.get("time")) - day_start).total_seconds() // 60)
-                if 0 <= m_idx_re < pv_min.size and 0 <= m_idx_re < load_min.size:
-                    _ftv_re = float(pv_min[m_idx_re])
-                    _load_re = float(load_min[m_idx_re])
-                    _gi_re = (_grid_imp if _grid_imp is not None else 1e9)
-                    _ge_re = (_grid_exp if _grid_exp is not None else 1e9)
-                    _avail_chg_re = max(_ftv_re - _load_re, 0.0) + _gi_re
-                    _avail_dis_re = _ge_re + max(_load_re - _ftv_re, 0.0)
-                    if tot > 0:    # vybi
-                        tot = min(tot, _avail_dis_re)
-                    elif tot < 0:  # nabi
-                        tot = max(tot, -_avail_chg_re)
+                _ftv_re = float(pv_min[m_idx_re]) if (pv_min is not None and 0 <= m_idx_re < pv_min.size) else 0.0
+                _load_re = float(load_min[m_idx_re]) if (load_min is not None and 0 <= m_idx_re < load_min.size) else 0.0
+                _gi_re = (_grid_imp if _grid_imp is not None else 1e9)
+                _ge_re = (_grid_exp if _grid_exp is not None else 1e9)
+                _avail_chg_re = max(_ftv_re - _load_re, 0.0) + _gi_re
+                _avail_dis_re = _ge_re + max(_load_re - _ftv_re, 0.0)
+                if tot > 0:    # vybi
+                    tot = min(tot, _avail_dis_re)
+                elif tot < 0:  # nabi
+                    tot = max(tot, -_avail_chg_re)
             except Exception:
                 pass
         # RT-PRIORITY kompozícia (2026-06-13, user: "ak je RT− tak batéria ide do −
