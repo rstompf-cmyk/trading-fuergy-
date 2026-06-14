@@ -795,6 +795,12 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             rt_grid_reserve_pct=float(fp.get("rt_grid_reserve_pct", 0.0) or 0.0),
             terminal_soc_pct=_resolve_terminal_soc(date_iso, fp, price_arr),
             grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
+            # Bug GRID-LIMIT-BATCH (2026-06-14): batch generátor neposielal grid_kw_import/
+            # export → joint_lp spadol na fallback grid_kw → plán importoval nad limit a
+            # guard #625-C ho zhodil (CHYBA). Posielame asymetrické limity z profilu
+            # (rovnako ako single /plan) → batéria sa korektne obmedzí na dodávku/odber.
+            grid_kw_import=(float(fp.get("grid_kw_import")) if fp.get("grid_kw_import") not in (None, "") else None),
+            grid_kw_export=(float(fp.get("grid_kw_export")) if fp.get("grid_kw_export") not in (None, "") else None),
             grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
             cycle_cost=float(fp.get("cycle_cost", DEF["cycle_cost"])),
             allow_grid_charge=bool(fp.get("allow_grid_charge", True)),
@@ -896,6 +902,9 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                                       (np.asarray(price15[:96], float).reshape(24, 4).mean(axis=1)
                                        if n >= 96 else np.asarray(price15[:n], float))),
                                   grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
+                                  # Bug GRID-LIMIT-BATCH: rovnako pre 15-min batch
+                                  grid_kw_import=(float(fp.get("grid_kw_import")) if fp.get("grid_kw_import") not in (None, "") else None),
+                                  grid_kw_export=(float(fp.get("grid_kw_export")) if fp.get("grid_kw_export") not in (None, "") else None),
                                   grid_fee=float(fp.get("grid_fee", DEF["grid_fee"])),
                                   cycle_cost=float(fp.get("cycle_cost", DEF["cycle_cost"])),
                                   allow_grid_charge=bool(fp.get("allow_grid_charge", True)),
@@ -6973,32 +6982,25 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             from core import effect_db as _eff_db_mod
             _eff_db_from = pd.Timestamp(dfull["time"].min()).strftime("%Y-%m-%d")
             _eff_db_to = pd.Timestamp(dfull["time"].max()).strftime("%Y-%m-%d")
+            # DISPLAY-FROM-DB (2026-06-14): dnešok nie je v CSV (dfull = dokončené dni), ale
+            # Fáza A ho UŽ zapisuje do effect_db → rozšír koniec obdobia na dnešok (prov),
+            # inak by sumár + chC graf dnešok vynechali.
+            if prov:
+                _eff_db_to = max(_eff_db_to, str(prov)[:10])
             _eff_db_period = _eff_db_mod.get_period_effect(
                 _active_profile_eff, _eff_db_from, _eff_db_to,
                 joint_flags=_eff_joint)
             if _eff_db_period.get("days_count", 0) > 0 and isinstance(r, dict):
-                # Bug BREAKDOWN-INCLUDE-TODAY (2026-06-13, user: "chcem tam vidieť to
-                # čo je aktuálne zobchodované"): effect_db pokrýva len DOKONČENÉ dni
-                # (dnešok je živý, nie v effect_minute) → breakdown DT/RT/VDT aj SPOLU
-                # vynechával dnešné obchody (najmä VDT, ktoré beží len dnes → 0).
-                # Pridaj dnešné PROVIZÓRNE hodnoty: DT/RT z advance (cum_* už dnešok
-                # obsahuje → dnes = advance − completed), VDT z dnešného today_trace
-                # (vdt_arb_min sum). Tým breakdown zodpovedá tomu, čo je zobchodované.
-                _adv_dt = float(r.get("cum_dt", 0.0) or 0.0)
-                _adv_rt = float(r.get("cum_rt", 0.0) or 0.0)
-                _today_dt = _adv_dt - float(_eff_db_period["dt_eur"])
-                _today_rt = _adv_rt - float(_eff_db_period["rt_eur"])
-                _today_vdt = 0.0
-                _tt = r.get("today_trace")
-                if _tt is not None and hasattr(_tt, "columns") and "vdt_arb_min" in _tt.columns:
-                    try:
-                        _today_vdt = float(pd.to_numeric(_tt["vdt_arb_min"], errors="coerce").fillna(0).sum())
-                    except Exception:
-                        _today_vdt = 0.0
-                r["cum_dt"] = float(_eff_db_period["dt_eur"]) + _today_dt
-                r["cum_rt"] = float(_eff_db_period["rt_eur"]) + _today_rt
-                r["cum_vdt_arb"] = float(_eff_db_period["vdt_arb_eur"]) + _today_vdt
-                r["cum_total"] = r["cum_dt"] + r["cum_rt"] + r["cum_vdt_arb"]
+                # DISPLAY-FROM-DB Fáza B1 (2026-06-14): dnešok je teraz v effect_db (Fáza A
+                # zapisuje provizórny dnešný trace+daily pri každom bg ticku) a obdobie končí
+                # dnešok (prov), takže get_period_effect UŽ zahŕňa dnešok → karty čítajú
+                # PRIAMO z DB, bez rekonštrukcie z advance. Predtým BREAKDOWN-INCLUDE-TODAY
+                # dopočítaval dnešok z today_trace; to by teraz dvojito počítalo. Žiadna
+                # závislosť kariet na advance cum_* — krok k „display = DB čítanie".
+                r["cum_dt"] = float(_eff_db_period["dt_eur"])
+                r["cum_rt"] = float(_eff_db_period["rt_eur"])
+                r["cum_vdt_arb"] = float(_eff_db_period["vdt_arb_eur"])
+                r["cum_total"] = float(_eff_db_period["total_eur"])
         except Exception as _e_dbf4:
             print(f"[livesim F4] effect_db.get_period_effect zlyhal: {_e_dbf4}")
             _eff_db_period = {"_error": str(_e_dbf4)}

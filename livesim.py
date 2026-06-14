@@ -1815,6 +1815,23 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     else:
                         today_rt = float(pd.Series(_rt_real_col).fillna(0).sum())
                     tr["is_live"] = 1                       # živé minúty (po teraz)
+                    # DISPLAY-FROM-DB Fáza A (2026-06-14): zapíš aj DNEŠNÝ provizórny trace +
+                    # parciálne daily totals do effect_db, nech GET /livesim vie zobraziť dnešok
+                    # čítaním z DB (get_minute_series + get_period_effect zahrnie dnešok) bez
+                    # volania advance v requeste. Upsert = prepisuje dnešok pri každom bg ticku.
+                    # Fail-soft — DB chyba neblokuje livesim. (Dokončené dni píše vetva d<today vyššie.)
+                    try:
+                        from core import effect_db as _eff_db_t
+                        from core.profile_resolver import get_active as _ga_db_t
+                        import market as _mk_db_t
+                        _prof_db_t = _ga_db_t(profile)
+                        _market_db_t = str(_mk_db_t.get_active_market()).lower()
+                        if _prof_db_t and not tr.empty:
+                            _eff_db_t.upsert_minute_batch(_prof_db_t, _market_db_t, tr)
+                            _totals_t = _eff_db_t.compute_day_totals_from_df(tr)
+                            _eff_db_t.upsert_daily(_prof_db_t, str(d), _market_db_t, _totals_t)
+                    except Exception as _e_dbup_t:
+                        print(f"[livesim DB F2-today] upsert dnešok zlyhal: {_e_dbup_t}")
                     # rozšír na CELÝ deň (0–24h): budúce minúty = LEN plán (DT/obchod/FTV/projekcia SOC), bez RT/live
                     try:
                         end_day = day + pd.Timedelta(days=1)
