@@ -1927,21 +1927,35 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         if skipped_no_sys_mw[:5]:
             print(f"  Prvé skipnuté dni (sys_MW): {skipped_no_sys_mw[:5]}")
 
+    # Bug SOC-UNIFY-TODAY (2026-06-14): exponuj DNEŠNÝ aktuálny SOC z engine (= posledná
+    # živá minúta tr = plán/DT + VDT + RT po clipe) do meta. Dnešok sa do CSV neukladá
+    # (provizórny), takže bez tohto /vdt, /rt aj VDT advisor naň "nevideli" a počítali si
+    # vlastnú vdt_state integráciu BEZ RT → rôzne SOC na každej stránke. Toto je jediný
+    # zdroj aktuálneho SOC pre dnešok (RT+DT+VDT) — číta ho compute_current_state.
+    soc_disp = soc
+    today_soc_ts = None
+    if today_trace is not None and not today_trace.empty:
+        _liv = today_trace[today_trace.get("is_live", 1) == 1] if "is_live" in today_trace.columns else today_trace
+        if not _liv.empty:
+            soc_disp = float(_liv["soc_kwh"].iloc[-1])       # SOC teraz = posledný ŽIVÝ stav (nie projekcia)
+            try:
+                today_soc_ts = pd.Timestamp(_liv["time"].iloc[-1]).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                today_soc_ts = None
+
     meta.update(done_through=done_through.strftime("%Y-%m-%d") if done_through is not None else None,
                 soc_after_done=soc, cum_dt_done=cum_dt_done, cum_rt_done=cum_rt_done,
                 last_min=last_min.strftime("%Y-%m-%d %H:%M:%S") if last_min is not None else None,
                 skipped_no_sys_mw=skipped_no_sys_mw,        # #600: pre UI banner
                 skipped_no_data=skipped_no_data,
+                today_soc_kwh=round(soc_disp, 3),           # SOC-UNIFY-TODAY: engine dnešný SOC (RT+DT+VDT)
+                today_soc_pct=round(soc_disp / bkwh * 100, 2) if bkwh else None,
+                today_soc_ts=today_soc_ts,
                 settings_sig=sig_s)
     _save_meta_atomic(meta_path, meta)
 
     cum_dt = cum_dt_done + today_dt
     cum_rt = cum_rt_done + today_rt
-    soc_disp = soc
-    if today_trace is not None and not today_trace.empty:
-        _liv = today_trace[today_trace.get("is_live", 1) == 1] if "is_live" in today_trace.columns else today_trace
-        if not _liv.empty:
-            soc_disp = float(_liv["soc_kwh"].iloc[-1])       # SOC teraz = posledný ŽIVÝ stav (nie projekcia)
     return dict(case=case, start_date=start_date.strftime("%Y-%m-%d"),
                 last_min=meta["last_min"], appended=appended,
                 cum_dt=round(cum_dt, 2), cum_rt=round(cum_rt, 2),

@@ -177,6 +177,28 @@ def _get_current_soc_from_livesim_today(profile: str, today: dt.date,
         ts = str(sub["time"].iloc[-1])[:19]
         return {"soc_pct": soc,
                 "source": f"livesim dnešok trace ({case}, profile={profile}, ts={ts})"}
+    # Bug SOC-UNIFY-TODAY (2026-06-14): dnešok sa do CSV neukladá (provizórny), ale
+    # livesim.advance ukladá engine dnešný SOC (RT+DT+VDT) do meta (today_soc_pct/ts).
+    # Prečítaj ho ako jediný zdroj — tým má /vdt, /rt aj advisor ROVNAKÝ SOC ako engine
+    # graf na /livesim (vrátane RT), nie vlastnú integráciu bez RT.
+    for case in _cases:
+        try:
+            _, _mp = _ls.paths(case, port)
+            _meta = _ls._load_meta(_mp) or {}
+        except Exception:
+            continue
+        _tsoc = _meta.get("today_soc_pct")
+        _tts = _meta.get("today_soc_ts")
+        if _tsoc is None or not _tts:
+            continue
+        try:
+            _tts_ts = _pd.Timestamp(_tts)
+        except Exception:
+            continue
+        # platí len ak je to dnešok a nie z budúcnosti voči now
+        if _tts_ts.date() == today and _tts_ts <= _pd.Timestamp(now):
+            return {"soc_pct": float(_tsoc),
+                    "source": f"livesim dnešok engine meta ({case}, profile={profile}, ts={str(_tts)[:19]})"}
     return None
 
 

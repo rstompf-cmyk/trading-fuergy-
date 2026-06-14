@@ -3926,12 +3926,26 @@ _LIVESIM_COMPUTE_PROGRESS = {}    # key → {done, total, day} pre progress bar 
 
 
 def _livesim_meta_mtime(case: str, port: str, profile=None) -> float:
-    """Vráti mtime meta.json pre livesim CSV (0.0 ak neexistuje). Per-profil."""
+    """Vráti cache-signatúru livesim stavu (0.0 ak neexistuje). Per-profil.
+
+    Bug SOC-UNIFY-TODAY (2026-06-14): VDT paper trades menia DNEŠNÝ engine SOC
+    (Bug BB ich pridá do plánu), ale zapisujú sa do vdt_paper_trades.csv — NIE do
+    meta.json. Bez nich v signatúre R-cache nepadne pri novom obchode → /livesim
+    servíruje zastaraný dnešok (SOC pred obchodom), kým /vdt číta čerstvé trades →
+    rôzne SOC. Zahrň mtime VDT trades → nový obchod invaliduje cache → dnešok sa
+    prepočíta čerstvo (engine RT+DT+VDT) a meta.today_soc_pct je aktuálny."""
     try:
         if lsim is None:
             return 0.0
         _, meta_path = lsim.paths(case, port, profile or None)
-        return os.path.getmtime(meta_path)
+        m = os.path.getmtime(meta_path)
+        try:
+            import vdt_live_advisor as _vla_sig
+            _vp = _vla_sig.paper_trades_csv_path(profile or None)
+            m += os.path.getmtime(_vp)
+        except Exception:
+            pass
+        return m
     except Exception:
         return 0.0
 
@@ -6771,7 +6785,11 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # z vdt_state.compute_current_state.start_soc_pct integrovaného cez D-1 + VDT.
         # dview["soc_pct"] uz post Bug Z/AA/MM recompute = canonical source. Card
         # predtym pouzival now["soc_pct"] z raw today_trace (pred recompute) → desync.
-        _soc_plan_val = _nz(now.get('soc_pct'))
+        # Bug SOC-UNIFY (2026-06-14): karta SOC teraz = engine trace (dview). Primárne
+        # posledná živá minúta dview soc_pct; ak chýba, fallback na engine
+        # compute_current_state.current_soc_pct (= ten istý engine dnešok cez meta) —
+        # NIE raw now['soc_pct'] (mohla byť projekcia/default → falošných 48 %).
+        _soc_plan_val = None
         try:
             if (dview is not None and len(dview)
                 and "soc_pct" in dview.columns and "time" in dview.columns):
@@ -6783,6 +6801,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                         _soc_plan_val = float(_v)
         except Exception:
             pass
+        if _soc_plan_val is None:
+            try:
+                import vdt_state as _vs_card
+                _cs_card = _vs_card.compute_current_state(_prof_load)
+                _soc_plan_val = float(_cs_card.get("current_soc_pct"))
+            except Exception:
+                _soc_plan_val = _nz(now.get('soc_pct'))
         if realio_overlay:
             if _r_soc is not None:
                 _soc_plan_val = _r_soc
