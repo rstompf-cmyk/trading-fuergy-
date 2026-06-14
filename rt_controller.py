@@ -684,6 +684,24 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                     tot = max(-BK, min(BK, plan_kw + _rt_new))
             except Exception:
                 pass
+        # Bug GRID-LIMIT-REALITY-FINAL (2026-06-14): FINÁLNY grid clip až ZA všetkou RT
+        # logikou (lookahead, rt_overrides_plan, audit) — tie vedia `tot` zase zdvihnúť
+        # nad sieťový limit (napr. v noci FTV=0, RT-arbitráž nabíja > grid_kw_import).
+        # Predchádzajúci clip (vyššie) beží PRED rt_overrides_plan, takže sám nestačí.
+        # Toto je posledné slovo pred integráciou SOC → limit platí bezpodmienečne.
+        if enforce_realistic and (_grid_imp is not None or _grid_exp is not None):
+            try:
+                _mi_f = int((pd.Timestamp(rd.get("time")) - day_start).total_seconds() // 60)
+                _ftv_f = float(pv_min[_mi_f]) if (pv_min is not None and 0 <= _mi_f < pv_min.size) else 0.0
+                _load_f = float(load_min[_mi_f]) if (load_min is not None and 0 <= _mi_f < load_min.size) else 0.0
+                _gi_f = (_grid_imp if _grid_imp is not None else 1e9)
+                _ge_f = (_grid_exp if _grid_exp is not None else 1e9)
+                if tot > 0:    # vybíjanie cez sieť ≤ grid_kw_export (+ vlastná spotreba)
+                    tot = min(tot, _ge_f + max(_load_f - _ftv_f, 0.0))
+                elif tot < 0:  # nabíjanie zo siete ≤ grid_kw_import (+ FTV prebytok)
+                    tot = max(tot, -(max(_ftv_f - _load_f, 0.0) + _gi_f))
+            except Exception:
+                pass
         # lo_eff sa už nastavil hore (pred lookahead blokom)
         eg = tot*e_h
         if eg > 0:
