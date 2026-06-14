@@ -131,14 +131,13 @@ services:
       # Krok 0 merania (2026-06-14): zapne [ADVANCE-TIMING] summary log v livesim.advance
       # (total/minload/loop/io/effectdb). LEN na deve 8001 - prod 8000 ho nema = nulovy dopad.
       LIVESIM_TIMING: "1"
-      # Diagnostika (2026-06-14): cProfile slučky pri pomalých behoch (>5s) — hľadáme prečo
-      # je VW per-deň 25,5s. Po zistení vypnúť (="0"). Len dev 8001.
-      LIVESIM_PROFILE: "1"
-      # Uloha #7 BG-ALL-PROFILES: VYPNUTE (0). bg-all kazdy tick prepisoval meta neaktivnych
-      # profilov -> render-cache padla -> navrat na profil = prepocet (presne to co nechceme).
-      # So zmrazenou metou neaktivneho profilu sedi mtime -> cache hit = okamzity navrat.
-      # Aktivny profil drzi teply normalny bg + cache_store. (kod ostava, len gated off)
-      LIVESIM_BG_ALL: "0"
+      # Diagnostika cProfile — VYPNUTE (hotspot najdeny: audit_rt_slot recompute, fix AUDIT-STATE-REUSE).
+      LIVESIM_PROFILE: "0"
+      # BG-ALL-PROFILES (zapnute 2026-06-14): bg drzi TEPLE vsetky profily (s existujucim CSV)
+      # cez cache_store -> prepnutie profilu = okamzite (cache hit). Bezpecne po PLAN-SIG-CONSUMED
+      # (ziadny sig-churn loop) + AUDIT-STATE-REUSE (lacny per-den compute). Spolu so SWITCH-INSTANT
+      # (servir stale cache hned, bez 2s grace) = ziadne cakanie pri prepnuti.
+      LIVESIM_BG_ALL: "1"
 
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/me"]

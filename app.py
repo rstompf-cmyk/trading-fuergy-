@@ -4139,26 +4139,34 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
     if not _already_running:
         _threading.Thread(target=_do_compute, daemon=True,
                           name=f"livesim-worker-{case}").start()
-    # Grace wait: malé prírastky (bežný tick) dobehnú do ~2 s → vrátime rovno čerstvé.
+    # SWITCH-INSTANT (2026-06-14): ak existuje AKÝKOĽVEK cache (čerstvý alebo zastaraný),
+    # vráť ho HNEĎ — bg compute beží na pozadí, ďalší refresh dá čerstvý. Žiadne 2s grace
+    # čakanie pri prepnutí profilu (drahé profily ~4 s nestihnú grace → predtým user čakal).
+    # Stale flag len keď sa mtime líši (živá minúta/obchod pribudol od posledného compute).
+    with _LIVESIM_R_CACHE_LOCK:
+        cached_now = _LIVESIM_R_CACHE.get(key)
+        _started = _LIVESIM_COMPUTE_INFLIGHT.get(key)
+    if cached_now is not None:
+        r_out = dict(cached_now[1])
+        if cached_now[0] != mtime_before:
+            r_out["_stale"] = True
+            r_out["_stale_since"] = _started
+        return r_out
+    # Žiadny cache (úplne prvé otvorenie profilu) → krátka grace, či compute dobehne,
+    # inak None → volajúci ukáže progress stránku (a bg dopočíta + zapíše COLD-START pkl).
     _deadline = _t_cw.time() + 2.0
     while _t_cw.time() < _deadline:
         with _LIVESIM_R_CACHE_LOCK:
             _done = key not in _LIVESIM_COMPUTE_INFLIGHT
             cached2 = _LIVESIM_R_CACHE.get(key)
-        if _done and cached2 is not None:
-            return cached2[1]
+        if cached2 is not None:
+            r_out = dict(cached2[1])
+            if not _done:
+                r_out["_stale"] = True
+            return r_out
         if _done:
             break                                        # skončil s chybou — rieši sa nižšie
         _t_cw.sleep(0.1)
-    # Stále počíta (alebo zlyhal) → posledný hotový stav ako stale, inak None.
-    with _LIVESIM_R_CACHE_LOCK:
-        cached = _LIVESIM_R_CACHE.get(key)
-        _started = _LIVESIM_COMPUTE_INFLIGHT.get(key)
-    if cached is not None:
-        r_stale = dict(cached[1])
-        r_stale["_stale"] = True
-        r_stale["_stale_since"] = _started
-        return r_stale
     return None
 
 
