@@ -309,7 +309,12 @@ def _minute_all(live_minutes=None, min_from_date=None, progress_cb=None) -> pd.D
         cached = _MN_CACHE.get(sk_key)
         import time as _tt
         now_ts = _tt.time()
-        if cached is not None and (now_ts - cached.get("ts", 0)) < 300:
+        # PERF SK-HIST-TTL (2026-06-14): build_sk_minute_history prechádza ~90 dní a každý
+        # prebuduje z historianu (~4.4 s). Historické dni sú nemenné, dnešok aj tak prebíja
+        # `live_minutes` merge nižšie → 5-min TTL prebudovával celé zbytočne každých 5 min.
+        # Default 1 h (settlement včerajšej ZCO ~11:30 D+1 sa zachytí do hodiny). Env override.
+        _sk_ttl = int(os.environ.get("SK_MINUTE_TTL_S", "3600"))
+        if cached is not None and (now_ts - cached.get("ts", 0)) < _sk_ttl:
             mn = cached["df"]
         else:
             try:
