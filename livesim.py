@@ -977,6 +977,12 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         _total_days = 1
     _done_days = 0
     _t_loop0 = time.perf_counter()
+    # LIVESIM-PROFILE (krok diagnostiky 2026-06-14): cProfile slučky, gated LIVESIM_PROFILE=1,
+    # dump len pri pomalých behoch (>5 s = VW) — nájde hotspot v per-deň engine bez hádania.
+    _lprof = None
+    if os.environ.get("LIVESIM_PROFILE") == "1":
+        import cProfile as _cP
+        _lprof = _cP.Profile(); _lprof.enable()
     while day <= today:
         if progress_cb is not None:
             try:
@@ -1952,6 +1958,14 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         day += pd.Timedelta(days=1)
 
     _TMR["loop"] = time.perf_counter() - _t_loop0
+    if _lprof is not None:
+        _lprof.disable()
+        if _TMR["loop"] > 5.0:
+            import pstats as _pst, io as _iox
+            _ss = _iox.StringIO()
+            _pst.Stats(_lprof, stream=_ss).sort_stats("cumulative").print_stats(25)
+            print(f"[LIVESIM-PROFILE] {case}/{profile} loop={_TMR['loop']*1000:.0f}ms appended={appended} "
+                  f"TOP cumulative:\n" + _ss.getvalue()[:4500])
     if appended == 0 and last_err is not None:
         raise RuntimeError(last_err)                         # nič sa nepodarilo → ukáž skutočnú chybu
 
