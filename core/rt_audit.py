@@ -38,6 +38,7 @@ def audit_rt_slot(profile: str,
                    *,
                    step_min: int = 15,
                    current_soc_pct: Optional[float] = None,
+                   today_state: Optional[Dict[str, Any]] = None,
                    rt_persistence_slots: int = 4) -> Dict[str, Any]:
     """Audit RT zasahu pred aplikaciou.
 
@@ -119,7 +120,12 @@ def audit_rt_slot(profile: str,
         import datetime as _dt
         import profiles as _pr
         _d_obj = _dt.date.fromisoformat(day)
-        _today_state = _vs.compute_current_state(profile, today=_d_obj) or {}
+        # PERF AUDIT-STATE-REUSE (2026-06-14): compute_current_state je drahé (číta livesim
+        # CSV + VDT trades + DB) a pre (profil, deň) vracia v rámci jedného advance to isté.
+        # Per-minútový volajúci (livesim RT-PRE-AUDIT) ho má už vypočítaný → odovzdá ho cez
+        # today_state a ušetrí ~315 redundantných čítaní (VW: 29 s → ~0). Per-minútová varianta
+        # SOC ide zvlášť cez current_soc_pct, takže today_state je konštantný = identický výsledok.
+        _today_state = today_state if today_state else (_vs.compute_current_state(profile, today=_d_obj) or {})
         _prof = _pr.load_profile(profile) or {}
         _reserve = float((_prof.get("plan") or {}).get("soc_reserve_pct", 0.0) or 0.0)
         _soc_use = current_soc_pct if current_soc_pct is not None else float(

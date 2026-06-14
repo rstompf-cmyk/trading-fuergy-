@@ -1480,6 +1480,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                                               _plan_kw_min, _rt_kw_proposed,
                                                               step_min=15,
                                                               current_soc_pct=_running_soc,
+                                                              today_state=_audit_today_state,
                                                               rt_persistence_slots=4)
                                             _scale_i = float(_ax.get("scale_factor", 1.0))
                                             if _scale_i < 0.99:
