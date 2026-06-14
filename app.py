@@ -3998,6 +3998,52 @@ def _livesim_cache_store(case, port, profile, r):
         pass
 
 
+# ── COLD-START persistencia r-cache (2026-06-14) ───────────────────────────
+# Po reštarte kontajnera je in-memory _LIVESIM_R_CACHE prázdna → prvé otvorenie
+# /livesim by čakalo na bg compute (progress page). Persistujeme posledné hotové
+# `r` (vrátane dnešného trace) na disk vedľa livesim meta; pri cold hydratujeme
+# in-memory cache → prvé otvorenie po reštarte je okamžité. Fail-soft.
+def _livesim_rcache_path(case, port, profile=None):
+    try:
+        if lsim is None:
+            return None
+        _, meta_path = lsim.paths(case, port, profile or None)
+        if meta_path.endswith(".meta.json"):
+            return meta_path[:-len(".meta.json")] + ".rcache.pkl"
+        return meta_path + ".rcache.pkl"
+    except Exception:
+        return None
+
+
+def _livesim_rcache_save(case, port, profile, mtime, r):
+    p = _livesim_rcache_path(case, port, profile)
+    if not p or r is None:
+        return
+    try:
+        import pickle as _pk
+        tmp = p + ".tmp"
+        with open(tmp, "wb") as f:
+            _pk.dump((float(mtime), r), f, protocol=_pk.HIGHEST_PROTOCOL)
+        os.replace(tmp, p)
+    except Exception as _e:
+        print(f"[livesim rcache save] {_e}")
+
+
+def _livesim_rcache_load(case, port, profile):
+    p = _livesim_rcache_path(case, port, profile)
+    if not p or not os.path.exists(p):
+        return None
+    try:
+        import pickle as _pk
+        with open(p, "rb") as f:
+            mt, r = _pk.load(f)
+        if isinstance(r, dict) and ("today_trace" in r or "cum_total" in r):
+            return (float(mt), r)
+    except Exception as _e:
+        print(f"[livesim rcache load] {_e}")
+    return None
+
+
 def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
                               live_minutes, rt_params, plan_params,
                               use_rt_override, profile_key: str = ""):
@@ -4014,6 +4060,18 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
         cached = _LIVESIM_R_CACHE.get(key)
         if cached is not None and cached[0] == mtime_before and mtime_before > 0:
             return cached[1]
+    # COLD-START hydrate (2026-06-14): in-memory cache prázdna (po reštarte) → načítaj
+    # persistovaný r z disku, naplň cache. Ak jeho mtime == aktuálnej meta → vráť rovno
+    # (instant, žiadny bg). Inak poslúži ako _stale fallback nižšie + bg dopočíta čerstvý.
+    if cached is None:
+        _disk = _livesim_rcache_load(case, port, profile_key)
+        if _disk is not None:
+            with _LIVESIM_R_CACHE_LOCK:
+                if _LIVESIM_R_CACHE.get(key) is None:
+                    _LIVESIM_R_CACHE[key] = _disk
+                cached = _LIVESIM_R_CACHE.get(key)
+            if _disk[0] == mtime_before and mtime_before > 0:
+                return _disk[1]
     # Bug COMPUTE-WORKER (2026-06-11): cache miss → advance beží v BACKGROUND vlákne,
     # request NEBLOKUJE. Vraciame posledný hotový stav (_stale=True) alebo None
     # (= prvý beh bez akéhokoľvek stavu → volajúci ukáže progress stránku).
@@ -4061,6 +4119,8 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
             with _LIVESIM_R_CACHE_LOCK:
                 _LIVESIM_R_CACHE[key] = (m_after, r_bg)
                 _LIVESIM_COMPUTE_ERR.pop(key, None)
+            # COLD-START: persistuj na disk (mimo locku — IO) → prežije reštart kontajnera
+            _livesim_rcache_save(case, port, profile_key, m_after, r_bg)
         except Exception as _e_bg:
             import traceback as _tb_bg
             with _LIVESIM_R_CACHE_LOCK:
