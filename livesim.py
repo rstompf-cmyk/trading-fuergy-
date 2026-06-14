@@ -2006,6 +2006,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 today_soc_kwh=round(soc_disp, 3),           # SOC-UNIFY-TODAY: engine dnešný SOC (RT+DT+VDT)
                 today_soc_pct=round(soc_disp / bkwh * 100, 2) if bkwh else None,
                 today_soc_ts=today_soc_ts,
+                d1_step_min=int(getattr(cfg, "d1_step_min", 60)),  # SOC-UNIFY-PLAN: kind plánu enginu (60→plan,15→dentrh) — advisor musí čítať ten istý
                 settings_sig=sig_s)
     _save_meta_atomic(meta_path, meta)
 

@@ -53,13 +53,47 @@ def _market_root() -> str:
         return os.path.join("out", "sk")
 
 
+def _engine_plan_order() -> tuple:
+    """Bug SOC-UNIFY-PLAN (2026-06-14): poradie (step_min, kind) na načítanie D-1 plánu
+    ZHODNÉ s tým, čo používa engine livesim. Engine zapisuje svoj d1_step_min do meta
+    (60→'plan', 15→'dentrh'). Bez tohto advisor VŽDY preferoval 'dentrh' → ak engine
+    bežal na 'plan' (hodinový), advisor čítal INÝ plán než graf → iná SOC trajektória
+    → VDT navrhoval nákupy do batérie, ktorá je v engine už plná ("nemá sa kam uložiť").
+    Fallback (meta chýba): pôvodné poradie (dentrh, plan)."""
+    default = ((15, "dentrh"), (60, "plan"))
+    try:
+        import livesim as _ls
+        port = os.environ.get("PORT") or os.environ.get("APP_PORT") or "8000"
+        best_step = None
+        best_mt = -1.0
+        for case in ("dt_15min", "plan_d1"):
+            try:
+                _, mp = _ls.paths(case, port)
+                mt = os.path.getmtime(mp)
+                meta = _ls._load_meta(mp) or {}
+                step = meta.get("d1_step_min")
+                if step is not None and mt > best_mt:
+                    best_mt = mt
+                    best_step = int(step)
+            except Exception:
+                continue
+        if best_step == 60:
+            return ((60, "plan"), (15, "dentrh"))
+        if best_step == 15:
+            return ((15, "dentrh"), (60, "plan"))
+    except Exception:
+        pass
+    return default
+
+
 def _safe_load_plan(profile: str, day_iso: str) -> Optional[Dict[str, Any]]:
-    """Cascade load: try dentrh (15-min) first, then plan (60-min). Vracia plán JSON alebo None."""
+    """Cascade load D-1 plánu — poradie kind podľa enginu (SOC-UNIFY-PLAN), aby advisor
+    čítal TEN ISTÝ plán ako graf/engine. Vracia plán JSON alebo None."""
     try:
         import plan_store as _ps
     except Exception:
         return None
-    for step_min, kind in ((15, "dentrh"), (60, "plan")):
+    for step_min, kind in _engine_plan_order():
         try:
             sch = _ps.load_plan_safe(day_iso, step_min, kind, profile=profile)
             if sch is not None:
