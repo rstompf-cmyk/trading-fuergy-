@@ -766,16 +766,40 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     plan_sigs = {}
     try:
         import hashlib as _hl
-        _vol_keys = {"generated_at", "saved_at", "updated_at", "created_at", "ts"}
+        # Bug PLAN-SIG-CONSUMED (2026-06-14): predtým sa hashoval CELÝ plán (mínus pár
+        # timestampov). Pre VDT profily (napr. VW) auto-regen/VDT advisor prepisoval do DB
+        # `summary` (prepočítaná ekonomika) a iné NEkonzumované polia → content hash sa menil
+        # každý advance → SIG-RESET na plan_store → FULL re-sim celej histórie (~23 s) každý
+        # tick (Coop bez VDT to nemal). Fix: hashuj LEN polia, ktoré `_day_plan` reálne
+        # konzumuje a ktoré menia simuláciu — schedule nominácia + params poplatky + rt_mask,
+        # floaty zaokrúhlené na 6 desat. Kozmetika/regen churn (summary, mults, meta,
+        # generated_at) reset NEvyvolá. Korektné: zmena, čo ovplyvní sim, sig stále zmení.
+        _SCHED_KEYS = ("batt_kw", "price_eur", "pv_kwh", "_export_kwh", "_import_kwh",
+                       "_charge_kw", "_discharge_kw", "soc_pct")
+        _PARAM_KEYS = ("grid_fee", "cycle_cost", "batt_kwh")
+        def _r6(_v):
+            try:
+                return round(float(_v), 6)
+            except (TypeError, ValueError):
+                return _v
+        def _plan_sim_sig(_p):
+            _sch = _p.get("schedule") or {}
+            _par = _p.get("params") or {}
+            _core = {
+                "sched": {_k: [_r6(_x) for _x in (_sch.get(_k) or [])]
+                          for _k in _SCHED_KEYS if _k in _sch},
+                "params": {_k: _r6(_par.get(_k)) for _k in _PARAM_KEYS if _k in _par},
+                "rt_mask": _p.get("rt_mask"),
+            }
+            _pj = json.dumps(_core, sort_keys=True, default=str)
+            return _hl.md5(_pj.encode("utf-8")).hexdigest()[:16]
         _sig_end = pd.Timestamp(today).normalize() - pd.Timedelta(days=1)
         if _sig_end >= pd.Timestamp(start_date).normalize():
             for _d in pd.date_range(pd.Timestamp(start_date), _sig_end, freq="D"):
                 _diso = _d.date().isoformat()
                 _p = ps.load_plan_safe(_diso, step_min_now, kind_now)
                 if _p:
-                    _pc = {k: v for k, v in _p.items() if k not in _vol_keys}
-                    _pj = json.dumps(_pc, sort_keys=True, default=str)
-                    plan_sigs[_diso] = _hl.md5(_pj.encode("utf-8")).hexdigest()[:16]
+                    plan_sigs[_diso] = _plan_sim_sig(_p)
     except Exception:
         pass
     # FTV scenáre per-dátum — keď user pridá/zmení scenár, log sa resetuje a livesim ho prevezme
