@@ -6,7 +6,7 @@
 SOC drží simulátor (to, čo by si inak zadával v /rt). Všetky vstupy/parametre/výstupy sú v CSV pre spätnú analýzu.
 """
 from __future__ import annotations
-import os, json, math, datetime as dt
+import os, json, math, time, datetime as dt
 from typing import Optional
 import numpy as np, pandas as pd
 import case_config as cc, rt_controller as rtc, data_sources as ds
@@ -618,6 +618,10 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     live_minutes: dnešné ŽIVÉ minúty (provizórna ZCO=odhad) na real-time sledovanie dneška.
     use_rt_override: ak nie None, prepíše cfg.use_rt (True/False). Pre čistý plán bez RT vrstvy → False.
     Vracia súhrn pre stránku."""
+    # ADVANCE-TIMING (krok 0 merania): ľahké perf_counter accumulators, summary print
+    # gatovaný env LIVESIM_TIMING=1. Žiadna zmena správania — len meranie kde sa tratí čas.
+    _T_ADV0 = time.perf_counter()
+    _TMR = {"minload": 0.0, "io": 0.0, "effectdb": 0.0, "loop": 0.0}
     cfg = cc.load_case(base_case or case)
     if d1_step_min is not None:
         cfg.d1_step_min = int(d1_step_min)
@@ -911,7 +915,9 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         pd.DataFrame(columns=CSV_COLS).to_csv(csv_path, index=False)
 
     # Posuň SK historian lower bound aspoň po start_date užívateľa (default je today-90d).
+    _t_ml = time.perf_counter()
     mn = _minute_all(live_minutes, min_from_date=start_date)
+    _TMR["minload"] += time.perf_counter() - _t_ml
     sys_orient = rtc.PROD_SYS_ORIENT
     day_sigma = mn.groupby("date")["sig"].std() if "sig" in mn.columns else None
     if "sig" not in mn.columns:
@@ -941,6 +947,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     except Exception:
         _total_days = 1
     _done_days = 0
+    _t_loop0 = time.perf_counter()
     while day <= today:
         if progress_cb is not None:
             try:
@@ -1709,7 +1716,9 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     if not new.empty:
                         out = new.reindex(columns=CSV_COLS).copy()
                         out["time"] = pd.to_datetime(out["time"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+                        _t_io = time.perf_counter()
                         out.to_csv(csv_path, mode="a", header=False, index=False)
+                        _TMR["io"] += time.perf_counter() - _t_io
                         appended += len(new)
                         last_min = pd.Timestamp(new["time"].max())
                         soc = float(new["soc_kwh"].iloc[-1])   # spoločné SOC (plán + RT)
@@ -1745,6 +1754,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     # Jediný zdroj pravdy pre UI (karty, chC graf, Excel, PDF). CSV zostáva pre
                     # interný incremental state. Fail-soft — DB chyba neblokuje livesim.
                     try:
+                        _t_db = time.perf_counter()
                         from core import effect_db as _eff_db
                         from core.profile_resolver import get_active as _ga_db
                         import market as _mk_db
@@ -1755,6 +1765,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             _day_iso = str(d)
                             _totals = _eff_db.compute_day_totals_from_df(tr)
                             _eff_db.upsert_daily(_prof_db, _day_iso, _market_db, _totals)
+                        _TMR["effectdb"] += time.perf_counter() - _t_db
                     except Exception as _e_dbup:
                         print(f"[livesim DB F2] upsert pre {d} zlyhal: {_e_dbup}")
                 else:
@@ -1911,6 +1922,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             print(f"[livesim.advance] EXC pre {d}:\n{last_err[:1500]}")
         day += pd.Timedelta(days=1)
 
+    _TMR["loop"] = time.perf_counter() - _t_loop0
     if appended == 0 and last_err is not None:
         raise RuntimeError(last_err)                         # nič sa nepodarilo → ukáž skutočnú chybu
 
@@ -1953,6 +1965,14 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 today_soc_ts=today_soc_ts,
                 settings_sig=sig_s)
     _save_meta_atomic(meta_path, meta)
+
+    if os.environ.get("LIVESIM_TIMING") == "1":
+        _adv_total = time.perf_counter() - _T_ADV0
+        _other = max(0.0, _adv_total - _TMR["loop"] - _TMR["minload"])
+        print(f"[ADVANCE-TIMING] case={case} profile={profile} appended={appended} "
+              f"| total={_adv_total*1000:.0f}ms minload={_TMR['minload']*1000:.0f}ms "
+              f"loop={_TMR['loop']*1000:.0f}ms (z toho io={_TMR['io']*1000:.0f}ms "
+              f"effectdb={_TMR['effectdb']*1000:.0f}ms) setup+ostatne={_other*1000:.0f}ms")
 
     cum_dt = cum_dt_done + today_dt
     cum_rt = cum_rt_done + today_rt

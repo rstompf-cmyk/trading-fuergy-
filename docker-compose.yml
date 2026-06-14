@@ -128,6 +128,9 @@ services:
       PORT: "8000"
       # Dev flag pre prip. UI banner ze ide o dev (appka moze citat ENV=dev)
       ENV: "dev"
+      # Krok 0 merania (2026-06-14): zapne [ADVANCE-TIMING] summary log v livesim.advance
+      # (total/minload/loop/io/effectdb). LEN na deve 8001 - prod 8000 ho nema = nulovy dopad.
+      LIVESIM_TIMING: "1"
       # Uloha #7 BG-ALL-PROFILES: VYPNUTE (0). bg-all kazdy tick prepisoval meta neaktivnych
       # profilov -> render-cache padla -> navrat na profil = prepocet (presne to co nechceme).
       # So zmrazenou metou neaktivneho profilu sedi mtime -> cache hit = okamzity navrat.
