@@ -433,6 +433,22 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         A_ub.append(row_im)
         b_ub.append(float(max_import_kwh_day))
 
+    # Bug GRID-LIMIT-TOTAL (2026-06-14): per-slot CELKOVÝ grid import/export ≤ sieťový
+    # limit. Per-stream bounds (IM_DAM≤g_im, IM_VDT≤g_im) inak dovolia súčet až 2×limit
+    # → plán prekročí grid_kw_import/export a guard #625-C ho zhodí. Tu obmedzíme TOTAL
+    # (DAM+VDT) na slot na fyzický limit siete pre import aj export.
+    for i in range(T):
+        _row_im_t = np.zeros(n)
+        _row_im_t[idx(IM_DAM, i)] = 1.0
+        _row_im_t[idx(IM_VDT, i)] = 1.0
+        A_ub.append(_row_im_t)
+        b_ub.append(g_im_kwh)
+        _row_ex_t = np.zeros(n)
+        _row_ex_t[idx(EX_DAM, i)] = 1.0
+        _row_ex_t[idx(EX_VDT, i)] = 1.0
+        A_ub.append(_row_ex_t)
+        b_ub.append(g_ex_kwh)
+
     # Bounds — toggle gating je na sub-streams (EX_FTV/EX_BATT/IM_LOAD/IM_BATT).
     # Aplikujeme aj per-slot mults (× šablóna) a ďalšie flagy parity s optimizer.optimize_day:
     #   - allow_curtail=False → CU = 0

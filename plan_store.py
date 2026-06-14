@@ -200,6 +200,12 @@ def save_plan(date_iso: str, step_min: int, kind: str, *,
     # Bug #625-C (2026-06-09): plán NESMIE prekročiť fyzické limity batérie/siete.
     # Hard invariant pred zápisom — chráni pred bordelom v Joint LP / × šablónach / VDT mergi
     # ktorý by skončil ako nereálna nominácia obchodu = pokuta.
+    # Bug GRID-LIMIT-SOFT (2026-06-14): predtým HARD raise pri prekročení limitu →
+    # celý deň skončil ako CHYBA (žiadny plán). Teraz hodnoty ORŽEME na fyzický limit
+    # (batt aj grid import/export) + uložíme oranžovú poznámku do meta.plan_warnings →
+    # plán VZNIKNE s obmedzením, UI ukáže oranžové upozornenie namiesto červenej chyby.
+    # (Po fixe GRID-LIMIT-BATCH/TOTAL by LP už nemal limit prekročiť — toto je poistka.)
+    _plan_warnings = []
     try:
         _bk_max = float((params or {}).get("batt_kw", 0.0) or 0.0)
         _gke = (params or {}).get("grid_kw_export", None)
@@ -207,43 +213,43 @@ def save_plan(date_iso: str, step_min: int, kind: str, *,
         _gke = float(_gke) if _gke not in (None, "") else None
         _gki = float(_gki) if _gki not in (None, "") else None
         _step_h = max(int(step_min), 1) / 60.0
-        # batt_kw: kWh/perióda → kW; ale uložené je už batt_kw v plánoch (po Bug #614 fix).
-        # Detekuj jednotku heuristicky: ak max(|batt|) > 2× batt_kw_max je to asi kWh/perióda.
-        _batt_arr = schedule.get("batt_kw") or schedule.get("batt") or []
-        if _bk_max > 0 and _batt_arr:
+        # batt: orezať na ±batt_kw
+        _batt_key = "batt_kw" if "batt_kw" in schedule else ("batt" if "batt" in schedule else None)
+        if _bk_max > 0 and _batt_key and schedule.get(_batt_key):
+            _batt_arr = schedule[_batt_key]
             _peak_batt = max((abs(float(x or 0.0)) for x in _batt_arr), default=0.0)
-            # Tolerancia 1% — float roundoff je OK, väčšie prekročenie = bug
             if _peak_batt > _bk_max * 1.01:
-                raise ValueError(
-                    f"[save_plan #625-C] batt plán prekročil batt_kw_max: "
-                    f"peak={_peak_batt:.1f} kW > limit {_bk_max:.1f} kW "
-                    f"(profile={resolve_profile(profile)}, day={date_iso}, kind={kind})"
-                )
-        # grid_kwh per perióda — limit = grid_kw_{export,import} × step_h
-        _grid_arr = schedule.get("grid_kwh") or schedule.get("grid") or []
-        if _grid_arr and (_gke is not None or _gki is not None):
+                schedule[_batt_key] = [max(-_bk_max, min(_bk_max, float(x or 0.0))) for x in _batt_arr]
+                _plan_warnings.append(
+                    f"batt orezaný na ±{_bk_max:.0f} kW (peak v pláne bol {_peak_batt:.0f} kW)")
+        # grid_kwh per perióda — orezať na grid_kw_{export,import} × step_h (import aj export)
+        _grid_key = "grid_kwh" if "grid_kwh" in schedule else ("grid" if "grid" in schedule else None)
+        if _grid_key and schedule.get(_grid_key) and (_gke is not None or _gki is not None):
             _gke_kwh = (_gke * _step_h) if _gke is not None else None
             _gki_kwh = (_gki * _step_h) if _gki is not None else None
-            for _v in _grid_arr:
+            _new_grid = []
+            _ex_hit = _im_hit = 0.0
+            for _v in schedule[_grid_key]:
                 _val = float(_v or 0.0)
                 if _gke_kwh is not None and _val > _gke_kwh * 1.01:
-                    raise ValueError(
-                        f"[save_plan #625-C] grid export prekročil limit: "
-                        f"{_val:.1f} kWh/period > limit {_gke_kwh:.1f} kWh/period "
-                        f"({_gke:.0f} kW × {_step_h:.2f}h) "
-                        f"(profile={resolve_profile(profile)}, day={date_iso})"
-                    )
+                    _ex_hit = max(_ex_hit, _val); _val = _gke_kwh
                 if _gki_kwh is not None and _val < -_gki_kwh * 1.01:
-                    raise ValueError(
-                        f"[save_plan #625-C] grid import prekročil limit: "
-                        f"{_val:.1f} kWh/period < limit -{_gki_kwh:.1f} kWh/period "
-                        f"({_gki:.0f} kW × {_step_h:.2f}h) "
-                        f"(profile={resolve_profile(profile)}, day={date_iso})"
-                    )
-    except ValueError:
-        raise   # re-raise validation chyby
+                    _im_hit = min(_im_hit, _val); _val = -_gki_kwh
+                _new_grid.append(_val)
+            schedule[_grid_key] = _new_grid
+            if _ex_hit:
+                _plan_warnings.append(
+                    f"grid export orezaný na {_gke:.0f} kW (plán chcel {_ex_hit/_step_h:.0f} kW)")
+            if _im_hit:
+                _plan_warnings.append(
+                    f"grid import orezaný na {_gki:.0f} kW (plán chcel {abs(_im_hit)/_step_h:.0f} kW)")
+        if _plan_warnings:
+            meta = dict(meta or {})
+            meta["plan_warnings"] = _plan_warnings
+            print(f"[save_plan #625-C SOFT] {resolve_profile(profile)} {date_iso} ({kind}): "
+                  f"{'; '.join(_plan_warnings)} → plán uložený s obmedzením (oranžová poznámka)")
     except Exception as _e_inv:
-        # Pri inom probléme (chýbajúce kľúče) — log a pokračuj (fail-open pre nepoužité kľúče)
+        # Pri inom probléme (chýbajúce kľúče) — log a pokračuj (fail-open)
         print(f"[save_plan #625-C] invariant check skipped: {_e_inv}")
     body = {
         "date": str(date_iso),

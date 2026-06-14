@@ -1258,11 +1258,29 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
                 try:
                     path = fut.result()
                     ok_cnt += 1
-                    yield (f"<tr><td>{i}/{total}</td>"
-                            f"<td style='color:#2E7D32;font-weight:600'>✓ {d_iso}</td>"
-                            f"<td>OK</td><td><code>{path}</code></td>"
-                            f"<td><a href='/plan_view?date={d_iso}&step={int(step_min)}&kind={kind}' target='_blank'>zobraziť →</a></td></tr>"
-                            f"<script>document.getElementById('pf').style.width='{pct}%';</script>")
+                    # Bug GRID-LIMIT-SOFT: ak plán vznikol s obmedzením (clip na sieťové
+                    # limity), save_plan zapísal meta.plan_warnings → ukáž ORANŽOVÝ riadok
+                    # (plán existuje, ale bol obmedzený), nie zelené OK ani červenú chybu.
+                    _pw = []
+                    try:
+                        _pl_chk = ps.load_plan(d_iso, int(step_min), str(kind))
+                        _pw = ((_pl_chk or {}).get("meta") or {}).get("plan_warnings") or []
+                    except Exception:
+                        _pw = []
+                    if _pw:
+                        _wmsg = ("; ".join(str(x) for x in _pw)).replace("<", "&lt;").replace(">", "&gt;")
+                        yield (f"<tr><td>{i}/{total}</td>"
+                                f"<td style='color:#E67E22;font-weight:600'>⚠ {d_iso}</td>"
+                                f"<td style='color:#E67E22;font-weight:600'>OBMEDZENÝ</td>"
+                                f"<td style='color:#B9770E'>{_wmsg}<br><code>{path}</code></td>"
+                                f"<td><a href='/plan_view?date={d_iso}&step={int(step_min)}&kind={kind}' target='_blank'>zobraziť →</a></td></tr>"
+                                f"<script>document.getElementById('pf').style.width='{pct}%';</script>")
+                    else:
+                        yield (f"<tr><td>{i}/{total}</td>"
+                                f"<td style='color:#2E7D32;font-weight:600'>✓ {d_iso}</td>"
+                                f"<td>OK</td><td><code>{path}</code></td>"
+                                f"<td><a href='/plan_view?date={d_iso}&step={int(step_min)}&kind={kind}' target='_blank'>zobraziť →</a></td></tr>"
+                                f"<script>document.getElementById('pf').style.width='{pct}%';</script>")
                 except Exception as ex:
                     fail_cnt += 1
                     msg = str(ex)[:200].replace("<", "&lt;").replace(">", "&gt;")
