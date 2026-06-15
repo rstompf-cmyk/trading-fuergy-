@@ -4555,6 +4555,7 @@ def _livesim_bg_tick():
         # Skip ak GET worker profil počíta. FLAG-GATED, default OFF (najprv dev 8001).
         if os.environ.get("LIVESIM_BG_ALL") == "1":
             try:
+                _cold_done_this_tick = False
                 for _p2 in _livesim_bg_profiles():
                     if _p2 == _act_bg:
                         continue
@@ -4565,8 +4566,16 @@ def _livesim_bg_tick():
                         _csvp2, _ = lsim.paths(case, _PORT, _p2)
                     except Exception:
                         continue
+                    # WARM-COLD (2026-06-15, user: "prepnutie profilu stale pocita desiatky
+                    # sekund"): predzohrej AJ profily bez CSV (cold), nielen existujuce.
+                    # Predtym sa cold profily nikdy nezohriali -> prve otvorenie = full backfill
+                    # desiatky s. Teraz ich dopocita bg, ale LEN JEDEN cold za tick (ziadny
+                    # stampede) -> postupne sa zohrievaju vsetky -> prepnutie = cache hit.
                     if not os.path.exists(_csvp2):
-                        continue          # čerstvý profil → nechaj na GET (žiadny stampede)
+                        if _cold_done_this_tick:
+                            continue                       # max 1 cold backfill za tick
+                        _cold_done_this_tick = True
+                        print(f"[livesim-bg WARM-COLD] dopocitavam cold profil {_p2} (prvy backfill)...")
                     _livesim_bg_tick_one(case, start, _bc, _st, live, _p2)
             except Exception as _e_all:
                 print(f"[livesim-bg ALL] {_e_all}")
