@@ -8099,67 +8099,49 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             #   1. vdt_paper_trades.csv per slot weighted-mean cena (executed)
             #   2. OKTE final_15m (clearing, T-1 = real)
             #   3. OKTE preliminary (broken na 0, ale future-proof fallback)
+            # VDT-PRICE-EXEC (2026-06-15, revert VDT-PRICE-MARKET): VDT €/MWh stĺpec =
+            # EXEKUČNÁ cena paper tradov per slot (vážený priemer price_predicted_eur),
+            # "—" ak v slote nebol VDT obchod. User chce overiť ZA AKÚ CENU sa reálne
+            # kupovalo/predávalo. Trhová OKTE referencia mýlila — pre dnešok je len
+            # predbežná a ukazuje nezmysly (napr. 300 €/MWh na poludnie keď DAM=3).
             try:
-                _all_vdt_nan = (("vdt_eur" not in _agg.columns)
-                                or _agg.get("vdt_eur", pd.Series([0])).isna().all()
-                                or (_agg.get("vdt_eur", pd.Series([0])).abs() < 0.01).all())
-                if _all_vdt_nan:
-                    import seps_sk as _ss_v
-                    # ─── PRIMARY: paper trade executed prices ────────────────
-                    _paper_prices_96 = None
+                import vdt_live_advisor as _vla_t
+                import csv as _csv_t
+                _ptp = (_vla_t.paper_trades_csv_path(_active_profile_eff)
+                        if _active_profile_eff else None)
+                _exec_pw = {}   # "HH:MM" -> [sum(price*kwh), sum(kwh)]
+                if _ptp and os.path.exists(_ptp):
+                    _vd_iso = str(view_day)[:10]
+                    with open(_ptp, encoding="utf-8", newline="") as _f:
+                        for _row in _csv_t.DictReader(_f):
+                            if str(_row.get("profile") or "") != _active_profile_eff:
+                                continue
+                            if str(_row.get("ts", ""))[:10] != _vd_iso:
+                                continue
+                            if str(_row.get("action", "")).upper() not in (
+                                    "BUY", "CHARGE", "SELL", "DISCHARGE"):
+                                continue
+                            try:
+                                _kwh_t = abs(float(_row.get("kwh") or 0))
+                                _pr_t = float(_row.get("price_predicted_eur") or 0)
+                                _sl_t = str(_row.get("slot", ""))
+                                _key_t = f"{int(_sl_t[:2]):02d}:{int(_sl_t[3:5]):02d}"
+                            except (TypeError, ValueError):
+                                continue
+                            if _kwh_t <= 0:
+                                continue
+                            _acc = _exec_pw.setdefault(_key_t, [0.0, 0.0])
+                            _acc[0] += _pr_t * _kwh_t
+                            _acc[1] += _kwh_t
+                # Override vdt_eur stĺpec: exekučná cena kde bol obchod, inak 0 → "—"
+                def _vdt_exec_from_slot(ts):
                     try:
-                        import vdt_state as _vs_pp
-                        from core.profile_resolver import get_active as _ga_pp
-                        _prof_pp = _ga_pp()
-                        if _prof_pp:
-                            _paper_prices_96 = _vs_pp.get_realized_prices_per_slot(
-                                _prof_pp, view_day)
+                        _t = pd.Timestamp(ts)
+                        _a = _exec_pw.get(f"{_t.hour:02d}:{_t.minute:02d}")
+                        return (_a[0] / _a[1]) if (_a and _a[1] > 0) else 0.0
                     except Exception:
-                        _paper_prices_96 = None
-                    _has_paper = (_paper_prices_96 is not None
-                                  and any(p == p for p in _paper_prices_96))   # any non-NaN
-                    if _has_paper:
-                        # Zapis paper trade ceny do _agg priamo (bypass _vdt_map dict lookup)
-                        def _paper_from_slot(ts):
-                            try:
-                                _t = pd.Timestamp(ts)
-                                idx = min(95, max(0, (_t.hour * 60 + _t.minute) // 15))
-                                v = _paper_prices_96[idx]
-                                return float(v) if v == v else 0.0   # NaN → 0
-                            except Exception:
-                                return 0.0
-                        _agg["vdt_eur"] = _agg["_slot_ts"].map(_paper_from_slot)
-                        _vdt_map = {}   # skip OKTE fallback
-                    else:
-                        def _is_useful(_m):
-                            if not _m: return False
-                            return any(abs(float(v or 0)) > 0.01 for v in _m.values())
-                        _vdt_map = _ss_v.load_okte_vdt_for_day(view_day) or {}
-                        if not _is_useful(_vdt_map):
-                            _vdt_map = _ss_v.load_okte_vdt_preliminary_for_day(view_day) or {}
-                        if not _is_useful(_vdt_map):
-                            _vdt_map = {}   # vsetko 0 → skip
-                    if _vdt_map:
-                        # Sample key na detekciu formatu
-                        _sample_key = next(iter(_vdt_map.keys()), "")
-                        _is_full_ts = len(_sample_key) >= 16   # "YYYY-MM-DD HH:MM:SS"
-                        def _vdt_from_slot(ts):
-                            try:
-                                _t = pd.Timestamp(ts)
-                                if _is_full_ts:
-                                    # Skús full timestamp formaty
-                                    key1 = _t.strftime("%Y-%m-%d %H:%M:%S")
-                                    key2 = _t.strftime("%Y-%m-%d %H:%M:00")
-                                    v = _vdt_map.get(key1)
-                                    if v is None:
-                                        v = _vdt_map.get(key2)
-                                    return float(v) if v is not None else 0.0
-                                else:
-                                    key = f"{_t.hour:02d}:{_t.minute:02d}"
-                                    return float(_vdt_map.get(key, 0.0))
-                            except Exception:
-                                return 0.0
-                        _agg["vdt_eur"] = _agg["_slot_ts"].map(_vdt_from_slot)
+                        return 0.0
+                _agg["vdt_eur"] = _agg["_slot_ts"].map(_vdt_exec_from_slot)
             except Exception:
                 pass
             # Bug GG: query param ?table_offset=N + ?table_rows=M pre scroll do minulosti
@@ -8273,12 +8255,17 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             CT = "[" + ",".join(f"{x:.2f}" for x in _cum_df_db["cum_total"]) + "]"
             CD = "[" + ",".join(f"{x:.2f}" for x in _cum_df_db["cum_dt"]) + "]"
             CR = "[" + ",".join(f"{x:.2f}" for x in _cum_df_db["cum_rt"]) + "]"
+            # VDT-IN-CHART (2026-06-15): VDT séria do grafu „Zisk za obdobie" (kumulatív z effect_db)
+            _cv = _cum_df_db["cum_vdt"] if "cum_vdt" in _cum_df_db.columns else (_cum_df_db["cum_total"] * 0)
+            CV = "[" + ",".join(f"{x:.2f}" for x in _cv) + "]"
         else:
             # Fallback: minútový grid z CSV (legacy, pre profily bez DB záznamov)
             L = "[" + ",".join(f"'{str(t)[5:16]}'" for t in dfull["time"]) + "]"
             CT = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_total"].fillna(0)) + "]"
             CD = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_dt"].fillna(0)) + "]"
             CR = "[" + ",".join(f"{x:.2f}" for x in dfull["cum_rt"].fillna(0)) + "]"
+            CV = ("[" + ",".join(f"{x:.2f}" for x in dfull["cum_vdt_arb"].fillna(0)) + "]"
+                  if "cum_vdt_arb" in dfull.columns else "[" + ",".join(["0"] * len(dfull)) + "]")
         # ── BASELINE per minúta (kumulatívne) — z DECIMOVANÝCH dát len pre CHART display ──
         # Pre PRESNÉ agregáty (denné, total) používame dfull_full nižšie.
         _bl_per_min = None
@@ -8351,7 +8338,11 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             # Pripoj baseline z CSV agregátu (DB má len lokálny effect_daily baseline)
             _bl_by_day = (_src_for_daily.groupby("date")["_bl"].sum().reset_index()
                            if "_bl" in _src_for_daily.columns else pd.DataFrame())
-            _daily = _daily_db.rename(columns={"date": "date"})[["date", "dt", "rt"]].copy()
+            # VDT-IN-CHART: zachovaj vdt_arb z effect_db ak je
+            _dcols = ["date", "dt", "rt"] + (["vdt_arb"] if "vdt_arb" in _daily_db.columns else [])
+            _daily = _daily_db.rename(columns={"date": "date"})[_dcols].copy()
+            if "vdt_arb" in _daily.columns:
+                _daily = _daily.rename(columns={"vdt_arb": "vdt"})
             if not _bl_by_day.empty:
                 _daily["date"] = _daily["date"].astype(str)
                 _bl_by_day["date"] = _bl_by_day["date"].astype(str)
@@ -8366,10 +8357,22 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _src_for_daily["_rt_eff"] = _get_rt_d(_src_for_daily, joint_flags=_eff_joint)
             _daily = _src_for_daily.groupby("date").agg(dt=("dt_rev_min", "sum"), rt=("_rt_eff", "sum"),
                                                           bl=("_bl", "sum")).reset_index()
+        # VDT-IN-CHART: zabezpeč vdt stĺpec (z minútového vdt_arb_min ak DB nemala)
+        if "vdt" not in _daily.columns:
+            if "vdt_arb_min" in _src_for_daily.columns:
+                _vd = (_src_for_daily.groupby("date")["vdt_arb_min"].sum()
+                       .reset_index().rename(columns={"vdt_arb_min": "vdt"}))
+                _vd["date"] = _vd["date"].astype(str)
+                _daily["date"] = _daily["date"].astype(str)
+                _daily = _daily.merge(_vd, on="date", how="left")
+            else:
+                _daily["vdt"] = 0.0
+        _daily["vdt"] = _daily["vdt"].fillna(0)
         _daily["total"] = _daily["dt"].fillna(0) + _daily["rt"].fillna(0)
         DL = "[" + ",".join(f"'{str(x)}'" for x in _daily["date"]) + "]"
         DD = "[" + ",".join(f"{x:.2f}" for x in _daily["dt"].fillna(0)) + "]"
         DR = "[" + ",".join(f"{x:.2f}" for x in _daily["rt"].fillna(0)) + "]"
+        DV = "[" + ",".join(f"{x:.2f}" for x in _daily["vdt"].fillna(0)) + "]"
         DT_= "[" + ",".join(f"{x:.2f}" for x in _daily["total"]) + "]"
         DB = "[" + ",".join(f"{x:.2f}" for x in _daily["bl"].fillna(0)) + "]"
         # 15-min detail pre view_day: aggregát z PLNEJ resolution (1440 min/deň).
@@ -8408,18 +8411,22 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                                        get_rt_eur_series as _get_rt_de)
             _det_with_bl = _det_with_bl.copy()
             _det_with_bl["_rt_eff"] = _get_rt_de(_det_with_bl, joint_flags=_eff_joint)
+            # VDT-IN-CHART: agreguj minútový vdt_arb_min na 15-min slot ak je v zdroji
+            if "vdt_arb_min" not in _det_with_bl.columns:
+                _det_with_bl["vdt_arb_min"] = 0.0
             _det = (_det_with_bl.groupby("ts15").agg(dt=("dt_rev_min", "sum"), rt=("_rt_eff", "sum"),
-                                                       bl=("_bl", "sum"))
+                                                       vdt=("vdt_arb_min", "sum"), bl=("_bl", "sum"))
                     .reset_index().sort_values("ts15"))
             _det["total"] = _det["dt"].fillna(0) + _det["rt"].fillna(0)
             SL = "[" + ",".join(f"'{str(x)[11:16]}'" for x in _det["ts15"]) + "]"
             SDD = "[" + ",".join(f"{x:.3f}" for x in _det["dt"].fillna(0)) + "]"
             SDR = "[" + ",".join(f"{x:.3f}" for x in _det["rt"].fillna(0)) + "]"
+            SDV = "[" + ",".join(f"{x:.3f}" for x in _det["vdt"].fillna(0)) + "]"
             SDT = "[" + ",".join(f"{x:.3f}" for x in _det["total"]) + "]"
             SDB = "[" + ",".join(f"{x:.3f}" for x in _det["bl"].fillna(0)) + "]"
             det_label = f"Detail {view_day} (15 min)"
         else:
-            SL = "[]"; SDD = "[]"; SDR = "[]"; SDT = "[]"; SDB = "[]"; det_label = "Detail dňa (15 min)"
+            SL = "[]"; SDD = "[]"; SDR = "[]"; SDV = "[]"; SDT = "[]"; SDB = "[]"; det_label = "Detail dňa (15 min)"
         _exp_case = r.get("case", "plan_d1") if isinstance(r, dict) else "plan_d1"
         _exp_url = f"/livesim/chC_export?case={_exp_case}" + (f"&view={view_day}" if view_day else "")
         _exp_pdf_url = f"/livesim/chC_export_pdf?case={_exp_case}" + (f"&view={view_day}" if view_day else "")
@@ -8437,9 +8444,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                f"</h2>"
                f"<div style='height:320px'><canvas id='chC'></canvas></div>"
                f"<script>(function(){{"
-               f"const L={L}, CT={CT}, CD={CD}, CR={CR}, CB={CB};"
-               f"const DL={DL}, DD={DD}, DR={DR}, DT_={DT_}, DB={DB};"
-               f"const SL={SL}, SDD={SDD}, SDR={SDR}, SDT={SDT}, SDB={SDB};"
+               f"const L={L}, CT={CT}, CD={CD}, CR={CR}, CV={CV}, CB={CB};"
+               f"const DL={DL}, DD={DD}, DR={DR}, DV={DV}, DT_={DT_}, DB={DB};"
+               f"const SL={SL}, SDD={SDD}, SDR={SDR}, SDV={SDV}, SDT={SDT}, SDB={SDB};"
                f"let mode='cum', chC_inst=null;"
                f"const mk=()=>{{ if(chC_inst){{chC_inst.destroy();chC_inst=null;}}"
                f" const ctx=document.getElementById('chC').getContext('2d');"
@@ -8448,6 +8455,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                f"   {{label:'Spolu €',data:CT,borderColor:'#2E7D32',borderWidth:2,pointRadius:0,tension:.1}},"
                f"   {{label:'DT €',data:CD,borderColor:'#1F4E78',borderWidth:1.5,borderDash:[5,3],pointRadius:0,tension:.1}},"
                f"   {{label:'Odchýlka €',data:CR,borderColor:'#C49000',borderWidth:1.5,borderDash:[5,3],pointRadius:0,tension:.1}},"
+               f"   {{label:'VDT €',data:CV,borderColor:'#8E24AA',borderWidth:1.5,borderDash:[5,3],pointRadius:0,tension:.1}},"
                f"   {{label:'Baseline € (bez bat. + plánu)',data:CB,borderColor:'#7a5d00',borderWidth:1.8,borderDash:[2,3],pointRadius:0,tension:.1}}]}},"
                f"   options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},"
                f"   layout:{{padding:{{right:55}}}},"
@@ -8456,6 +8464,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                f"  chC_inst=new Chart(ctx,{{type:'bar',data:{{labels:DL,datasets:["
                f"   {{label:'DT €',data:DD,backgroundColor:'rgba(31,78,120,.75)',stack:'s'}},"
                f"   {{label:'Odchýlka €',data:DR,backgroundColor:'rgba(196,144,0,.75)',stack:'s'}},"
+               f"   {{label:'VDT €',data:DV,backgroundColor:'rgba(142,36,170,.75)',stack:'s'}},"
                f"   {{type:'line',label:'Spolu €',data:DT_,borderColor:'#2E7D32',borderWidth:2,pointRadius:3,tension:0}},"
                f"   {{type:'line',label:'Baseline € (bez bat. + plánu)',data:DB,borderColor:'#7a5d00',borderWidth:2,pointRadius:3,borderDash:[4,3],tension:0}}]}},"
                f"   options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},"
@@ -8465,6 +8474,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                f"  chC_inst=new Chart(ctx,{{type:'bar',data:{{labels:SL,datasets:["
                f"   {{label:'DT €/15min',data:SDD,backgroundColor:'rgba(31,78,120,.75)',stack:'s'}},"
                f"   {{label:'Odchýlka €/15min',data:SDR,backgroundColor:'rgba(196,144,0,.75)',stack:'s'}},"
+               f"   {{label:'VDT €/15min',data:SDV,backgroundColor:'rgba(142,36,170,.75)',stack:'s'}},"
                f"   {{type:'line',label:'Spolu €/15min',data:SDT,borderColor:'#2E7D32',borderWidth:2,pointRadius:2,tension:0}},"
                f"   {{type:'line',label:'Baseline €/15min (bez bat. + plánu)',data:SDB,borderColor:'#7a5d00',borderWidth:2,pointRadius:2,borderDash:[4,3],tension:0}}]}},"
                f"   options:{{responsive:true,maintainAspectRatio:false,interaction:{{mode:'index',intersect:false}},"
