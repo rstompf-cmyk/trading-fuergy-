@@ -4288,14 +4288,15 @@ def _auto_regen_stale_plans(case: str, port: str = None, profile=None) -> list:
         except Exception as _e_regen:
             print(f"[SOC-CONT-V3] auto-regen {d_iso} zlyhal: {_e_regen}")
     if regen:
-        # Bug CACHE-WIPE-2 (2026-06-15): invaliduj LEN tento profil, NIE celý case! Pôvodné
-        # invalidate(case) mazalo cache VŠETKÝCH profilov pri každom auto-regene (beží takmer
-        # každý bg tick) → n_cache stále padal → "jedno prepnutie rýchle, potom zas počíta".
-        # Ostatné profily ostanú teplé; len tento sa prepočíta (jeho plán sa zmenil).
+        # Bug CACHE-WIPE-2 + STALE-NOT-DROP (2026-06-15): po auto-regene NEodstraňuj cache entry
+        # (to spôsobilo plnú progress stránku pri ďalšom otvorení — user: "preplo sa to naspäť do
+        # výpočtového") a NIE celý case (to mazalo ostatné profily). Namiesto toho len TENTO profil
+        # OZNAČ ako stale (mtime=-1) a NECHAJ staré r → SWITCH-INSTANT vráti staré dáta + banner
+        # "prepočítava sa", bg medzitým prepočíta čerstvé. Žiadny skok do výpočtovej stránky.
         with _LIVESIM_R_CACHE_LOCK:
             for _k in list(_LIVESIM_R_CACHE.keys()):
-                if _k[0] == case and _k[2] == str(profile or ""):
-                    _LIVESIM_R_CACHE.pop(_k, None)
+                if _k[0] == case and _k[2] == str(profile or "") and _LIVESIM_R_CACHE.get(_k):
+                    _LIVESIM_R_CACHE[_k] = (-1.0, _LIVESIM_R_CACHE[_k][1])
     return regen
 
 
@@ -6721,9 +6722,16 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
             _sb_run = int(_t_sb.time() - float((r.get("_stale_since") if isinstance(r, dict) else None)
                                                or _cw_live.get("started") or _t_sb.time()))
             _pgl = _cw_live.get("progress") or {}
-            # progress z workera ak beží, inak z pokrytia dní
-            _dl = int(_pgl.get("done", 0)) or _cov_done
-            _tl = int(_pgl.get("total", 0)) or _cov_total
+            # PROGRESS-LIVE (2026-06-15, user: "ked sa pocita nech ukaze realne % napr 20%, nie 100%"):
+            # keď beží worker, ukáž JEHO reálny progres (done/total). Pôvodné `done or cov_done`
+            # pri done=0 (čerstvý štart) spadlo na cov_done (15/15 = 100%) → bar ukázal 100% hoci
+            # sa práve začalo počítať. Keď worker NEbeží, ukáž pokrytie dní (data-completeness).
+            if _running and int(_pgl.get("total", 0)) > 0:
+                _dl = int(_pgl.get("done", 0))
+                _tl = max(1, int(_pgl.get("total", 0)))
+            else:
+                _dl = _cov_done
+                _tl = _cov_total
             _barl = ""
             if _tl > 0:
                 _pctl = max(0, min(100, int(_dl / _tl * 100)))
