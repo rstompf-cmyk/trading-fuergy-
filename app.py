@@ -6187,6 +6187,8 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 days = days + [pdate]
                 days = sorted(set(days))
         view_day = view or (prov if prov else (days[-1].isoformat() if days else None))
+        import time as _t_rt
+        _t_render_ls = _t_rt.perf_counter()
         dfull = lsim.load_series(case, port=_PORT)
         # `trace_full` drží plnú minútovú resolution (predtým decimovanú do dview),
         # aby denné agregáty (FTV výroba, Zisk za deň) neboli podhodnotené 2-3×.
@@ -6206,6 +6208,9 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
             dview = tdf
         else:
             dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=2000) if view_day else dfull
+        if os.environ.get("LIVESIM_TIMING") == "1":
+            print(f"[RENDER-TIMING] {case} load_series = {(_t_rt.perf_counter()-_t_render_ls)*1000:.0f}ms "
+                  f"dfull_rows={len(dfull) if dfull is not None else 0}")
         # Bug X (2026-06-07): VŽDY re-aplikuj VDT agregát ako single source of truth.
         # CSV stĺpce plan_batt_vdt_kw/plan_batt_dam_kw môžu byť outdated alebo NaN pre
         # staré minúty pred Bug V deploy. Plus VDT trades sa môžu pridať / zmeniť po
@@ -7037,11 +7042,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     _agg_src = None
     if trace_full is not None and not trace_full.empty:
         _agg_src = trace_full
-    elif dfull_full is not None and not dfull_full.empty and view_day:
+    elif view_day:
+        # ONE-DAY-LOAD (2026-06-15): agregát view-dňa = JEDEN deň z CSV/DB, nie filter celej
+        # histórie cez dfull_full. Súčasť "netahať kompletnu historiu — staci jeden den".
         try:
-            _dd = pd.Timestamp(view_day).date()
-            _df_day = dfull_full[dfull_full["time"].dt.date == _dd]
-            if not _df_day.empty:
+            _case_agg = r.get("case", "plan_d1") if isinstance(r, dict) else "plan_d1"
+            _df_day = lsim.load_series(_case_agg, port=_PORT, day=view_day, max_points=10**9)
+            if _df_day is not None and not _df_day.empty:
                 _agg_src = _df_day
         except Exception:
             _agg_src = None
