@@ -4288,7 +4288,14 @@ def _auto_regen_stale_plans(case: str, port: str = None, profile=None) -> list:
         except Exception as _e_regen:
             print(f"[SOC-CONT-V3] auto-regen {d_iso} zlyhal: {_e_regen}")
     if regen:
-        _livesim_cache_invalidate(case)                     # projekcia sa prepočíta s novým plánom
+        # Bug CACHE-WIPE-2 (2026-06-15): invaliduj LEN tento profil, NIE celý case! Pôvodné
+        # invalidate(case) mazalo cache VŠETKÝCH profilov pri každom auto-regene (beží takmer
+        # každý bg tick) → n_cache stále padal → "jedno prepnutie rýchle, potom zas počíta".
+        # Ostatné profily ostanú teplé; len tento sa prepočíta (jeho plán sa zmenil).
+        with _LIVESIM_R_CACHE_LOCK:
+            for _k in list(_LIVESIM_R_CACHE.keys()):
+                if _k[0] == case and _k[2] == str(profile or ""):
+                    _LIVESIM_R_CACHE.pop(_k, None)
     return regen
 
 
