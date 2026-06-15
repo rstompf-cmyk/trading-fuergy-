@@ -362,56 +362,75 @@ def job_vdt_advisor():
                     # iba dáta z full_plan / dam_commits z cache (best-effort).
                     # Tu len LOG signál "stalo sa to" — nebudeme prepočítavať LP.
                     fp = res.get("full_plan", []) or []
-                    # Bug VDT-EXTRA-ONLY (Koreň 1, 2026-06-15): NEloguj CELÝ plán ako VDT obchody!
-                    # Pôvodne sa KAŽDÝ slot full_planu (DAM+VDT) zalogoval ako VDT paper trade
-                    # s order-book cenou (0/200/147 pre nelikvidné sloty) → "VDT obchody" obsahovali
-                    # DAM nomináciu za nezmyselné ceny → falošná strata (user: "nákup za 200/300 je
-                    # mimo"). Loguj LEN VDT EXTRA nad DAM nomináciou (= reálna arbitráž) pri jej VDT
-                    # cene. DAM časť patrí do "z toho DT", nie do VDT.
+                    # Bug VDT-REAL-CLOSED (2026-06-15, user: "ledger = všetky reálne uzavreté
+                    # obchody; každý nákup/predaj má mať svoju reálnu cenu a nesmie byť 0").
+                    # Pôvodne sa logoval CELÝ forward full_plan každý tick → 3 chyby:
+                    #   (1) phantom churn — UPSERT(slot,action) hromadil naprieč tickmi aj nákup
+                    #       aj predaj toho istého slotu z rôznych (flip-flop) návrhov;
+                    #   (2) "budúce sloty ako uzavreté" — forward návrhy zapísané ako obchody;
+                    #   (3) cena 0 — cena sa brala podľa smeru extra-voči-DAM, ktorý sa
+                    #       nezhodoval s entry.buy_price/sell_price (tie patria k VLASTNÉMU smeru
+                    #       optimizera) → None → 0.
+                    # Teraz: loguj LEN AKTUÁLNY (uzavretý) 15-min slot, cena = entry.buy_price
+                    # (charge) / entry.sell_price (discharge) = reálna order-book cena daného
+                    # obchodu. Ak cena chýba / je 0 → obchod NElogujeme (nikdy nie 0).
+                    # Min_spread ziskovosť rieši optimizer (hurdle v coeff_d/coeff_c).
                     try:
-                        import d1_planner as _d1c_sx
                         import datetime as _dt_sx
-                        _dam_sx = _d1c_sx.get_dam_commitments(_dt_sx.date.today(),
-                                                              profile=prof_name, basis="batt")
+                        try:
+                            from zoneinfo import ZoneInfo as _ZI_sx
+                            _now_sx = _dt_sx.datetime.now(_ZI_sx("Europe/Bratislava"))
+                        except Exception:
+                            _now_sx = _dt_sx.datetime.now()
+                        _cur_slot_sx = f"{_now_sx.hour:02d}:{(_now_sx.minute // 15) * 15:02d}"
                     except Exception:
-                        _dam_sx = None
-                    _last_idx_l = -1
+                        _cur_slot_sx = None
+                    # DAM clearing pre aktuálny slot → do DB (aby 'z toho VDT' arbitráž
+                    # vs DAM vedela vyjsť; predtým NULL). VDT-DAM-COL (2026-06-15).
+                    _dam_clr_cur = 0.0
+                    try:
+                        import seps_sk as _ss_sx
+                        _dam_map_sx = _ss_sx.load_okte_dt_for_day(
+                            _dt_sx.date.today().isoformat()) or {}
+                        if _cur_slot_sx and _dam_map_sx:
+                            _k_sx = f"{_dt_sx.date.today().isoformat()} {_cur_slot_sx}:00"
+                            _dam_clr_cur = float(_dam_map_sx.get(_k_sx, 0.0) or 0.0)
+                    except Exception:
+                        _dam_clr_cur = 0.0
                     for entry in fp:
                         sl = str(entry.get("slot", ""))
                         if "-" not in sl or len(sl) < 5:
                             continue
+                        if _cur_slot_sx is None or sl.split("-")[0].strip() != _cur_slot_sx:
+                            continue                       # len AKTUÁLNY uzavretý slot
+                        action_e = str(entry.get("action", "")).lower()
+                        if action_e not in ("charge", "discharge"):
+                            continue
+                        kwh_e = abs(float(entry.get("kwh", 0) or 0))
+                        if kwh_e < 0.5:
+                            continue
+                        # reálna cena pre VLASTNÝ smer obchodu (nie extra-voči-DAM)
+                        _px_raw = (entry.get("buy_price") if action_e == "charge"
+                                   else entry.get("sell_price"))
+                        if _px_raw is None:
+                            continue                       # bez reálnej ceny NElogujeme (nie 0)
                         try:
-                            _h = int(sl[:2]); _m = int(sl[3:5])
-                            _idx = (_h * 60 + _m) // 15
-                        except Exception:
+                            _px = float(_px_raw)
+                        except (TypeError, ValueError):
                             continue
-                        if not (0 <= _idx < 96):
-                            continue
-                        if _last_idx_l >= 0 and _idx < _last_idx_l:
-                            break
-                        _last_idx_l = _idx
-                        kwh_e = float(entry.get("kwh", 0) or 0)
-                        action_e = entry.get("action", "")
-                        # net plánu v slote (+vybíja, −nabíja)
-                        _net_e = (kwh_e if action_e == "discharge"
-                                  else (-kwh_e if action_e == "charge" else 0.0))
-                        # VDT extra = plán − DAM nominácia (basis batt: +di −ch). DAM=DT, nie VDT.
-                        _dam_e = float(_dam_sx[_idx]) if (_dam_sx and _idx < len(_dam_sx)) else 0.0
-                        _extra_e = _net_e - _dam_e
-                        if abs(_extra_e) <= 0.5:
-                            continue                      # čisto DAM slot → žiadny VDT obchod
-                        _act_x = "discharge" if _extra_e > 0 else "charge"
-                        _px = float((entry.get("sell_price") if _extra_e > 0
-                                     else entry.get("buy_price")) or 0)
+                        if _px == 0:
+                            continue                       # 0 = neplatná cena → preskoč
                         _adv.append_extra_paper_trade(
                             profile=prof_name,
                             slot=sl,
-                            action=_act_x,
-                            kwh=abs(_extra_e),
+                            action=action_e,
+                            kwh=kwh_e,
                             price_eur_mwh=_px,
-                            reason=f"vdt_extra_{_act_x}",
+                            reason=f"vdt_{action_e}",
                             soc_pct=float(entry.get("soc_after_pct", 0) or 0),
+                            dam_clearing_eur_mwh=_dam_clr_cur,
                         )
+                        break                              # jeden obchod (aktuálny slot) stačí
                 except Exception as _e_sx:
                     pass   # logger zlyhal, ale advisor cache je OK — nezastavujeme
             else:

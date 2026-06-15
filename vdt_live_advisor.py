@@ -997,7 +997,8 @@ def _is_sk_market() -> bool:
 def append_extra_paper_trade(profile: str, slot: str, action: str,
                                 kwh: float, price_eur_mwh: float,
                                 reason: str, soc_pct: float = 0.0,
-                                profit_eur: float = 0.0) -> None:
+                                profit_eur: float = 0.0,
+                                dam_clearing_eur_mwh: float = 0.0) -> None:
     """UPSERT jednej extra (CURTAIL_FTV / LOAD_COVER / BUY / SELL) akcie do paper trading CSV.
 
     Plánované VDT extras sa zapisujú pri každom advisor cron-tick (5-min) pre celý
@@ -1121,7 +1122,10 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
     if not header:
         header = ["ts", "profile", "slot", "action", "kw", "kwh",
                   "price_predicted_eur", "soc_before_pct", "soc_after_pct",
-                  "soc_source", "profit_eur_rest_of_day"]
+                  "soc_source", "profit_eur_rest_of_day", "dam_clearing_eur_mwh"]
+    # VDT-DAM-COL (2026-06-15): doplň stĺpec dam_clearing_eur_mwh do starej hlavičky
+    elif "dam_clearing_eur_mwh" not in header:
+        header = list(header) + ["dam_clearing_eur_mwh"]
 
     # 2) Pripoj nový (najnovší) riadok
     dt_h = 0.25
@@ -1138,6 +1142,7 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
         f"{soc_pct:.2f}",
         str(reason or "")[:60],
         f"{profit_eur:.3f}",
+        f"{dam_clearing_eur_mwh:.2f}",
     ]
 
     # 3) Atomický prepis CSV
@@ -1158,6 +1163,7 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
         kwh=float(kwh), price=float(price_eur_mwh),
         soc_before=float(soc_pct), soc_after=float(soc_pct),
         delta_profit=float(profit_eur), source=str(reason)[:60],
+        dam_clearing=float(dam_clearing_eur_mwh),
     )
 
 
@@ -1364,7 +1370,7 @@ def _vdt_use_db() -> bool:
 def _vdt_db_upsert(profile: str, slot: str, action: str, ts: str,
                     kwh: float, price: float, soc_before: float = 0.0,
                     soc_after: float = 0.0, delta_profit: float = 0.0,
-                    source: str = "advisor") -> bool:
+                    source: str = "advisor", dam_clearing: float = 0.0) -> bool:
     """UPSERT VdtPaperTrade do DB (profile_id, date, slot, action)."""
     if not _vdt_use_db():
         return False
@@ -1391,6 +1397,7 @@ def _vdt_db_upsert(profile: str, slot: str, action: str, ts: str,
             if existing:
                 existing.kwh = float(kwh)
                 existing.price_eur_mwh = float(price)
+                existing.dam_clearing_eur_mwh = float(dam_clearing)
                 existing.soc_before_pct = float(soc_before)
                 existing.soc_after_pct = float(soc_after)
                 existing.delta_profit_eur = float(delta_profit)
@@ -1401,6 +1408,7 @@ def _vdt_db_upsert(profile: str, slot: str, action: str, ts: str,
                     profile_id=prof.id, market=mkt, date=date,
                     slot=str(slot or "")[:5], action=str(action or "").lower(),
                     kwh=float(kwh), price_eur_mwh=float(price),
+                    dam_clearing_eur_mwh=float(dam_clearing),
                     soc_before_pct=float(soc_before), soc_after_pct=float(soc_after),
                     delta_profit_eur=float(delta_profit),
                     source=source,
