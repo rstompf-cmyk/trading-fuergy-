@@ -4655,6 +4655,11 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         # Bug #610 (Excel _agg): clip predikciu na fyzické limity batt (rovnako ako livesim.py)
         df["batt_kw_actual"]   = np.clip(_batt_raw, -_bkw_max, +_bkw_max) if _bkw_max > 0 else _batt_raw
         df["batt_kwh_min"]     = df["batt_kw_actual"] / 60.0   # energia za minútu
+        # DIST-FEE (2026-06-15): distribučná úspora zvlášť = grid_fee × (baseline_import − skutočný_import)
+        _gf_x = float(_pui_plan.get("grid_fee", 0) or 0)
+        _act_imp_kwh_x = np.maximum(_load_min - _ftv_min - df["batt_kw_actual"].values, 0.0) / 60.0
+        df["dist_actual_import_kwh"] = _act_imp_kwh_x
+        df["dist_fee_min"] = _gf_x * (_im_kwh - _act_imp_kwh_x) / 1000.0   # € za minútu
         # ZCO (zúčtovacia cena odchýlky) — pre 15-min agregácie potrebujeme priemer
         df["zco_eur_min"]      = pd.to_numeric(df.get("zco_eur", pd.Series([np.nan]*len(df))), errors="coerce")
         # Mesiac kľúč pre agregáty
@@ -4731,6 +4736,7 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
                 spotreba_kwh=("load_min_kw", lambda s: float(s.sum()) / 60.0),
                 export_kwh=("baseline_export_kwh", "sum"),
                 import_kwh=("baseline_import_kwh", "sum"),
+                dist_fee_eur=("dist_fee_min", "sum"),                 # DIST-FEE: úspora distribúcie
                 batt_charge_kwh=("batt_kwh_min", lambda s: float(-s[s < 0].sum())),
                 batt_discharge_kwh=("batt_kwh_min", lambda s: float(s[s > 0].sum())),
                 soc_avg_pct=("soc_pct", "mean"),
@@ -4774,7 +4780,8 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
             "ftv_vyroba_kwh":     ("FTV výroba",             FMT_KWH),
             "spotreba_kwh":       ("Spotreba",               FMT_KWH),
             "export_kwh":         ("Export do siete",        FMT_KWH),
-            "import_kwh":         ("Import zo siete",        FMT_KWH),
+            "import_kwh":         ("Import zo siete (baseline)", FMT_KWH),
+            "dist_fee_eur":       ("Úspora distribúcia",     FMT_EUR),
             "batt_charge_kwh":    ("Batt nabíjanie",         FMT_KWH),
             "batt_discharge_kwh": ("Batt vybíjanie",         FMT_KWH),
             "batt_cycles":        ("Cyklov",                 FMT_CYC),
@@ -4908,6 +4915,7 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         _total_rt   = float(daily["rt_eur"].sum())
         _total_spolu = _total_dt + _total_rt
         _total_bl   = float(daily["baseline_eur"].sum())
+        _total_dist = float(daily["dist_fee_eur"].sum()) if "dist_fee_eur" in daily.columns else 0.0
         _prinos     = _total_spolu - _total_bl
         _prinos_pct = (_prinos / _total_bl * 100.0) if _total_bl > 0 else 0
         _per_day    = (_total_spolu / max(_period_days, 1))
@@ -4931,6 +4939,9 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         _kpi(22, "➜ Prínos batérie + plánu", _prinos, FMT_EUR, f"  ({_prinos_pct:+.1f} % oproti baseline)")
         ws_sum.cell(row=22, column=4, value=_prinos/max(_period_days,1)).number_format = FMT_EUR
         ws_sum.cell(row=22, column=4).font = Font(bold=True, color="2E7D32" if _prinos >= 0 else "C0392B", size=12)
+        _kpi(23, "    z toho úspora na distribúcii", _total_dist, FMT_EUR)
+        ws_sum.cell(row=23, column=4, value=_total_dist/max(_period_days,1)).number_format = FMT_EUR
+        ws_sum.cell(row=23, column=4).font = kpi_value_font
 
         # Energia
         _ftv_total = float(daily["ftv_vyroba_kwh"].sum())
@@ -5349,6 +5360,14 @@ pip install reportlab matplotlib</code>
         df["batt_kw_actual"] = np.clip(_batt_raw2, -_bkw_max, +_bkw_max) if _bkw_max > 0 else _batt_raw2
         df["batt_kwh_min"] = df["batt_kw_actual"] / 60.0
         df["month"] = pd.to_datetime(df["time"]).dt.strftime("%Y-%m")
+        # DIST-FEE (2026-06-15): distribučná úspora zvlášť = grid_fee × (baseline_import − skutočný_import)
+        _gf_pdf = float(_pui_plan.get("grid_fee", 0) or 0)
+        _ftv_p = pd.to_numeric(df.get("ftv_min_real_kw", df.get("ftv_kw")), errors="coerce").fillna(0).values
+        _load_p = pd.to_numeric(df.get("load_min_real_kw", pd.Series([0.0]*len(df))), errors="coerce").fillna(0).values
+        _battp = pd.to_numeric(df["batt_kw_actual"], errors="coerce").fillna(0).values
+        df["dist_actual_import_kwh"] = np.maximum(_load_p - _ftv_p - _battp, 0.0) / 60.0
+        df["dist_fee_min"] = _gf_pdf * (np.maximum(_load_p - _ftv_p, 0.0) / 60.0
+                                        - df["dist_actual_import_kwh"].values) / 1000.0
 
         _bkwh_max = float(_pui_plan.get("batt_kwh", 200.0))
 
@@ -5370,6 +5389,7 @@ pip install reportlab matplotlib</code>
                 spotreba_kwh=("load_min_kw", lambda s: float(s.sum()) / 60.0),
                 export_kwh=("baseline_export_kwh", "sum"),
                 import_kwh=("baseline_import_kwh", "sum"),
+                dist_fee_eur=("dist_fee_min", "sum"),                 # DIST-FEE: úspora distribúcie
                 batt_charge_kwh=("batt_kwh_min", lambda s: float(-s[s < 0].sum())),
                 batt_discharge_kwh=("batt_kwh_min", lambda s: float(s[s > 0].sum())),
                 soc_avg_pct=("soc_pct", "mean"),
@@ -5525,6 +5545,7 @@ pip install reportlab matplotlib</code>
         _total_rt = float(daily["rt_eur"].sum())
         _total_spolu = _total_dt + _total_rt
         _total_bl = float(daily["baseline_eur"].sum())
+        _total_dist = float(daily["dist_fee_eur"].sum()) if "dist_fee_eur" in daily.columns else 0.0
         _prinos = _total_spolu - _total_bl
         _prinos_pct = (_prinos / _total_bl * 100.0) if _total_bl > 0 else 0
         _per_day = _total_spolu / max(_period_days, 1)
@@ -5536,6 +5557,7 @@ pip install reportlab matplotlib</code>
             ["    Z odchýlky (RT)", f"{_total_rt:,.2f}", f"{_total_rt/max(_period_days,1):,.2f}", ""],
             ["Baseline (bez batérie + plánu)", f"{_total_bl:,.2f}", f"{_total_bl/max(_period_days,1):,.2f}", "100 %"],
             ["Prínos batérie + plánu", f"{_prinos:+,.2f}", f"{_prinos/max(_period_days,1):+,.2f}", f"{_prinos_pct:+.1f} %"],
+            ["    z toho úspora na distribúcii", f"{_total_dist:+,.2f}", f"{_total_dist/max(_period_days,1):+,.2f}", ""],
         ]
         t_kpi = Table(kpi_data, colWidths=[7*cm, 3.2*cm, 3.2*cm, 3.2*cm])
         _green = colors.HexColor("#2E7D32") if _prinos >= 0 else colors.HexColor("#C0392B")
@@ -7310,6 +7332,16 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _d_vdt = float(pd.to_numeric(dview["vdt_arb_min"], errors="coerce").fillna(0).sum())
     except Exception:
         pass
+    # DIST-FEE (2026-06-15): distribučná úspora zvlášť = grid_fee × (baseline_import − skutočný_import)
+    _d_dist = 0.0; _dist_reduction_kwh = 0.0
+    try:
+        _gf_dist = float((_ui_load("plan", {}) or {}).get("grid_fee", 0) or 0)
+        if bc is not None and _gf_dist > 0:
+            _dist_r = bc.compute_dist_fee_savings(dview, _gf_dist)
+            _d_dist = float(_dist_r.get("dist_fee_eur", 0.0))
+            _dist_reduction_kwh = float(_dist_r.get("import_reduction_kwh", 0.0))
+    except Exception as _e_dist:
+        print(f"[DIST-FEE karta] {_e_dist}")
     cards = (
         f"{_f4_diag_banner}"
         f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin:10px 0'>"
@@ -7320,7 +7352,11 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         f"{_vdt_eff_cards}"
         f"{_rt_eff_card}"
         f"{bl_cum_card}"
-        f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt:.1f} €</div></div>"
+        f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt:.1f} €</div>"
+        f"<div style='font-size:11px;color:#555'>DT {d_dt:+.1f} · RT {d_rt:+.1f} · VDT {_d_vdt:+.1f} · Dist {_d_dist:+.1f} €</div></div>"
+        f"<div class='card' style='background:#eef7ee'><div class='l'>Úspora na distribúcii {view_day}</div>"
+        f"<div class='v' style='color:#2E7D32'>{_d_dist:+.1f} €</div>"
+        f"<div style='font-size:11px;color:#555'>{_dist_reduction_kwh:+.0f} kWh menej odberu zo siete · poplatok {float((_ui_load('plan', {{}}) or {{}}).get('grid_fee', 0) or 0):.2f} €/MWh</div></div>"
         f"<div class='card' style='background:#eef7ee'><div class='l'>FTV výroba za deň</div><div class='v'>{d_ftv:.0f} kWh</div></div></div>"
         f"<h2 style='margin:6px 0'>Hodnoty teraz</h2><div style='display:flex;gap:12px;flex-wrap:wrap;margin:4px 0'>{now_cards}</div>"
         f"{reco_card}")

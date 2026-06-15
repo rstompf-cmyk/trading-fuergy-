@@ -120,6 +120,55 @@ def compute_baseline_day(pv_arr, load_arr, dt_price_arr,
     }
 
 
+def compute_dist_fee_savings(df, grid_fee_eur_per_mwh: float) -> Dict[str, float]:
+    """Distribučná úspora = grid_fee × (baseline_import − skutočný_import), z trace df.
+
+    User (2026-06-15): distribučné poplatky počítať ZVLÁŠŤ ako samostatnú zložku efektu.
+    Kontrakt: batéria dodávateľa agregovaná na flexibilitu; zákazníkov benefit = ušetrený
+    distribučný poplatok zo samospotreby (FTV→batéria→spotreba zníži odber zo siete).
+
+    baseline_import (bez batérie, net-meter) = max(load − pv, 0) per minúta.
+    skutočný_import (s batériou)            = max(load − pv − batt_real, 0) per minúta,
+        kde batt_real > 0 = vybíjanie (pridá zdroj), < 0 = nabíjanie (pridá odber).
+    Pozitívne = batéria znížila odber (samospotreba); negatívne = batéria zvýšila odber
+    (nabíjanie zo siete pre arbitráž = reálny distribučný náklad).
+
+    Vracia {dist_fee_eur, baseline_import_kwh, actual_import_kwh, import_reduction_kwh}.
+    """
+    import numpy as _np
+    out = {"dist_fee_eur": 0.0, "baseline_import_kwh": 0.0,
+           "actual_import_kwh": 0.0, "import_reduction_kwh": 0.0}
+    try:
+        if df is None or len(df) == 0:
+            return out
+        gf = float(grid_fee_eur_per_mwh or 0.0)
+        n = len(df)
+
+        def _col(*names):
+            for nm in names:
+                if nm in df.columns:
+                    return _np.asarray(
+                        __import__("pandas").to_numeric(df[nm], errors="coerce").fillna(0.0).values,
+                        dtype=float)
+            return _np.zeros(n, dtype=float)
+
+        pv = _col("ftv_min_real_kw", "ftv_kw")                 # kW
+        load = _col("load_min_real_kw", "load_plan_kw")        # kW
+        batt = _col("batt_kw_realistic", "plan_batt_kw")       # kW (+vybíja / −nabíja)
+        # per-minútový krok (trace je 1-min); ak by bol iný, /60 ostáva konzistentné s €/MWh
+        base_imp_kw = _np.maximum(load - pv, 0.0)
+        act_imp_kw = _np.maximum(load - pv - batt, 0.0)
+        base_imp_kwh = float(base_imp_kw.sum() / 60.0)
+        act_imp_kwh = float(act_imp_kw.sum() / 60.0)
+        out["baseline_import_kwh"] = round(base_imp_kwh, 1)
+        out["actual_import_kwh"] = round(act_imp_kwh, 1)
+        out["import_reduction_kwh"] = round(base_imp_kwh - act_imp_kwh, 1)
+        out["dist_fee_eur"] = round(gf * (base_imp_kwh - act_imp_kwh) / 1000.0, 2)
+    except Exception as _e:
+        print(f"[compute_dist_fee_savings] {_e}")
+    return out
+
+
 def parse_baseline_params(ui_plan: Dict[str, Any]) -> Dict[str, Any]:
     """Vytiahne 4 baseline parametre z ui_settings.plan dict s defaultmi (dt_x, 1.0)."""
     return {
