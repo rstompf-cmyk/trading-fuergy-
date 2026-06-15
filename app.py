@@ -4058,6 +4058,12 @@ def _livesim_cached_advance(case, start, port, base_case, d1_step_min,
     mtime_before = _livesim_meta_mtime(case, port, profile_key)
     with _LIVESIM_R_CACHE_LOCK:
         cached = _LIVESIM_R_CACHE.get(key)
+        if os.environ.get("LIVESIM_TIMING") == "1":
+            _cst = ("FRESH" if (cached is not None and cached[0] == mtime_before and mtime_before > 0)
+                    else ("STALE" if cached is not None else "MISS"))
+            print(f"[SWITCH-INSTANT] profile={profile_key} cache={_cst} "
+                  f"cached_mtime={cached[0] if cached else None} now_mtime={mtime_before} "
+                  f"n_cache={len(_LIVESIM_R_CACHE)}")
         if cached is not None and cached[0] == mtime_before and mtime_before > 0:
             return cached[1]
     # COLD-START hydrate (2026-06-14): in-memory cache prázdna (po reštarte) → načítaj
