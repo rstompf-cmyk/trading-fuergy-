@@ -5800,21 +5800,24 @@ pip install reportlab matplotlib</code>
                          status_code=500, media_type="text/plain")
 
 
-@app.get("/livesim_table_csv")
-def livesim_table_csv(day: str = None):
-    """Bug GG: Export 15-min agregát tabuľky ako CSV pre celý deň.
-    Slot, batt_kw, DAM_kw, VDT_kw, work_kWh, SOC%, FTV_kw, DT_eur, VDT_eur"""
+@app.get("/livesim_table_xlsx")
+def livesim_table_xlsx(case: str = "plan_d1", day: str = None):
+    """Export 15-min agregát tabuľky ako Excel (xlsx) pre celý deň.
+    Slot, batt_kw, DAM_kw, VDT_kw, work_kWh, SOC%, FTV_kw, DT_eur, VDT_eur.
+
+    Bug TABLE-EXPORT (2026-06-15): predtým export (CSV) načítaval natvrdo case='default'
+    → pre aktívny profil/case (plan_d1) nenašiel dáta → 404 'Žiadne dáta' = export nedal
+    nič. Teraz berie case z requestu (default plan_d1) + výstup je Excel namiesto CSV."""
     from fastapi.responses import StreamingResponse
     import io
-    import csv
     if not day:
         day = dt.date.today().isoformat()
     try:
-        df = lsim.load_series("default", port=_PORT, day=day, max_points=10**9)
+        df = lsim.load_series(case, port=_PORT, day=day, max_points=10**9)
     except Exception as e:
         return PlainTextResponse(f"ERROR load_series: {e}", status_code=500)
     if df is None or df.empty:
-        return PlainTextResponse(f"Žiadne dáta pre {day}", status_code=404)
+        return PlainTextResponse(f"Žiadne dáta pre {day} (case={case})", status_code=404)
     df = df.copy()
     df["_slot"] = pd.to_datetime(df["time"]).dt.floor("15min")
     agg = {"plan_batt_kw": "mean", "soc_pct": "last",
@@ -5839,31 +5842,46 @@ def livesim_table_csv(day: str = None):
                     lambda t: float(vm.get(f"{pd.Timestamp(t).hour:02d}:{pd.Timestamp(t).minute:02d}", 0.0)))
     except Exception:
         pass
-    buf = io.StringIO()
-    w = csv.writer(buf, delimiter=";")
-    w.writerow(["slot_start", "slot_end", "batt_kw_net", "batt_dam_kw", "batt_vdt_kw",
-                "work_kwh", "soc_pct", "ftv_kw", "dt_eur_mwh", "dt_real_eur_mwh", "vdt_eur_mwh"])
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"livesim {day}"[:31]
+    headers = ["slot_start", "slot_end", "batt_kw_net", "batt_dam_kw", "batt_vdt_kw",
+               "work_kwh", "soc_pct", "ftv_kw", "dt_eur_mwh", "dt_real_eur_mwh", "vdt_eur_mwh"]
+    ws.append(headers)
+    _hdr_fill = PatternFill("solid", fgColor="1F4E78")
+    _hdr_font = Font(bold=True, color="FFFFFF")
+    for _c in ws[1]:
+        _c.fill = _hdr_fill
+        _c.font = _hdr_font
+        _c.alignment = Alignment(horizontal="center")
     for _, r in g.iterrows():
         ts = pd.Timestamp(r["_slot"])
         ts_end = ts + pd.Timedelta(minutes=15)
-        w.writerow([
+        ws.append([
             ts.strftime("%Y-%m-%d %H:%M"),
             ts_end.strftime("%H:%M"),
-            f"{float(r.get('plan_batt_kw', 0)):+.1f}",
-            f"{float(r.get('plan_batt_dam_kw', 0)):+.1f}",
-            f"{float(r.get('plan_batt_vdt_kw', 0)):+.1f}",
-            f"{float(r.get('work_kwh', 0)):+.2f}",
-            f"{float(r.get('soc_pct', 0)):.1f}",
-            f"{float(r.get('ftv_kw', 0)):.1f}",
-            f"{float(r.get('dt_eur', 0)):+.1f}",
-            f"{float(r.get('dt_real_eur', 0)):+.1f}",
-            f"{float(r.get('vdt_eur', 0)):+.1f}",
+            round(float(r.get('plan_batt_kw', 0)), 1),
+            round(float(r.get('plan_batt_dam_kw', 0)), 1),
+            round(float(r.get('plan_batt_vdt_kw', 0)), 1),
+            round(float(r.get('work_kwh', 0)), 2),
+            round(float(r.get('soc_pct', 0)), 1),
+            round(float(r.get('ftv_kw', 0)), 1),
+            round(float(r.get('dt_eur', 0)), 1),
+            round(float(r.get('dt_real_eur', 0)), 1),
+            round(float(r.get('vdt_eur', 0)), 1),
         ])
+    ws.freeze_panes = "A2"
+    for _col in ws.columns:
+        ws.column_dimensions[_col[0].column_letter].width = 14
+    buf = io.BytesIO()
+    wb.save(buf)
     buf.seek(0)
     return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="livesim_15min_{day}.csv"'}
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="livesim_15min_{day}.xlsx"'}
     )
 
 
@@ -8224,9 +8242,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                                 for n in [10, 20, 40, 96])
                      + f"</select>"
                      f"</form>"
-                     f"<a href='/livesim_table_csv?day={view_day}' "
+                     f"<a href='/livesim_table_xlsx?case={r.get('case', 'plan_d1') if isinstance(r, dict) else 'plan_d1'}&day={view_day}' "
                      f"style='padding:4px 10px;background:#2E7D32;color:#fff;text-decoration:none;border-radius:4px;font-size:12px' "
-                     f"download>📊 Export celý deň (CSV)</a>"
+                     f"download>📊 Export celý deň (Excel)</a>"
                      f"<span style='color:#888;font-size:11px;margin-left:6px'>"
                      f"Slot {_t_off + 1}–{_t_off + _t_rows} z {len(_agg_all)}</span>"
                      f"</div>")
