@@ -1509,11 +1509,13 @@ def profiles_apply(name: str = Form(...), redirect_to: str = Form(default="")):
     except FileNotFoundError as e:
         return f"<p>Profile <b>{name}</b> nenájdený: {e}</p><a href='/profiles'>← Späť</a>"
 
-    # Bug W: invalidate livesim r-cache pri zmene profilu (template/cfg sa zmenili)
-    try:
-        _livesim_cache_invalidate()
-    except Exception:
-        pass
+    # Bug CACHE-WIPE-ON-SWITCH (2026-06-15): NEmaž cache pri prepnutí profilu! Pôvodné
+    # _livesim_cache_invalidate() (clear ALL) zmazalo cache VŠETKÝCH profilov pri KAŽDOM
+    # prepnutí (apply) → n_cache=0 → SWITCH-INSTANT vždy MISS → každé otvorenie prepočet
+    # ("akoby DB ani nebola"). Cache je per-profil a konzistentná s parametrami každého
+    # profilu (bg ráta z profilu); reálnu zmenu nastavení zachytí meta mtime / settings_sig.
+    # Preto pri prepnutí cache NEčistíme → profily ostanú teplé → prepnutie = cache hit.
+    pass
 
     # Auto-detect: zisti ktorý kind plánov profil najviac používa (dentrh vs plan)
     # a nastav ui_settings.livesim.case zhodne — tým sa user vyhne STRICT chybe
