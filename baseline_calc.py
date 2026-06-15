@@ -155,9 +155,12 @@ def compute_dist_fee_savings(df, grid_fee_eur_per_mwh: float) -> Dict[str, float
         pv = _col("ftv_min_real_kw", "ftv_kw")                 # kW
         load = _col("load_min_real_kw", "load_plan_kw")        # kW
         batt = _col("batt_kw_realistic", "plan_batt_kw")       # kW (+vybíja / −nabíja)
-        # per-minútový krok (trace je 1-min); ak by bol iný, /60 ostáva konzistentné s €/MWh
+        # User-pravidlo (2026-06-15): distribučný poplatok LEN na reálnu spotrebu zo siete.
+        # Nabíjanie batérie (z FTV aj zo siete pre arbitráž grid→batéria→grid) je vyňaté.
+        # → do spotrebného importu počítame iba VYBÍJANIE (znižuje odber), nie nabíjanie.
+        _disch = _np.maximum(batt, 0.0)                        # len discharge (+); charge vyňaté
         base_imp_kw = _np.maximum(load - pv, 0.0)
-        act_imp_kw = _np.maximum(load - pv - batt, 0.0)
+        act_imp_kw = _np.maximum(load - pv - _disch, 0.0)
         base_imp_kwh = float(base_imp_kw.sum() / 60.0)
         act_imp_kwh = float(act_imp_kw.sum() / 60.0)
         out["baseline_import_kwh"] = round(base_imp_kwh, 1)

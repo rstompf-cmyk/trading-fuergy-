@@ -4657,7 +4657,8 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         df["batt_kwh_min"]     = df["batt_kw_actual"] / 60.0   # energia za minútu
         # DIST-FEE (2026-06-15): distribučná úspora zvlášť = grid_fee × (baseline_import − skutočný_import)
         _gf_x = float(_pui_plan.get("grid_fee", 0) or 0)
-        _act_imp_kwh_x = np.maximum(_load_min - _ftv_min - df["batt_kw_actual"].values, 0.0) / 60.0
+        # discharge-only: nabíjanie (z FTV aj grid-arbitráž) je z poplatku vyňaté
+        _act_imp_kwh_x = np.maximum(_load_min - _ftv_min - np.maximum(df["batt_kw_actual"].values, 0.0), 0.0) / 60.0
         df["dist_actual_import_kwh"] = _act_imp_kwh_x
         df["dist_fee_min"] = _gf_x * (_im_kwh - _act_imp_kwh_x) / 1000.0   # € za minútu
         # ZCO (zúčtovacia cena odchýlky) — pre 15-min agregácie potrebujeme priemer
@@ -5365,7 +5366,8 @@ pip install reportlab matplotlib</code>
         _ftv_p = pd.to_numeric(df.get("ftv_min_real_kw", df.get("ftv_kw")), errors="coerce").fillna(0).values
         _load_p = pd.to_numeric(df.get("load_min_real_kw", pd.Series([0.0]*len(df))), errors="coerce").fillna(0).values
         _battp = pd.to_numeric(df["batt_kw_actual"], errors="coerce").fillna(0).values
-        df["dist_actual_import_kwh"] = np.maximum(_load_p - _ftv_p - _battp, 0.0) / 60.0
+        # discharge-only: nabíjanie (z FTV aj grid-arbitráž) je z poplatku vyňaté
+        df["dist_actual_import_kwh"] = np.maximum(_load_p - _ftv_p - np.maximum(_battp, 0.0), 0.0) / 60.0
         df["dist_fee_min"] = _gf_pdf * (np.maximum(_load_p - _ftv_p, 0.0) / 60.0
                                         - df["dist_actual_import_kwh"].values) / 1000.0
 
@@ -7333,7 +7335,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     except Exception:
         pass
     # DIST-FEE (2026-06-15): distribučná úspora zvlášť = grid_fee × (baseline_import − skutočný_import)
-    _d_dist = 0.0; _dist_reduction_kwh = 0.0
+    _d_dist = 0.0; _dist_reduction_kwh = 0.0; _gf_dist = 0.0
     try:
         _gf_dist = float((_ui_load("plan", {}) or {}).get("grid_fee", 0) or 0)
         if bc is not None and _gf_dist > 0:
@@ -7356,7 +7358,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         f"<div style='font-size:11px;color:#555'>DT {d_dt:+.1f} · RT {d_rt:+.1f} · VDT {_d_vdt:+.1f} · Dist {_d_dist:+.1f} €</div></div>"
         f"<div class='card' style='background:#eef7ee'><div class='l'>Úspora na distribúcii {view_day}</div>"
         f"<div class='v' style='color:#2E7D32'>{_d_dist:+.1f} €</div>"
-        f"<div style='font-size:11px;color:#555'>{_dist_reduction_kwh:+.0f} kWh menej odberu zo siete · poplatok {float((_ui_load('plan', {{}}) or {{}}).get('grid_fee', 0) or 0):.2f} €/MWh</div></div>"
+        f"<div style='font-size:11px;color:#555'>{_dist_reduction_kwh:+.0f} kWh menej odberu zo siete · poplatok {_gf_dist:.2f} €/MWh</div></div>"
         f"<div class='card' style='background:#eef7ee'><div class='l'>FTV výroba za deň</div><div class='v'>{d_ftv:.0f} kWh</div></div></div>"
         f"<h2 style='margin:6px 0'>Hodnoty teraz</h2><div style='display:flex;gap:12px;flex-wrap:wrap;margin:4px 0'>{now_cards}</div>"
         f"{reco_card}")
