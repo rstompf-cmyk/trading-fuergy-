@@ -7069,10 +7069,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _eff_db_from = pd.Timestamp(dfull["time"].min()).strftime("%Y-%m-%d")
             _eff_db_to = pd.Timestamp(dfull["time"].max()).strftime("%Y-%m-%d")
             # DISPLAY-FROM-DB (2026-06-14): dnešok nie je v CSV (dfull = dokončené dni), ale
-            # Fáza A ho UŽ zapisuje do effect_db → rozšír koniec obdobia na dnešok (prov),
-            # inak by sumár + chC graf dnešok vynechali.
-            if prov:
-                _eff_db_to = max(_eff_db_to, str(prov)[:10])
+            # Fáza A ho UŽ zapisuje do effect_db → rozšír koniec obdobia na dnešok (prov_date),
+            # inak by sumár + chC graf dnešok vynechali. Bug VDT-PROV-SCOPE (2026-06-15): `prov`
+            # nie je v tomto scope definovaná → NameError padol CELÝ effect_db blok (karty 0,
+            # vrátane VDT). Ber prov_date priamo z `r`.
+            _prov_dt = r.get("prov_date") if isinstance(r, dict) else None
+            if _prov_dt:
+                _eff_db_to = max(_eff_db_to, str(_prov_dt)[:10])
             _eff_db_period = _eff_db_mod.get_period_effect(
                 _active_profile_eff, _eff_db_from, _eff_db_to,
                 joint_flags=_eff_joint)
