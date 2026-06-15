@@ -7085,8 +7085,20 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 # závislosť kariet na advance cum_* — krok k „display = DB čítanie".
                 r["cum_dt"] = float(_eff_db_period["dt_eur"])
                 r["cum_rt"] = float(_eff_db_period["rt_eur"])
-                r["cum_vdt_arb"] = float(_eff_db_period["vdt_arb_eur"])
-                r["cum_total"] = float(_eff_db_period["total_eur"])
+                # VDT-TODAY-FIX (2026-06-15): vdt_arb je render-overlay (Bug X), NIE v livesim
+                # trace pri zápise → effect_db má dnešný VDT = 0. B1 ho omylom úplne vypustil
+                # ("z toho VDT 0 €" napriek reálnym obchodom). DT/RT sú v trace, takže v effect_db
+                # sedia (vrátane dnešku cez fázu A); VDT dnešok pripočítaj z today_trace. Past dni
+                # = effect_db. Bez double-countu (dnešok v effect_db vdt = 0, lebo trace ho nemá).
+                _today_vdt = 0.0
+                _tt = r.get("today_trace")
+                if _tt is not None and hasattr(_tt, "columns") and "vdt_arb_min" in _tt.columns:
+                    try:
+                        _today_vdt = float(pd.to_numeric(_tt["vdt_arb_min"], errors="coerce").fillna(0).sum())
+                    except Exception:
+                        _today_vdt = 0.0
+                r["cum_vdt_arb"] = float(_eff_db_period["vdt_arb_eur"]) + _today_vdt
+                r["cum_total"] = r["cum_dt"] + r["cum_rt"] + r["cum_vdt_arb"]
         except Exception as _e_dbf4:
             print(f"[livesim F4] effect_db.get_period_effect zlyhal: {_e_dbf4}")
             _eff_db_period = {"_error": str(_e_dbf4)}
