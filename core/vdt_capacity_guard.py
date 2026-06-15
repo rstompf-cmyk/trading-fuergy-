@@ -17,7 +17,57 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
-__all__ = ["clip_extras_to_capacity", "simulate_combined_soc"]
+__all__ = ["clip_extras_to_capacity", "simulate_combined_soc", "clip_extras_to_grid"]
+
+
+def clip_extras_to_grid(extras: Dict[int, Tuple[str, float]],
+                        dam_grid_kwh: List[float],
+                        grid_import_kwh: float,
+                        grid_export_kwh: float) -> Tuple[Dict[int, Tuple[str, float]], List[dict]]:
+    """Bug VDT-PENALTY (Koreň 2, 2026-06-15): oreže VDT extras tak, aby KOMBINOVANÁ grid
+    pozícia (DAM grid + VDT extra) ostala v [−grid_import, +grid_export] v každom slote.
+
+    Prečo: VDT poistka predtým kontrolovala iba SOC, nie grid prípojku. Po GRID-LIMIT-REALITY
+    engine reálnu dodávku oreže na grid limit → ak VDT nominoval nad limit, nominované > dodané
+    → dev_kwh ≠ 0 → POKUTA cez ZCO. Týmto orežeme nomináciu na to, čo je fyzicky dodateľné.
+
+    dam_grid_kwh: D-1 grid pozícia per slot (kWh, + = export/dodávka, − = import/odber);
+                  už zahŕňa FTV→export aj load→import + DAM batt. VDT extra ju len posúva.
+    extras[t] = ('BUY'|'SELL', kwh): SELL (batt discharge) zvyšuje export; BUY (charge) import.
+    grid_import_kwh / grid_export_kwh: limit prípojky za 1 slot (kW × dĺžka slotu v h).
+
+    Vracia (orezané_extras, report).
+    """
+    work = dict(extras)
+    report: List[dict] = []
+    n = len(dam_grid_kwh)
+    gimp = abs(float(grid_import_kwh))
+    gexp = abs(float(grid_export_kwh))
+    for t in sorted(work.keys()):
+        if t >= n:
+            continue
+        direction, kwh0 = work[t]
+        kwh0 = float(kwh0)
+        if kwh0 <= 0.0:
+            continue
+        base = float(dam_grid_kwh[t])                       # DAM grid pozícia (export +)
+        is_sell = str(direction).upper() in ("SELL", "DISCHARGE")
+        if is_sell:
+            # SELL zvyšuje export: base + kwh ≤ +grid_export
+            max_kwh = max(0.0, gexp - base)
+        else:
+            # BUY zvyšuje import (znižuje export): base − kwh ≥ −grid_import
+            max_kwh = max(0.0, base + gimp)
+        clip = min(kwh0, max_kwh)
+        if clip < kwh0 - 1e-6:
+            report.append({"slot": t, "direction": direction,
+                           "orig_kwh": round(kwh0, 1), "clip_kwh": round(clip, 1),
+                           "reason": ("sell→grid_export" if is_sell else "buy→grid_import")})
+        if clip <= 1e-6:
+            work.pop(t, None)
+        else:
+            work[t] = (direction, clip)
+    return work, report
 
 
 def simulate_combined_soc(soc_start_kwh: float,
