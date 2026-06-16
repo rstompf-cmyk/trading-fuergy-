@@ -288,7 +288,7 @@ def get_period_dist_fee(profile_name: str, date_from: str, date_to: str,
         row = session.execute(text(
             "SELECT COALESCE(SUM("
             "  MAX(load_kw_real - ftv_kw_real, 0.0)"
-            "  - MAX(load_kw_real - ftv_kw_real - MAX(batt_kw_real, 0.0), 0.0)"
+            "  - MAX(load_kw_real - ftv_kw_real - batt_kw_real, 0.0)"
             "), 0.0) "
             "FROM effect_minute "
             "WHERE profile_id = :pid "
