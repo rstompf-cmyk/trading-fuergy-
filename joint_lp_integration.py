@@ -274,11 +274,15 @@ def optimize_day_or_joint(
           f"soc_reserve_pct={soc_reserve_pct:.1f}, "
           f"max_dam_im={max_import_kwh_day}/ex={max_export_kwh_day}")
 
-    # ── Toggle = INPUT FILTER ──────────────────────────────────────────────
-    # Sémantika: zaškrtnutie BAT/FTV/LOAD určuje ČO sa zahŕňa do optimalizácie.
-    # Ak je toggle vypnutý, ten zdroj LP vôbec nedostane (vynulujeme ho na vstupe).
-    # Tým LP nemôže napríklad obísť trade_ftv=False cez PV → batt → grid buffer
-    # (lebo LP nemá PV vôbec). Pôvodné PV/load zostanú v zobrazení tabuľky.
+    # ── Toggle = LEN OBCHOD, NIE FYZICKÁ BILANCIA ──────────────────────────
+    # User (2026-06-16): odber a FTV (ak sú v profile) MUSIA vždy vstúpiť do
+    # bilancie pre RIADENIE batérie a fyzické limity prahového elektromera
+    # (jeden odberné/odovzdávacie miesto). Toggle BAT/FTV/LOAD riadi LEN
+    # vyhodnotenie a plánovanie OBCHODU (predaj/nominácia), NIE fyzickú prítomnosť.
+    #   - z pohľadu stavu v odbernom mieste je load+FTV vždy reálny,
+    #   - ak ich užívateľ nechce, jednoducho ich nedá do profilu (žiadne dáta).
+    # Preto load/FTV NEVYNULUJEME na vstupe. Predaj FTV ostáva gejtovaný v solveri
+    # cez trade_ftv (EX_FTV=0 → FTV kryje load/batériu, ale nepredáva sa).
     pv_arr_real = np.asarray(pv_kwh, float)
     load_arr_real = (np.asarray(load_kwh, float).reshape(-1)[:len(pv_arr_real)]
                      if load_kwh is not None else None)
@@ -318,11 +322,10 @@ def optimize_day_or_joint(
         print(f"[VDT-CAP-RESERVE] {profile}: D-1 LP strop {float(batt_kw):.0f}−{_res_kw:.0f}"
               f" = {_cap_base:.0f} kW (headroom pre VDT/RT)")
 
-    if joint_flags.get("enabled"):
-        if not joint_flags.get("trade_ftv", True):
-            pv_for_lp = np.zeros_like(pv_for_lp)
-        if not joint_flags.get("trade_load", True):
-            load_for_lp = np.zeros_like(pv_for_lp) if load_for_lp is None else np.zeros_like(load_for_lp)
+    # POZN.: load/FTV sa už NEVYNULUJÚ podľa toggle (viď komentár vyššie).
+    # Fyzická bilancia (riadenie batérie + grid limity) vždy vidí reálny load+FTV.
+    # Obchodné gejty (trade_ftv = predaj FTV, trade_load = grid kryje load) sa
+    # propagujú do solvera nižšie a riadia LEN obchodnú/nominačnú stránku.
     # Joint LP vypnutý → klasický optimizer používa pôvodné vstupy (toggle len pre Joint LP)
 
     # Fallback na pôvodný optimize_day ak joint LP nie je zapnutý
@@ -389,8 +392,11 @@ def optimize_day_or_joint(
         soc_init_pct=soc_init_pct,
         soc_reserve_pct=soc_reserve_pct,         # Bug #644: chýbalo
         terminal_soc_pct=terminal_soc_pct,
-        grid_kw_import=grid_kw_import or grid_kw,
-        grid_kw_export=grid_kw_export or grid_kw,
+        # Bug GRID-EXPORT-ZERO: `x or grid_kw` bralo 0.0 ako falsy → tvrdý limit
+        # export=0 (TBB: žiadny predaj do siete) sa prepísal na grid_kw=1100.
+        # Správne: 0.0 je platný limit, fallback len pri None.
+        grid_kw_import=(grid_kw_import if grid_kw_import is not None else grid_kw),
+        grid_kw_export=(grid_kw_export if grid_kw_export is not None else grid_kw),
         grid_fee=grid_fee, cycle_cost=cycle_cost,
         min_spread_eur=min_spread_eur,   # Bug JOINT-MIN-SPREAD: parita s classic optimize_day
         vdt_buy_price=vdt_buy_price, vdt_sell_price=vdt_sell_price,
