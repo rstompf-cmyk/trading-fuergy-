@@ -696,10 +696,14 @@ def run_day_physical(g, plan_kw_arr, day_start, step_min, band_dis, band_chg, w_
                 _load_f = float(load_min[_mi_f]) if (load_min is not None and 0 <= _mi_f < load_min.size) else 0.0
                 _gi_f = (_grid_imp if _grid_imp is not None else 1e9)
                 _ge_f = (_grid_exp if _grid_exp is not None else 1e9)
-                if tot > 0:    # vybíjanie cez sieť ≤ grid_kw_export (+ vlastná spotreba)
-                    tot = min(tot, _ge_f + max(_load_f - _ftv_f, 0.0))
-                elif tot < 0:  # nabíjanie zo siete ≤ grid_kw_import (+ FTV prebytok)
-                    tot = max(tot, -(max(_ftv_f - _load_f, 0.0) + _gi_f))
+                # SHARED-METER (2026-06-16, user): net cez prah ∈ [−import, +export].
+                #   vybíjanie ≤ export + odber − FTV ; nabíjanie ≤ import + FTV − odber.
+                # (predtým max(odber−FTV,0)/max(FTV−odber,0) → neodpočítaval odber pri
+                #  nabíjaní = chyba; odber AJ nabíjanie zdieľajú import limit.)
+                if tot > 0:    # vybíjanie
+                    tot = min(tot, max(_ge_f + _load_f - _ftv_f, 0.0))
+                elif tot < 0:  # nabíjanie
+                    tot = max(tot, -max(_gi_f + _ftv_f - _load_f, 0.0))
             except Exception:
                 pass
         # lo_eff sa už nastavil hore (pred lookahead blokom)

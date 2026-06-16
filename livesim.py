@@ -1548,10 +1548,14 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     # Rozdelíme plán na nabíjanie (≤0) a vybíjanie (≥0)
                     _plan_chg = np.maximum(-_batt_p, 0.0)                          # kW nabíjanie
                     _plan_dis = np.maximum(_batt_p, 0.0)                           # kW vybíjanie
-                    # Fyzicky dostupný výkon na nabíjanie = FTV (po pokrytí load) + grid import
-                    _avail_for_chg = np.maximum(_ftv_r - _load_r, 0.0) + _grid_kw_import
-                    # Fyzicky dostupný výkon na vybíjanie = grid export + load (po odpočítaní FTV)
-                    _avail_for_dis = _grid_kw_export + np.maximum(_load_r - _ftv_r, 0.0)
+                    # SHARED-METER (2026-06-16, user): jedno odberné miesto, jeden prah.
+                    # net cez prah = FTV − odber + batéria ∈ [−import_limit, +export_limit].
+                    #   nabíjanie ≤ import + FTV − odber  (odber AJ nabíjanie čerpajú z import;
+                    #     predtým max(FTV−odber,0)+import → neodpočítaval odber > FTV = chyba)
+                    #   vybíjanie ≤ export + odber − FTV  (FTV prebytok čerpá z export)
+                    # Oboje clip ≥ 0. FTV sa pridá do vzorca vždy (aj keď je 0).
+                    _avail_for_chg = np.maximum(_grid_kw_import + _ftv_r - _load_r, 0.0)
+                    _avail_for_dis = np.maximum(_grid_kw_export + _load_r - _ftv_r, 0.0)
                     # Bug #648 (2026-06-09): ODSTRÁNENÝ capacity ledger constraint
                     # zo livesim simulácie. Bug #613 mal logiku zle: capacity_ledger.available()
                     # vráti `batt_kw_max - reserved`. Ale rezervovaná kapacita ZAHŔŇA D-1 plán
