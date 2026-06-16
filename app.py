@@ -6463,7 +6463,16 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                 if _br_check.abs().sum() > 0.1:
                                     _src_col = "batt_kw_realistic"
                             _vdt_diag["soc_src_col"] = _src_col
-                            _pb_arr = dview[_src_col].fillna(0.0).tolist()
+                            # Bug FUTURE-PRED (2026-06-16, user VW_simulacia_3): pre BUDÚCE
+                            # minúty batt_kw_realistic ešte neexistuje (NaN). Aby SOC predikcia
+                            # integrovala PLÁNOVÉ vybíjanie (nie ploché 0), doplníme budúce
+                            # NaN plánom (plan_batt_kw). Minulosť ostáva z realized.
+                            if _src_col == "batt_kw_realistic" and "plan_batt_kw" in dview.columns:
+                                _rs_fp = pd.to_numeric(dview["batt_kw_realistic"], errors="coerce")
+                                _ps_fp = pd.to_numeric(dview["plan_batt_kw"], errors="coerce")
+                                _pb_arr = _rs_fp.where(_rs_fp.notna(), _ps_fp).fillna(0.0).tolist()
+                            else:
+                                _pb_arr = dview[_src_col].fillna(0.0).tolist()
                             for _pb in _pb_arr:
                                 _dkwh_req = float(_pb) / 60.0   # kW × 1/60 h (signed)
                                 if _dkwh_req > 0:
@@ -6501,10 +6510,20 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                 dview["soc_pct"] = _socs
                                 _vdt_diag["soc_source"] = "render-fallback (engine soc chýba)"
                             else:
+                                # Bug FUTURE-PRED (2026-06-16): minulosť = engine soc_pct
+                                # (realita, jediný zdroj). Budúce minúty engine ešte nemá
+                                # (NaN) → namiesto plochého ffill použijeme _socs (integrácia
+                                # realized+plán) → SOC predikcia ukáže plánové vybíjanie
+                                # (napr. večer 100→5 %), konzistentne so zelenou predikciou.
                                 if _soc_eng.isna().any():
+                                    try:
+                                        _socs_ser = pd.Series(_socs, index=dview.index)
+                                        _soc_eng = _soc_eng.where(_soc_eng.notna(), _socs_ser)
+                                    except Exception:
+                                        pass
                                     _soc_eng = _soc_eng.ffill().bfill()
                                 dview["soc_pct"] = _soc_eng
-                                _vdt_diag["soc_source"] = "engine (jediný zdroj)"
+                                _vdt_diag["soc_source"] = "engine(realita)+plan(buducnost)"
                             # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
                             # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
                             # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
@@ -7463,8 +7482,15 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         _has_real = (_batt_real_col is not None
                       and pd.to_numeric(_batt_real_col, errors="coerce").fillna(0).abs().sum() > 0.1)
         if _has_real:
-            _batt_base = dview["batt_kw_realistic"]
-            _add_rt_intent = False   # batt_kw_realistic už zahŕňa plán+VDT+RT post-cap
+            # Bug FUTURE-PRED-NAN (2026-06-16, user VW_simulacia_3): pre BUDÚCE minúty
+            # batt_kw_realistic = NaN → zelená predikcia padala na NaN (= "+nan kW",
+            # večerné vybíjanie sa nevykreslilo). Minulosť z realized (post-cap, vrátane
+            # RT+VDT), budúcnosť doplníme PLÁNOM → predikcia ukáže plánované vybíjanie.
+            _real_s = pd.to_numeric(dview["batt_kw_realistic"], errors="coerce")
+            _plan_s = (pd.to_numeric(dview["plan_batt_kw"], errors="coerce")
+                       if "plan_batt_kw" in dview.columns else _real_s)
+            _batt_base = _real_s.where(_real_s.notna(), _plan_s).fillna(0.0)
+            _add_rt_intent = False   # realized už zahŕňa plán+VDT+RT post-cap; budúce = plán
         else:
             _batt_base = dview["plan_batt_kw"]
             _add_rt_intent = True    # fallback pre staré CSV bez batt_kw_realistic
