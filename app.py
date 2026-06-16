@@ -6510,20 +6510,51 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                 dview["soc_pct"] = _socs
                                 _vdt_diag["soc_source"] = "render-fallback (engine soc chýba)"
                             else:
-                                # Bug FUTURE-PRED (2026-06-16): minulosť = engine soc_pct
-                                # (realita, jediný zdroj). Budúce minúty engine ešte nemá
-                                # (NaN) → namiesto plochého ffill použijeme _socs (integrácia
-                                # realized+plán) → SOC predikcia ukáže plánové vybíjanie
-                                # (napr. večer 100→5 %), konzistentne so zelenou predikciou.
-                                if _soc_eng.isna().any():
-                                    try:
-                                        _socs_ser = pd.Series(_socs, index=dview.index)
-                                        _soc_eng = _soc_eng.where(_soc_eng.notna(), _socs_ser)
-                                    except Exception:
-                                        pass
-                                    _soc_eng = _soc_eng.ffill().bfill()
+                                # Bug FUTURE-PRED (2026-06-16, user VW_simulacia_3): minulosť
+                                # (≤ teraz) = engine soc_pct (realita). BUDÚCNOSŤ (> teraz,
+                                # dnešok) = _socs (integrácia realized+plán). effect_minute drží
+                                # aj projekciu budúcnosti, ktorá môže byť ZASTARANÁ (starý beh
+                                # → SOC 4 % o 20:00 hoci batéria je plná) → preto budúcnosť
+                                # OVERRIDE-ujeme _socs-om, nielen NaN. Tak výkon (zelená=plán)
+                                # aj SOC predikcia sedia (večer 100→5 %).
+                                import numpy as _np_soc
+                                _se_vals = pd.to_numeric(_soc_eng, errors="coerce").values.astype(float)
+                                _so_vals = _np_soc.asarray(_socs, dtype=float)
+                                # STABILNÝ KÁNON MINULOSTI = effect_minute (bg worker), NIE
+                                # flaky per-request load_series (skákal 5%↔100% podľa toho či
+                                # stihol prepočet). Override SOC minulosti hodnotami z
+                                # effect_minute kde existujú → jedna deterministická hodnota.
+                                try:
+                                    import core.effect_db as _edb_soc
+                                    _em_soc = _edb_soc.get_minute_series(_prof_load, str(view_day))
+                                    if _em_soc is not None and not _em_soc.empty and "soc_pct" in _em_soc.columns and len(_se_vals) == len(dview):
+                                        _emk = dict(zip(
+                                            pd.to_datetime(_em_soc["time"]).dt.strftime("%Y-%m-%d %H:%M"),
+                                            pd.to_numeric(_em_soc["soc_pct"], errors="coerce")))
+                                        _dvk = pd.to_datetime(dview["time"]).dt.strftime("%Y-%m-%d %H:%M")
+                                        _em_al = _dvk.map(_emk).astype(float).values
+                                        _has_em = ~_np_soc.isnan(_em_al)
+                                        _se_vals[_has_em] = _em_al[_has_em]
+                                except Exception as _e_em_soc:
+                                    print(f"[SOC-EFFECTMINUTE] {_e_em_soc}")
+                                _fut_mask_soc = None
+                                try:
+                                    if _is_current_day and len(_se_vals) == len(dview):
+                                        _now_min_soc = dt.datetime.now().hour * 60 + dt.datetime.now().minute
+                                        _tmin_soc = (pd.to_datetime(dview["time"]).dt.hour * 60
+                                                     + pd.to_datetime(dview["time"]).dt.minute).values
+                                        _fut_mask_soc = (_tmin_soc > _now_min_soc)
+                                except Exception:
+                                    _fut_mask_soc = None
+                                if _fut_mask_soc is not None and len(_so_vals) == len(_se_vals):
+                                    _se_vals[_fut_mask_soc] = _so_vals[_fut_mask_soc]
+                                # zvyšné NaN (medzery) doplň _socs / ffill
+                                _nan_m = _np_soc.isnan(_se_vals)
+                                if _nan_m.any() and len(_so_vals) == len(_se_vals):
+                                    _se_vals[_nan_m] = _so_vals[_nan_m]
+                                _soc_eng = pd.Series(_se_vals, index=dview.index).ffill().bfill()
                                 dview["soc_pct"] = _soc_eng
-                                _vdt_diag["soc_source"] = "engine(realita)+plan(buducnost)"
+                                _vdt_diag["soc_source"] = "engine(realita do teraz)+plan(buducnost)"
                             # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
                             # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
                             # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
