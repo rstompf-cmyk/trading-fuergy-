@@ -839,6 +839,38 @@ def get_live_recommendation(*,
     except Exception:
         pass
 
+    # ── Bug VDT-HORIZON-AGG (2026-06-16, user VW_simulacia_3) ──────────────
+    # LP horizont je dnes+zajtra (snapshot načítava 2 dni kvôli look-ahead na
+    # ceny). Preto result-agregáty (dam_committed_export, total_charged/discharged)
+    # sumovali OBA dni → pri 6 MWh batérii to vyzeralo ako commit 10830 kWh / ±16830
+    # ("obchod uzavretý, nedá sa dodať"). Pre kontrolu deliverability a zobrazenie
+    # KLIPUJEME na DNEŠOK (sloty s dátumom == dnes). dam_commits basis=batt: +vybíja −nabíja.
+    _today_d = dt.date.today()
+    _dc_arr = dam_commits or []
+    _td = {"dam_dis": 0.0, "dam_chg": 0.0, "tot_dis": 0.0, "tot_chg": 0.0}
+    for _i, _tr in enumerate(result.get("trades", [])):
+        try:
+            _d = pd.Timestamp(_tr["start_local"]).date()
+        except Exception:
+            _d = _today_d
+        if _d != _today_d:
+            continue
+        _td["tot_dis"] += float(_tr.get("discharge_kwh", 0.0))
+        _td["tot_chg"] += float(_tr.get("charge_kwh", 0.0))
+        if _i < len(_dc_arr):
+            _v = float(_dc_arr[_i])
+            if _v > 0:
+                _td["dam_dis"] += _v
+            elif _v < 0:
+                _td["dam_chg"] += -_v
+    _summary_today = dict(result.get("summary", {}))
+    _summary_today["total_charged_kwh"] = round(_td["tot_chg"], 1)
+    _summary_today["total_discharged_kwh"] = round(_td["tot_dis"], 1)
+    if batt_kwh > 0:
+        _summary_today["cycles"] = round(_td["tot_dis"] / batt_kwh, 3)
+    _summary_today["horizon_total_discharged_kwh"] = round(
+        float(result.get("summary", {}).get("total_discharged_kwh", 0.0)), 1)  # diag: 2-dňový horizont
+
     out = {
         "ok": True,
         "ts": dt.datetime.now().isoformat(timespec="seconds"),
@@ -851,7 +883,7 @@ def get_live_recommendation(*,
         "state": state if state is not None else {"data_completeness": False,
                                                           "missing_items": ["state_not_computed"]},
         "data_completeness": (state.get("data_completeness", False) if state else False),
-        "summary": result["summary"],
+        "summary": _summary_today,                    # DNEŠOK-only (viď VDT-HORIZON-AGG)
         "profit_eur": result["profit_eur"],
         "n_slots": result["n_slots"],
         "orderbook_status": ob_status,
@@ -860,8 +892,8 @@ def get_live_recommendation(*,
         "dam_commits": dam_commits or [],            # BATT účasť (LP lower bound)
         "dam_commits_grid": dam_commits_grid or [],  # FULL grid nominácia (diag)
         "zco": zco_info,                              # ZCO príležitosti (Fáza C1)
-        "dam_committed_export_kwh": result.get("dam_committed_export_kwh", 0.0),
-        "dam_committed_import_kwh": result.get("dam_committed_import_kwh", 0.0),
+        "dam_committed_export_kwh": round(_td["dam_dis"], 1),   # DNEŠOK-only
+        "dam_committed_import_kwh": round(_td["dam_chg"], 1),   # DNEŠOK-only
         "vdt_extra_discharge_kwh": result.get("vdt_extra_discharge_kwh", 0.0),
         "vdt_extra_charge_kwh": result.get("vdt_extra_charge_kwh", 0.0),
         "params": {
