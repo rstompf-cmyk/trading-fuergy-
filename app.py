@@ -4917,9 +4917,9 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         # Ekonomika
         _total_dt   = float(daily["dt_eur"].sum())
         _total_rt   = float(daily["rt_eur"].sum())
+        _total_dist = float(daily["dist_fee_eur"].sum()) if "dist_fee_eur" in daily.columns else 0.0
         _total_spolu = _total_dt + _total_rt + _total_dist
         _total_bl   = float(daily["baseline_eur"].sum())
-        _total_dist = float(daily["dist_fee_eur"].sum()) if "dist_fee_eur" in daily.columns else 0.0
         _prinos     = _total_spolu - _total_bl
         _prinos_pct = (_prinos / _total_bl * 100.0) if _total_bl > 0 else 0
         _per_day    = (_total_spolu / max(_period_days, 1))
@@ -5550,9 +5550,9 @@ pip install reportlab matplotlib</code>
         # ── KPI: Ekonomika ──
         _total_dt = float(daily["dt_eur"].sum())
         _total_rt = float(daily["rt_eur"].sum())
+        _total_dist = float(daily["dist_fee_eur"].sum()) if "dist_fee_eur" in daily.columns else 0.0
         _total_spolu = _total_dt + _total_rt + _total_dist
         _total_bl = float(daily["baseline_eur"].sum())
-        _total_dist = float(daily["dist_fee_eur"].sum()) if "dist_fee_eur" in daily.columns else 0.0
         _prinos = _total_spolu - _total_bl
         _prinos_pct = (_prinos / _total_bl * 100.0) if _total_bl > 0 else 0
         _per_day = _total_spolu / max(_period_days, 1)
