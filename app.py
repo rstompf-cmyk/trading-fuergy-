@@ -6510,51 +6510,66 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                 dview["soc_pct"] = _socs
                                 _vdt_diag["soc_source"] = "render-fallback (engine soc chýba)"
                             else:
-                                # Bug FUTURE-PRED (2026-06-16, user VW_simulacia_3): minulosť
-                                # (≤ teraz) = engine soc_pct (realita). BUDÚCNOSŤ (> teraz,
-                                # dnešok) = _socs (integrácia realized+plán). effect_minute drží
-                                # aj projekciu budúcnosti, ktorá môže byť ZASTARANÁ (starý beh
-                                # → SOC 4 % o 20:00 hoci batéria je plná) → preto budúcnosť
-                                # OVERRIDE-ujeme _socs-om, nielen NaN. Tak výkon (zelená=plán)
-                                # aj SOC predikcia sedia (večer 100→5 %).
+                                # Bug SOC-REALITY-ANCHOR (2026-06-16, user VW_simulacia_3):
+                                # MINULOSŤ = effect_minute (bg worker = stabilná REALITA, nie
+                                # flaky load_series čo skákal 5↔100). BUDÚCNOSŤ = integruj PLÁN
+                                # dopredu od POSLEDNÉHO REÁLNEHO SOC (effect_minute), NIE z _socs
+                                # (to integrovalo flaky load_series → batéria "nenabitá" →
+                                # predikcia padla na 4 %). Tak SOC predikcia naozaj zobrazuje
+                                # realitu (teraz 100 %) a večer klesá podľa plánu 100→5 %.
                                 import numpy as _np_soc
                                 _se_vals = pd.to_numeric(_soc_eng, errors="coerce").values.astype(float)
                                 _so_vals = _np_soc.asarray(_socs, dtype=float)
-                                # STABILNÝ KÁNON MINULOSTI = effect_minute (bg worker), NIE
-                                # flaky per-request load_series (skákal 5%↔100% podľa toho či
-                                # stihol prepočet). Override SOC minulosti hodnotami z
-                                # effect_minute kde existujú → jedna deterministická hodnota.
                                 try:
                                     import core.effect_db as _edb_soc
                                     _em_soc = _edb_soc.get_minute_series(_prof_load, str(view_day))
-                                    if _em_soc is not None and not _em_soc.empty and "soc_pct" in _em_soc.columns and len(_se_vals) == len(dview):
+                                    if (_em_soc is not None and not _em_soc.empty
+                                            and "soc_pct" in _em_soc.columns and len(_se_vals) == len(dview)):
                                         _emk = dict(zip(
                                             pd.to_datetime(_em_soc["time"]).dt.strftime("%Y-%m-%d %H:%M"),
                                             pd.to_numeric(_em_soc["soc_pct"], errors="coerce")))
                                         _dvk = pd.to_datetime(dview["time"]).dt.strftime("%Y-%m-%d %H:%M")
                                         _em_al = _dvk.map(_emk).astype(float).values
                                         _has_em = ~_np_soc.isnan(_em_al)
+                                        # 1) MINULOSŤ = realita z effect_minute
                                         _se_vals[_has_em] = _em_al[_has_em]
+                                        # 2) BUDÚCNOSŤ = integruj plán dopredu od posledného reálneho SOC
+                                        _idx_real = _np_soc.where(_has_em)[0]
+                                        _plan_kw_arr = (pd.to_numeric(dview["plan_batt_kw"], errors="coerce")
+                                                        .fillna(0.0).values
+                                                        if "plan_batt_kw" in dview.columns
+                                                        else _np_soc.zeros(len(dview)))
+                                        if len(_idx_real) > 0:
+                                            _cap = max(1.0, float(_batt_kwh_cap))
+                                            _lo = _soc_min_p / 100.0 * _cap
+                                            _hi = _soc_max_p / 100.0 * _cap
+                                            # REÁLNY časový krok riadku (dview môže byť 1-/15-/60-min)
+                                            try:
+                                                _tt_soc = pd.to_datetime(dview["time"])
+                                                _step_h = float((_tt_soc.iloc[1] - _tt_soc.iloc[0]).total_seconds()) / 3600.0
+                                                if not (_step_h > 0):
+                                                    _step_h = 1.0 / 60.0
+                                            except Exception:
+                                                _step_h = 1.0 / 60.0
+                                            _li = int(_idx_real[-1])
+                                            _cur = float(_em_al[_li]) / 100.0 * _cap
+                                            for _j in range(_li + 1, len(_se_vals)):
+                                                _dk = float(_plan_kw_arr[_j]) * _step_h   # kWh za krok (+vybíja −nabíja)
+                                                if _dk > 0:
+                                                    _cur -= _dk / max(0.01, _eff_d)
+                                                elif _dk < 0:
+                                                    _cur += (-_dk) * _eff_c
+                                                _cur = max(_lo, min(_hi, _cur))
+                                                _se_vals[_j] = _cur / _cap * 100.0
                                 except Exception as _e_em_soc:
-                                    print(f"[SOC-EFFECTMINUTE] {_e_em_soc}")
-                                _fut_mask_soc = None
-                                try:
-                                    if _is_current_day and len(_se_vals) == len(dview):
-                                        _now_min_soc = dt.datetime.now().hour * 60 + dt.datetime.now().minute
-                                        _tmin_soc = (pd.to_datetime(dview["time"]).dt.hour * 60
-                                                     + pd.to_datetime(dview["time"]).dt.minute).values
-                                        _fut_mask_soc = (_tmin_soc > _now_min_soc)
-                                except Exception:
-                                    _fut_mask_soc = None
-                                if _fut_mask_soc is not None and len(_so_vals) == len(_se_vals):
-                                    _se_vals[_fut_mask_soc] = _so_vals[_fut_mask_soc]
+                                    print(f"[SOC-REALITY-ANCHOR] {_e_em_soc}")
                                 # zvyšné NaN (medzery) doplň _socs / ffill
                                 _nan_m = _np_soc.isnan(_se_vals)
                                 if _nan_m.any() and len(_so_vals) == len(_se_vals):
                                     _se_vals[_nan_m] = _so_vals[_nan_m]
                                 _soc_eng = pd.Series(_se_vals, index=dview.index).ffill().bfill()
                                 dview["soc_pct"] = _soc_eng
-                                _vdt_diag["soc_source"] = "engine(realita do teraz)+plan(buducnost)"
+                                _vdt_diag["soc_source"] = "effect_minute(realita)+plan-forward(buducnost)"
                             # Bug MM: prepiseme plan_batt_kw na to, co bolo realne mozne
                             # vykonatelne dane SOC limits — zhoda batt_kW <-> SOC pohybu.
                             # SOC-REALISTIC-SOURCE: prepisuj IBA keď zdroj bol plan_batt_kw.
@@ -7548,8 +7563,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             if str(view_day) == dt.date.today().isoformat():
                 _dbg_t = pd.to_datetime(dview["time"]).reset_index(drop=True)
                 _act_l = list(_act_per_min)
-                for _hh in (20, 21):
-                    _mask_dbg = (_dbg_t.dt.hour == _hh) & (_dbg_t.dt.minute == 0)
+                try:
+                    _stp = (_dbg_t.iloc[1] - _dbg_t.iloc[0]).total_seconds() / 60.0
+                except Exception:
+                    _stp = -1
+                print(f"[DIAG-EVE-RES] len(dview)={len(dview)} step_min={_stp:.1f}")
+                for _hh, _mm in ((20, 0), (20, 30), (21, 0), (21, 30), (22, 0), (23, 0)):
+                    _mask_dbg = (_dbg_t.dt.hour == _hh) & (_dbg_t.dt.minute == _mm)
                     if _mask_dbg.any():
                         _pos = int(_mask_dbg.values.argmax())
                         _rv = (float(pd.to_numeric(dview["batt_kw_realistic"], errors="coerce").fillna(0).iloc[_pos])
@@ -7560,7 +7580,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                                  if "plan_batt_dam_kw" in dview.columns else None)
                         _vdtv = (float(pd.to_numeric(dview["plan_batt_vdt_kw"], errors="coerce").fillna(0).iloc[_pos])
                                  if "plan_batt_vdt_kw" in dview.columns else None)
-                        print(f"[DIAG-EVE {view_day} {_hh}:00] act_green={_act_l[_pos]:.0f}kW "
+                        print(f"[DIAG-EVE {view_day} {_hh:02d}:{_mm:02d}] act_green={_act_l[_pos]:.0f}kW "
                               f"plan={_pv:.0f}kW dam={_damv} vdt={_vdtv} realistic={_rv} soc={_sv:.1f}% has_real={_has_real}")
         except Exception as _e_dbg_eve:
             print(f"[DIAG-EVE] {_e_dbg_eve}")
