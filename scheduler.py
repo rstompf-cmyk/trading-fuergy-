@@ -382,7 +382,15 @@ def job_vdt_advisor():
                         _dam_map_sx = _ss_sx.load_okte_dt_for_day(_day_iso_sx) or {}
                     except Exception:
                         _dam_map_sx = {}
-                    for entry in fp:
+                    # Bug VDT-DOUBLE-COUNT (2026-06-16, user VW_simulacia_3 6 MWh): VDT-PLAN-LOG
+                    # logoval CELÝ full_plan ako VDT obchod. Lenže pre use_vdt=True je tá istá
+                    # arbitráž už v D-1 pláne (sch.batt_kw → livesim dam_per_min). Livesim potom
+                    # plan_batt_kw = dam + vdt = 2× → SOC vybité 2× (z 6 MWh "10830 kWh"). Fix:
+                    # loguj len EXTRA nad DAM nomináciu (full_plan − dam_commits), index-zarovnané
+                    # (oba od cache.ts). Pre VW (full_plan == DAM) → extra=0 → žiadny double.
+                    # Obnovuje invariant VDT-EXTRA-ONLY (43dacef), ktorý d41f278 nechtiac obišiel.
+                    _dam_fp = res.get("dam_commits", []) or []   # batt: +vybíja −nabíja, zarovnané s fp
+                    for _fp_i, entry in enumerate(fp):
                         sl = str(entry.get("slot", ""))
                         if "-" not in sl or len(sl) < 5:
                             continue
@@ -392,6 +400,14 @@ def job_vdt_advisor():
                         kwh_e = abs(float(entry.get("kwh", 0) or 0))
                         if kwh_e < 0.5:
                             continue
+                        # EXTRA nad DAM: signed full_plan − dam_commit (rovnaká batt konvencia)
+                        _signed_fp = kwh_e if action_e == "discharge" else -kwh_e
+                        _dam_i = float(_dam_fp[_fp_i]) if _fp_i < len(_dam_fp) else 0.0
+                        _extra = _signed_fp - _dam_i
+                        # Loguj len ak je extra v rovnakom smere ako obchod a nad prahom
+                        if abs(_extra) < 0.5 or (_extra > 0) != (_signed_fp > 0):
+                            continue
+                        kwh_e = abs(_extra)   # logujeme IBA extra nad DAM, nie celý plán
                         # reálna order-book cena pre VLASTNÝ smer obchodu
                         _px_raw = (entry.get("buy_price") if action_e == "charge"
                                    else entry.get("sell_price"))
