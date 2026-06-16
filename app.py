@@ -7573,33 +7573,6 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # alebo FTV nedodá → batt_kw_realistic clipnutý na 0 a vznikne dev).
         _plan_for_ref = dview["plan_batt_kw"].fillna(0.0).tolist() if "plan_batt_kw" in dview.columns else [0.0]*len(dview)
         AP = "[" + ",".join(_js(float(x)) for x in _plan_for_ref) + "]"
-        # DIAG VDT-EVENING (2026-06-16): lokalizácia zdvojenia výkon-vs-SOC vo večeri.
-        # Vypíše zložky predikcie pre 20:00 a 21:00 — act(zelená) vs plán vs batt_kw_realistic.
-        try:
-            if str(view_day) == dt.date.today().isoformat():
-                _dbg_t = pd.to_datetime(dview["time"]).reset_index(drop=True)
-                _act_l = list(_act_per_min)
-                try:
-                    _stp = (_dbg_t.iloc[1] - _dbg_t.iloc[0]).total_seconds() / 60.0
-                except Exception:
-                    _stp = -1
-                print(f"[DIAG-EVE-RES] len(dview)={len(dview)} step_min={_stp:.1f}")
-                for _hh, _mm in ((20, 0), (20, 30), (21, 0), (21, 30), (22, 0), (23, 0)):
-                    _mask_dbg = (_dbg_t.dt.hour == _hh) & (_dbg_t.dt.minute == _mm)
-                    if _mask_dbg.any():
-                        _pos = int(_mask_dbg.values.argmax())
-                        _rv = (float(pd.to_numeric(dview["batt_kw_realistic"], errors="coerce").fillna(0).iloc[_pos])
-                               if "batt_kw_realistic" in dview.columns else None)
-                        _pv = float(pd.to_numeric(dview["plan_batt_kw"], errors="coerce").fillna(0).iloc[_pos]) if "plan_batt_kw" in dview.columns else 0.0
-                        _sv = float(pd.to_numeric(dview["soc_pct"], errors="coerce").fillna(0).iloc[_pos]) if "soc_pct" in dview.columns else 0.0
-                        _damv = (float(pd.to_numeric(dview["plan_batt_dam_kw"], errors="coerce").fillna(0).iloc[_pos])
-                                 if "plan_batt_dam_kw" in dview.columns else None)
-                        _vdtv = (float(pd.to_numeric(dview["plan_batt_vdt_kw"], errors="coerce").fillna(0).iloc[_pos])
-                                 if "plan_batt_vdt_kw" in dview.columns else None)
-                        print(f"[DIAG-EVE {view_day} {_hh:02d}:{_mm:02d}] act_green={_act_l[_pos]:.0f}kW "
-                              f"plan={_pv:.0f}kW dam={_damv} vdt={_vdtv} realistic={_rv} soc={_sv:.1f}% has_real={_has_real}")
-        except Exception as _e_dbg_eve:
-            print(f"[DIAG-EVE] {_e_dbg_eve}")
         # 15-min agregat ako druhy dataset (transparentny prehlad)
         try:
             _act_df = pd.DataFrame({"_t": dview["time"].values, "_v": _act_per_min})
