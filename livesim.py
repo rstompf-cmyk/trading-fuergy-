@@ -960,28 +960,39 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                               f"a meta.start_date={_meta_start.date()} (stale stav)")
                 except (FileNotFoundError, ValueError, KeyError, pd.errors.EmptyDataError):
                     pass
-            # (3) Row-count sanity check — chráni proti #600 (CSV poškodený / partial)
+            # (3) Sanity check proti #600 (CSV odseknutý/partial). Bug #600-GAP (2026-06-16):
+            # PREDTÝM sa resetovalo podľa POČTU riadkov (days×1440×0.5). Lenže pri HISTORIAN
+            # GAP-och (dni bez zdrojových minútových dát) má CSV legitímne MENEJ riadkov →
+            # falošný reset → re-backfill na KAŽDOM requeste → nekonečná slučka (nikdy nedosiahne
+            # počet, dáta chýbajú) + brutálne spomalenie. FIX: reset len keď CSV NEDOSAHUJE
+            # done_through (skutočne odseknutý log), NIE keď je len „riedky" kvôli gapom.
             if not _need_reset:
                 try:
                     _meta_through = meta.get("done_through")
                     if _meta_through:
                         _through_ts = pd.Timestamp(_meta_through).normalize()
-                        _days_expected = max(1, (_through_ts - _user_start).days + 1)
-                        _rows_expected_min = int(_days_expected * 1440 * 0.5)   # tolerancia 50%
-                        # Rýchly počet riadkov (nezávisle od CSV obsahu)
+                        # posledný dátum v CSV (lacno — tail posledných ~8 KB)
+                        _last_csv_date = None
                         try:
                             with open(csv_path, "rb") as _f:
-                                _rows_actual = sum(1 for _ in _f) - 1   # -header
-                            if _rows_actual < _rows_expected_min:
-                                _need_reset = True
-                                _reset_reason = (
-                                    f"CSV má {_rows_actual} riadkov ale očakávame "
-                                    f"≥{_rows_expected_min} (od {_user_start.date()} po "
-                                    f"{_through_ts.date()}, ~{_days_expected} dní) — "
-                                    f"meta out-of-sync (#600)"
-                                )
-                        except (FileNotFoundError, OSError):
-                            pass
+                                _f.seek(0, 2); _sz = _f.tell()
+                                _f.seek(max(0, _sz - 8192))
+                                _tail = _f.read().decode("utf-8", "ignore")
+                            _ls = [l for l in _tail.strip().splitlines() if l.strip()]
+                            if _ls:
+                                _cells = _ls[-1].split(",")
+                                # CSV_COLS: [time, date, ...] → date je stĺpec index 1
+                                if len(_cells) > 1:
+                                    _last_csv_date = pd.Timestamp(_cells[1]).normalize()
+                        except (FileNotFoundError, OSError, ValueError, IndexError):
+                            _last_csv_date = None
+                        # reset len ak CSV končí > 2 dni PRED done_through (odseknutý), nie pri gapoch
+                        if _last_csv_date is not None and _last_csv_date < (_through_ts - pd.Timedelta(days=2)):
+                            _need_reset = True
+                            _reset_reason = (
+                                f"CSV končí {_last_csv_date.date()} ale done_through="
+                                f"{_through_ts.date()} → odseknutý log (#600)"
+                            )
                 except Exception:
                     pass
         except Exception:
