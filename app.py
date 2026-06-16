@@ -6531,19 +6531,30 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                         _dvk = pd.to_datetime(dview["time"]).dt.strftime("%Y-%m-%d %H:%M")
                                         _em_al = _dvk.map(_emk).astype(float).values
                                         _has_em = ~_np_soc.isnan(_em_al)
-                                        # 1) MINULOSŤ = realita z effect_minute
-                                        _se_vals[_has_em] = _em_al[_has_em]
-                                        # 2) BUDÚCNOSŤ = integruj plán dopredu od posledného reálneho SOC
-                                        _idx_real = _np_soc.where(_has_em)[0]
+                                        # ČASOVÁ HRANICA "TERAZ": effect_minute drží aj STALE
+                                        # projekciu budúcnosti (starý beh) → NEdelíme existenciou
+                                        # dát (_has_em = celý deň), ale ČASOM. Minulosť (≤teraz) =
+                                        # realita z DB; budúcnosť (>teraz) = plán dopredu od SOC teraz.
+                                        _tmin_s = (pd.to_datetime(dview["time"]).dt.hour * 60
+                                                   + pd.to_datetime(dview["time"]).dt.minute).values
+                                        if _is_current_day:
+                                            _now_min_s = dt.datetime.now().hour * 60 + dt.datetime.now().minute
+                                        else:
+                                            _now_min_s = 24 * 60 + 1   # historický deň → celý deň = minulosť (realita)
+                                        _past_m = (_tmin_s <= _now_min_s)
+                                        # 1) MINULOSŤ (≤teraz) = realita z effect_minute (kde existuje)
+                                        _pe = _past_m & _has_em
+                                        _se_vals[_pe] = _em_al[_pe]
+                                        # 2) BUDÚCNOSŤ (>teraz) = integruj PLÁN dopredu od SOC TERAZ
                                         _plan_kw_arr = (pd.to_numeric(dview["plan_batt_kw"], errors="coerce")
                                                         .fillna(0.0).values
                                                         if "plan_batt_kw" in dview.columns
                                                         else _np_soc.zeros(len(dview)))
-                                        if len(_idx_real) > 0:
+                                        _idx_past = _np_soc.where(_past_m)[0]
+                                        if _is_current_day and len(_idx_past) > 0:
                                             _cap = max(1.0, float(_batt_kwh_cap))
                                             _lo = _soc_min_p / 100.0 * _cap
                                             _hi = _soc_max_p / 100.0 * _cap
-                                            # REÁLNY časový krok riadku (dview môže byť 1-/15-/60-min)
                                             try:
                                                 _tt_soc = pd.to_datetime(dview["time"])
                                                 _step_h = float((_tt_soc.iloc[1] - _tt_soc.iloc[0]).total_seconds()) / 3600.0
@@ -6551,8 +6562,13 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                                     _step_h = 1.0 / 60.0
                                             except Exception:
                                                 _step_h = 1.0 / 60.0
-                                            _li = int(_idx_real[-1])
-                                            _cur = float(_em_al[_li]) / 100.0 * _cap
+                                            _li = int(_idx_past[-1])
+                                            # anchor = SOC TERAZ (realita); ak NaN, posledná platná dozadu
+                                            _anchor = _se_vals[_li]
+                                            if _np_soc.isnan(_anchor):
+                                                _vv = _se_vals[:_li + 1][~_np_soc.isnan(_se_vals[:_li + 1])]
+                                                _anchor = float(_vv[-1]) if len(_vv) else float(_so_vals[_li] if not _np_soc.isnan(_so_vals[_li]) else 50.0)
+                                            _cur = float(_anchor) / 100.0 * _cap
                                             for _j in range(_li + 1, len(_se_vals)):
                                                 _dk = float(_plan_kw_arr[_j]) * _step_h   # kWh za krok (+vybíja −nabíja)
                                                 if _dk > 0:
@@ -6560,7 +6576,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                                                 elif _dk < 0:
                                                     _cur += (-_dk) * _eff_c
                                                 _cur = max(_lo, min(_hi, _cur))
-                                                _se_vals[_j] = _cur / _cap * 100.0
+                                                _se_vals[_j] = _cur / _cap * 100.0   # OVERRIDE stale DB projekcie
                                 except Exception as _e_em_soc:
                                     print(f"[SOC-REALITY-ANCHOR] {_e_em_soc}")
                                 # zvyšné NaN (medzery) doplň _socs / ffill
