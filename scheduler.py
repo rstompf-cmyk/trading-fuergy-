@@ -390,27 +390,42 @@ def job_vdt_advisor():
                     # (oba od cache.ts). Pre VW (full_plan == DAM) → extra=0 → žiadny double.
                     # Obnovuje invariant VDT-EXTRA-ONLY (43dacef), ktorý d41f278 nechtiac obišiel.
                     _dam_fp = res.get("dam_commits", []) or []   # batt: +vybíja −nabíja, zarovnané s fp
+                    _ob_sx = res.get("orderbook_per_slot", {}) or {}
+                    def _ob_px_sx(_si, _side):
+                        _e = _ob_sx.get(_si) or _ob_sx.get(str(_si)) or {}
+                        return _e.get("bid_eur") if _side == "discharge" else _e.get("ask_eur")
+                    # Bug VDT-PAIR (2026-06-16, user: "kúpené 1000 ≠ predané 433"): predtým sa
+                    # logoval len extra v SMERE entry.action a opačný (buy-back vs DAM, idle slot
+                    # s DAM commitom) sa zahodil → ledger nevyvážený. VDT overlay (full_plan − DAM)
+                    # je SOC-neutral (párový), takže logujeme extra PODĽA JEHO ZNAMIENKA cez všetky
+                    # dnešné sloty → Σ extra ≈ 0 → kúpené ≈ predané. Cena = order-book pre smer extra.
+                    _last_idx_sx = -1
                     for _fp_i, entry in enumerate(fp):
                         sl = str(entry.get("slot", ""))
                         if "-" not in sl or len(sl) < 5:
                             continue
-                        action_e = str(entry.get("action", "")).lower()
-                        if action_e not in ("charge", "discharge"):
+                        try:
+                            _h_sx = int(sl[:2]); _m_sx = int(sl[3:5]); _slot_idx = (_h_sx * 60 + _m_sx) // 15
+                        except Exception:
                             continue
-                        kwh_e = abs(float(entry.get("kwh", 0) or 0))
-                        if kwh_e < 0.5:
+                        if not (0 <= _slot_idx < 96):
                             continue
-                        # EXTRA nad DAM: signed full_plan − dam_commit (rovnaká batt konvencia)
-                        _signed_fp = kwh_e if action_e == "discharge" else -kwh_e
+                        if _last_idx_sx >= 0 and _slot_idx < _last_idx_sx:
+                            break                          # prechod cez polnoc → zajtra, stop (today-only)
+                        _last_idx_sx = _slot_idx
+                        _act_e = str(entry.get("action", "")).lower()
+                        _kwh_e0 = abs(float(entry.get("kwh", 0) or 0))
+                        _fp_signed = _kwh_e0 if _act_e == "discharge" else (-_kwh_e0 if _act_e == "charge" else 0.0)
                         _dam_i = float(_dam_fp[_fp_i]) if _fp_i < len(_dam_fp) else 0.0
-                        _extra = _signed_fp - _dam_i
-                        # Loguj len ak je extra v rovnakom smere ako obchod a nad prahom
-                        if abs(_extra) < 0.5 or (_extra > 0) != (_signed_fp > 0):
+                        _extra = _fp_signed - _dam_i
+                        if abs(_extra) < 0.5:
                             continue
-                        kwh_e = abs(_extra)   # logujeme IBA extra nad DAM, nie celý plán
-                        # reálna order-book cena pre VLASTNÝ smer obchodu
-                        _px_raw = (entry.get("buy_price") if action_e == "charge"
-                                   else entry.get("sell_price"))
+                        action_e = "discharge" if _extra > 0 else "charge"   # podľa znamienka extra
+                        kwh_e = abs(_extra)
+                        # cena: order-book pre SMER extra (predaj=bid / nákup=ask); fallback entry cena ak rovnaký smer
+                        _px_raw = _ob_px_sx(_slot_idx, action_e)
+                        if _px_raw is None and action_e == _act_e:
+                            _px_raw = (entry.get("buy_price") if action_e == "charge" else entry.get("sell_price"))
                         if _px_raw is None:
                             continue                       # bez reálnej ceny NElogujeme (nie 0)
                         try:
@@ -418,7 +433,7 @@ def job_vdt_advisor():
                         except (TypeError, ValueError):
                             continue
                         if _px == 0:
-                            continue                       # 0 = neplatná cena → preskoč
+                            continue
                         _slot_start = sl.split("-")[0].strip()
                         _dam_clr = float(_dam_map_sx.get(
                             f"{_day_iso_sx} {_slot_start}:00", 0.0) or 0.0)
