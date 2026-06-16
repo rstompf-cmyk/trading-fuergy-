@@ -362,54 +362,37 @@ def job_vdt_advisor():
                     # iba dáta z full_plan / dam_commits z cache (best-effort).
                     # Tu len LOG signál "stalo sa to" — nebudeme prepočítavať LP.
                     fp = res.get("full_plan", []) or []
-                    # Bug VDT-REAL-CLOSED (2026-06-15, user: "ledger = všetky reálne uzavreté
-                    # obchody; každý nákup/predaj má mať svoju reálnu cenu a nesmie byť 0").
-                    # Pôvodne sa logoval CELÝ forward full_plan každý tick → 3 chyby:
-                    #   (1) phantom churn — UPSERT(slot,action) hromadil naprieč tickmi aj nákup
-                    #       aj predaj toho istého slotu z rôznych (flip-flop) návrhov;
-                    #   (2) "budúce sloty ako uzavreté" — forward návrhy zapísané ako obchody;
-                    #   (3) cena 0 — cena sa brala podľa smeru extra-voči-DAM, ktorý sa
-                    #       nezhodoval s entry.buy_price/sell_price (tie patria k VLASTNÉMU smeru
-                    #       optimizera) → None → 0.
-                    # Teraz: loguj LEN AKTUÁLNY (uzavretý) 15-min slot, cena = entry.buy_price
-                    # (charge) / entry.sell_price (discharge) = reálna order-book cena daného
-                    # obchodu. Ak cena chýba / je 0 → obchod NElogujeme (nikdy nie 0).
-                    # Min_spread ziskovosť rieši optimizer (hurdle v coeff_d/coeff_c).
-                    try:
-                        import datetime as _dt_sx
-                        try:
-                            from zoneinfo import ZoneInfo as _ZI_sx
-                            _now_sx = _dt_sx.datetime.now(_ZI_sx("Europe/Bratislava"))
-                        except Exception:
-                            _now_sx = _dt_sx.datetime.now()
-                        _cur_slot_sx = f"{_now_sx.hour:02d}:{(_now_sx.minute // 15) * 15:02d}"
-                    except Exception:
-                        _cur_slot_sx = None
-                    # DAM clearing pre aktuálny slot → do DB (aby 'z toho VDT' arbitráž
-                    # vs DAM vedela vyjsť; predtým NULL). VDT-DAM-COL (2026-06-15).
-                    _dam_clr_cur = 0.0
+                    # Bug VDT-PLAN-LOG (2026-06-16, user: "VDT obchody sa nerealizujú"):
+                    # po VDT-REAL-CLOSED + regenerácii sa nezobrazovali žiadne VDT obchody —
+                    # advisor ich navrhuje (full_plan 8-16 slotov, LP optimal), ale logoval sa
+                    # len aktuálny slot → poobedné/večerné plánované obchody sa neukázali a
+                    # regenerácia ledger zmazala (re-sim ho nedotvára). Teraz: loguj CELÝ
+                    # full_plan (plánované VDT obchody dňa) s REÁLnou order-book cenou
+                    # (entry.buy_price charge / sell_price discharge); ak cena chýba/0 →
+                    # NElogovať (žiadne 0/garbage 200/330). Dedup PODĽA SLOTU v
+                    # append_extra_paper_trade → pri re-plane sa slot prepíše = žiadny churn
+                    # (slot nemá naraz nákup aj predaj z rôznych tickov). Ziskovosť rieši
+                    # optimizer (min_spread hurdle).
+                    import datetime as _dt_sx
+                    _day_iso_sx = _dt_sx.date.today().isoformat()
+                    # DAM clearing per slot (pre dam_clearing v DB → 'z toho VDT' arbitráž)
+                    _dam_map_sx = {}
                     try:
                         import seps_sk as _ss_sx
-                        _dam_map_sx = _ss_sx.load_okte_dt_for_day(
-                            _dt_sx.date.today().isoformat()) or {}
-                        if _cur_slot_sx and _dam_map_sx:
-                            _k_sx = f"{_dt_sx.date.today().isoformat()} {_cur_slot_sx}:00"
-                            _dam_clr_cur = float(_dam_map_sx.get(_k_sx, 0.0) or 0.0)
+                        _dam_map_sx = _ss_sx.load_okte_dt_for_day(_day_iso_sx) or {}
                     except Exception:
-                        _dam_clr_cur = 0.0
+                        _dam_map_sx = {}
                     for entry in fp:
                         sl = str(entry.get("slot", ""))
                         if "-" not in sl or len(sl) < 5:
                             continue
-                        if _cur_slot_sx is None or sl.split("-")[0].strip() != _cur_slot_sx:
-                            continue                       # len AKTUÁLNY uzavretý slot
                         action_e = str(entry.get("action", "")).lower()
                         if action_e not in ("charge", "discharge"):
                             continue
                         kwh_e = abs(float(entry.get("kwh", 0) or 0))
                         if kwh_e < 0.5:
                             continue
-                        # reálna cena pre VLASTNÝ smer obchodu (nie extra-voči-DAM)
+                        # reálna order-book cena pre VLASTNÝ smer obchodu
                         _px_raw = (entry.get("buy_price") if action_e == "charge"
                                    else entry.get("sell_price"))
                         if _px_raw is None:
@@ -420,6 +403,9 @@ def job_vdt_advisor():
                             continue
                         if _px == 0:
                             continue                       # 0 = neplatná cena → preskoč
+                        _slot_start = sl.split("-")[0].strip()
+                        _dam_clr = float(_dam_map_sx.get(
+                            f"{_day_iso_sx} {_slot_start}:00", 0.0) or 0.0)
                         _adv.append_extra_paper_trade(
                             profile=prof_name,
                             slot=sl,
@@ -428,9 +414,8 @@ def job_vdt_advisor():
                             price_eur_mwh=_px,
                             reason=f"vdt_{action_e}",
                             soc_pct=float(entry.get("soc_after_pct", 0) or 0),
-                            dam_clearing_eur_mwh=_dam_clr_cur,
+                            dam_clearing_eur_mwh=_dam_clr,
                         )
-                        break                              # jeden obchod (aktuálny slot) stačí
                 except Exception as _e_sx:
                     pass   # logger zlyhal, ale advisor cache je OK — nezastavujeme
             else:

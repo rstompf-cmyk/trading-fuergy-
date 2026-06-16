@@ -1104,6 +1104,8 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
                 prof_idx = header.index("profile") if "profile" in header else 1
                 slot_idx = header.index("slot") if "slot" in header else 2
                 act_idx = header.index("action") if "action" in header else 3
+                _BATT_ACTS = ("BUY", "SELL", "CHARGE", "DISCHARGE")
+                _new_is_batt = str(action or "").upper() in _BATT_ACTS
                 for r in rows[1:]:
                     if len(r) <= max(ts_idx, prof_idx, slot_idx, act_idx):
                         existing_rows.append(r)   # nedostatočne dlhý riadok — ponechaj
@@ -1113,8 +1115,15 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
                     same_key = (r[prof_idx] == str(profile or "")
                                  and r[slot_idx] == str(slot or "")
                                  and r[act_idx] == str(action or ""))
-                    if same_today and same_key:
-                        continue   # duplikát — vyhoď
+                    # VDT-NO-CHURN (2026-06-16): pri batériovom obchode nahraď AKÝKOĽVEK
+                    # batériový obchod pre ten istý slot (charge↔discharge flip cez ticky)
+                    # → slot má vždy 1 VDT obchod (idle/curtail riadky ostávajú).
+                    _same_slot_batt = (_new_is_batt
+                                       and r[prof_idx] == str(profile or "")
+                                       and r[slot_idx] == str(slot or "")
+                                       and str(r[act_idx] or "").upper() in _BATT_ACTS)
+                    if same_today and (same_key or _same_slot_batt):
+                        continue   # duplikát / starý obchod slotu — vyhoď
                     existing_rows.append(r)
         except Exception:
             existing_rows = []
@@ -1390,9 +1399,20 @@ def _vdt_db_upsert(profile: str, slot: str, action: str, ts: str,
             prof = s.query(_DbProfile).filter_by(name=str(profile or "")).one_or_none()
             if prof is None:
                 return False
+            _act_l = str(action or "").lower()
+            _BATT_DB = ("buy", "sell", "charge", "discharge")
+            # VDT-NO-CHURN (2026-06-16): pri batériovom obchode zmaž iný batériový obchod
+            # pre ten istý slot (charge↔discharge flip cez ticky) → slot má 1 VDT obchod.
+            if _act_l in _BATT_DB:
+                for _opp in s.query(_DbVPT).filter(
+                        _DbVPT.profile_id == prof.id, _DbVPT.date == date,
+                        _DbVPT.slot == str(slot or "")[:5],
+                        _DbVPT.action != _act_l,
+                        _DbVPT.action.in_(_BATT_DB)).all():
+                    s.delete(_opp)
             existing = s.query(_DbVPT).filter_by(
                 profile_id=prof.id, date=date,
-                slot=str(slot or "")[:5], action=str(action or "").lower()
+                slot=str(slot or "")[:5], action=_act_l
             ).one_or_none()
             if existing:
                 existing.kwh = float(kwh)
