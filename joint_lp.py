@@ -320,6 +320,20 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
             c[idx(IM_VDT, t)] += tou[t] / 1000.0
         # Curtailment — žiadny náklad (FTV je voľná)
 
+        # ── KOMERČNÁ SKUPINA (toggle = čo sa obchoduje) ─────────────────────
+        # User (2026-06-16): toggly určujú ČO sa počíta do obchodu, nie fyziku.
+        # Ak je LOAD mimo zmluvy (trade_load=False):
+        #   - import loadu NIE je náklad batérie → zrušíme ho (offset cez IM_LOAD;
+        #     IM_LOAD vstupuje do IM_DAM, ktorý je spoplatnený cena+fee+tou),
+        #   - vybitie batérie do load = PREDAJ batérie za DAM cenu (energia prešla
+        #     cez batériu), BEZ distribúcie/grid_fee (tok je za meračom, nejde do siete).
+        # Nákup/distribúcia batérie ostáva na jej GRID nabíjaní (IM_BATT cez IM_DAM)
+        # a prípadnom GRID vybíjaní (EX_BATT) — reálny styk so sieťou.
+        if not trade_load:
+            _gf_tou = grid_fee + (tou[t] / 1.0 if optimize_distribution else 0.0)
+            c[idx(IM_LOAD, t)] = -(pr_dam[t] + _gf_tou) / 1000.0   # zruší náklad load importu
+            c[idx(DI_LOAD, t)] = -pr_dam[t] / 1000.0               # batt predaj do load (bez dist.)
+
     # Decomposition constraints per slot (6 rovníc namiesto pôvodnej aggregate):
     #   PV bilancia:    pv[t]      = PV_LOAD + PV_BATT + EX_FTV + CU
     #   Load bilancia:  load[t]    = PV_LOAD + DI_LOAD + IM_LOAD
@@ -522,8 +536,11 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
                 else:
                     ub = _dis_slot_cap
             elif g == IM_LOAD:
-                # grid → load: gated cez trade_load
-                ub = float(max(load[t], 0)) if trade_load else 0.0
+                # grid → load: VŽDY povolené. User (2026-06-16): odber je vždy fyzicky na
+                # prahovom elektromere a sieť ho vždy kryje (jeden spotrebiteľ musí byť
+                # napájaný). trade_load NEriadi fyzické krytie load, len to či batéria load
+                # obchoduje (DI_LOAD) a či sa import na load počíta do 'obchod' agregátu.
+                ub = float(max(load[t], 0))
             elif g == IM_BATT:
                 # grid → batt: gated cez trade_batt + mults + allow_grid_charge (+ VDT chg cap)
                 if not trade_batt or not allow_grid_charge:
@@ -573,6 +590,9 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
         obchod += ex_ftv
     if trade_batt:
         obchod += ex_batt - im_batt
+        if not trade_load:
+            # LOAD mimo zmluvy: vybitie batérie do load = predaj batérie (prešlo cez batériu)
+            obchod += di_load
     if trade_load:
         obchod -= im_load
 
@@ -598,6 +618,20 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
     # Pri load=0 (žiadna spotreba v profile) úspora = 0.
     # Pri trade_load=False sa nezohľadňuje (load nepokrýva grid, ale batt/PV).
     tou_baseline = float(np.sum(tou * np.asarray(load, float)) / 1000.0) if optimize_distribution else 0.0
+
+    # ── KOMERČNÁ SKUPINA: ak LOAD mimo zmluvy → ekonomika LEN batérie ───────
+    # User (2026-06-16): obchoduje sa len to, čo prejde cez batériu. Vybitie do load
+    # = predaj batérie (energia prešla cez batériu), import loadu nie je náklad batérie,
+    # distribúcia len na reálny styk batérie so sieťou (nabíjanie/vybíjanie do siete).
+    # Konzistentné s úpravou účelovej funkcie vyššie (IM_LOAD offset + DI_LOAD predaj).
+    if not trade_load:
+        dam_rev += float(np.sum(pr_dam * di_load) / 1000.0)        # vybitie do load = predaj batérie
+        dam_cost -= float(np.sum(pr_dam * im_load) / 1000.0)       # load import nie je náklad batérie
+        fee_total -= float(np.sum(grid_fee * im_load) / 1000.0)    # poplatok len na grid styk batérie
+        if optimize_distribution:
+            tou_total -= float(np.sum(tou * im_load) / 1000.0)
+        tou_baseline = 0.0   # load mimo zmluvy → žiadna load-distribučná baseline
+
     tou_savings = tou_baseline - tou_total
     net = dam_rev - dam_cost + vdt_rev - vdt_cost - fee_total - cycle_total - tou_total
 
