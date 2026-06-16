@@ -436,6 +436,47 @@ def _plan_override(pp):
     return out
 
 
+def _decompose_dtprof(price, pv, ex, im, ch, di, cu, grid_fee, cycle_cost, flags, cons_only=False):
+    """DT efekt rozložený na NEZÁVISLÉ per-element členy (BAT / FTV / LOAD).
+
+    User (2026-06-16, TBB): toggle = čo sa počíta do obchodu. Vypnutie ktorejkoľvek
+    zložky len odoberie jej člen — nesmie pokaziť ostatné (predtým monolitický
+    net-meter vzorec sa „rozbil" keď vypadol LOAD → záporný efekt z nákladu spotreby).
+
+    Rekonštrukcia sub-streamov z trace (bilancia uzla: pv+di+im = load+ch+ex+cu):
+      load z bilancie; PV→load (free); batt→load (DI_LOAD); export split FTV/batt
+      (clamp na dané `ex`); import split load/batt (clamp na dané `im`).
+    Tým je zaručené ex_ftv+ex_batt=ex a im_load+im_batt=im → pri VŠETKÝCH zapnutých
+    je súčet IDENTICKÝ s pôvodným vzorcom (golden-overené).
+
+    Členy:
+      e_batt (trade_batt): predaj vybitia (ex_batt + di_load LEN ak LOAD mimo zmluvy)
+                           − nákup grid-nabíjania (im_batt × cena+poplatok) − cyklus
+      e_ftv  (trade_ftv):  predaj FTV prebytku do siete (ex_ftv × cena)
+      e_load (trade_load): náklad odberu zo siete (im_load × cena+poplatok)
+    cons_only: distribučný poplatok len na spotrebu (nie na nabíjanie batérie).
+    """
+    import numpy as _np
+    price = _np.asarray(price, float); pv = _np.asarray(pv, float)
+    ex = _np.asarray(ex, float); im = _np.asarray(im, float)
+    ch = _np.asarray(ch, float); di = _np.asarray(di, float); cu = _np.asarray(cu, float)
+    load = _np.maximum(pv + di + im - ch - ex - cu, 0.0)
+    pv_load = _np.minimum(pv, load)
+    pv_batt = _np.minimum(_np.maximum(pv - pv_load, 0.0), ch)
+    di_load = _np.minimum(di, _np.maximum(load - pv_load, 0.0))
+    ex_ftv = _np.minimum(ex, _np.maximum(pv - pv_load - pv_batt - cu, 0.0))
+    ex_batt = _np.maximum(ex - ex_ftv, 0.0)
+    im_load = _np.minimum(im, _np.maximum(load - pv_load - di_load, 0.0))
+    im_batt = _np.maximum(im - im_load, 0.0)
+    tb = bool(flags.get("trade_batt", True)); tf = bool(flags.get("trade_ftv", True)); tl = bool(flags.get("trade_load", True))
+    _chg_fee = 0.0 if cons_only else float(grid_fee)
+    batt_sell = ex_batt + (0.0 if tl else 1.0) * di_load
+    e_batt = ((price * batt_sell - (price + _chg_fee) * im_batt - cycle_cost * (ch + di) / 2.0) / 1000.0) if tb else _np.zeros_like(price)
+    e_ftv = ((price * ex_ftv) / 1000.0) if tf else _np.zeros_like(price)
+    e_load = ((-(price + float(grid_fee)) * im_load) / 1000.0) if tl else _np.zeros_like(price)
+    return e_batt + e_ftv + e_load
+
+
 def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
     """STRICT MODE: D-1 plán pre daný deň sa NIKDY negeneruje za behu — číta sa z plan_store.
     Ak plán pre (date, step_min, kind) neexistuje na disku, vyhodí PlanMissingError.
@@ -469,13 +510,17 @@ def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
     bkwh = float(p_params.get("batt_kwh", cfg.batt_kwh))
     # DIST-FEE-CONSUMPTION-ONLY (2026-06-15): poplatok len na spotrebný import
     # (nabíjanie z FTV aj grid-arbitráž vyňaté). Default vypnuté → golden nezmenené.
-    if bool(p_params.get("dist_fee_consumption_only", False)):
-        _cu_p = np.asarray(schedule.get("_curtail_kwh",
-                           schedule.get("plan_curtail_kwh", [0.0]*n)), float)
-        _cons_im_p = np.maximum(im - ex - ch - _cu_p, 0.0)
-        dtprof = price*ex/1000 - price*im/1000 - grid_fee*_cons_im_p/1000 - cycle_cost*(ch+di)/2/1000
-    else:
-        dtprof = price*ex/1000 - (price + grid_fee)*im/1000 - cycle_cost*(ch+di)/2/1000
+    # KOMERČNÁ SKUPINA: DT efekt = súčet NEZÁVISLÝCH per-element členov (BAT/FTV/LOAD).
+    # Vypnutie zložky (toggle) len odoberie jej člen; všetko zapnuté = pôvodný net-meter
+    # vzorec (golden-overené). Viď _decompose_dtprof.
+    _cu_dp = np.asarray(schedule.get("_curtail_kwh", schedule.get("plan_curtail_kwh", [0.0]*n)), float)
+    _jlf_dp = (p_params.get("joint_lp", {}) or {})
+    _flags_dp = ({"trade_batt": bool(_jlf_dp.get("trade_batt", True)),
+                  "trade_ftv": bool(_jlf_dp.get("trade_ftv", True)),
+                  "trade_load": bool(_jlf_dp.get("trade_load", True))}
+                 if _jlf_dp.get("enabled") else {"trade_batt": True, "trade_ftv": True, "trade_load": True})
+    dtprof = _decompose_dtprof(price, pvper, ex, im, ch, di, _cu_dp, grid_fee, cycle_cost,
+                               _flags_dp, cons_only=bool(p_params.get("dist_fee_consumption_only", False)))
     d1_cycles = float((ch.sum() + di.sum())/2/bkwh) if bkwh > 0 else 0.0
     # RT mask zo zapečeného plánu (preferované) — ak rt_freedom=False v čase ukladania, je už upravená
     _rtm = plan.get("rt_mask")
@@ -1055,16 +1100,20 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         # (z FTV ani grid-arbitráž). Spotrebný import = max(import − export −
                         # nabíjanie − curtail, 0) (z bilancie uzla load−pv−di = im−ex−ch−cu).
                         # Default vypnuté → ostatné (golden) profily nezmenené.
+                        # KOMERČNÁ SKUPINA: DT efekt = súčet nezávislých per-element členov
+                        # (BAT/FTV/LOAD). Vypnutie zložky len odoberie jej člen; all-on = pôvodný
+                        # vzorec (golden). Viď _decompose_dtprof.
+                        _jlf_rp = ((plan_params or {}).get("joint_lp", {}) or {})
+                        _load_in_scope_rp = (not _jlf_rp.get("enabled")) or bool(_jlf_rp.get("trade_load", True))
                         _cons_only = bool((plan_params or {}).get("dist_fee_consumption_only", False))
-                        if _cons_only:
-                            _cu_s = np.asarray(sch.get("_curtail_kwh",
-                                               sch.get("plan_curtail_kwh", [0.0]*len(sch))), float)
-                            _cons_im = np.maximum(_im - _ex - _ch - _cu_s, 0.0)
-                            dtprof = (_price_real*_ex/1000.0 - _price_real*_im/1000.0
-                                      - _gf*_cons_im/1000.0 - _cc*(_ch + _di)/2/1000.0)
-                        else:
-                            dtprof = (_price_real*_ex/1000.0 - (_price_real + _gf)*_im/1000.0
-                                      - _cc*(_ch + _di)/2/1000.0)
+                        _flags_rp = ({"trade_batt": bool(_jlf_rp.get("trade_batt", True)),
+                                      "trade_ftv": bool(_jlf_rp.get("trade_ftv", True)),
+                                      "trade_load": bool(_jlf_rp.get("trade_load", True))}
+                                     if _jlf_rp.get("enabled") else {"trade_batt": True, "trade_ftv": True, "trade_load": True})
+                        _cu_rp = np.asarray(sch.get("_curtail_kwh", sch.get("plan_curtail_kwh", [0.0]*len(sch))), float)
+                        _pv_rp = np.asarray(sch.get("pv_kwh", [0.0]*len(sch)), float)
+                        dtprof = _decompose_dtprof(_price_real, _pv_rp, _ex, _im, _ch, _di, _cu_rp,
+                                                   _gf, _cc, _flags_rp, cons_only=_cons_only)
                         # Bug VV (2026-06-08): pripočítaj TOU distribučný náklad k importu
                         # ak profile má joint_lp.optimize_distribution:true. Joint LP optimizer
                         # to už zaratáva v plánovacej fáze (joint_lp.py line 269-271), ale
@@ -1075,7 +1124,9 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             import settlement as _stl_tou
                             from core.profile_resolver import get_active as _ga_tou
                             _prof_tou = _ga_tou(profile)
-                            if _stl_tou.profile_uses_tou(_prof_tou):
+                            if _stl_tou.profile_uses_tou(_prof_tou) and _load_in_scope_rp:
+                                # TOU na spotrebný import — len keď je LOAD v zmluve. Pri LOAD-off
+                                # (obchod = len batéria) by TOU×celý_import znova pridal náklad spotreby.
                                 _tou_arr = _stl_tou.get_tou_for_day(
                                     _prof_tou, d.isoformat(),
                                     T=len(sch), dt_h=step/60.0)
