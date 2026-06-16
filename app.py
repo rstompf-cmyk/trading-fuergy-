@@ -7637,9 +7637,19 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                     if pd.notna(_ti) and _ti <= _t_now_eod and _soc_eod[_i] == _soc_eod[_i]:
                         _last_real = _i
                 if 0 <= _last_real < len(dview) - 1 and _bk_eod > 0:
+                    # REÁLNY časový krok riadku (dview môže byť 2-/15-min, nie 1-min).
+                    # Bug SOC-EOD-STEP (2026-06-16, user VW_simulacia_3): napevno /60 (1-min)
+                    # pri 2-min dview podhodnotilo energiu na polovicu → SOC končil na 50 %
+                    # namiesto 5 %. Použijeme skutočný krok.
+                    try:
+                        _step_eod = float((_times_eod.iloc[1] - _times_eod.iloc[0]).total_seconds()) / 3600.0
+                        if not (_step_eod > 0):
+                            _step_eod = 1.0 / 60.0
+                    except Exception:
+                        _step_eod = 1.0 / 60.0
                     _soc_kwh_eod = float(_soc_eod[_last_real]) / 100.0 * _bk_eod
                     for _i in range(_last_real + 1, len(dview)):
-                        _eg = float(_pb_eod[_i]) / 60.0          # kWh/min (+vybíja −nabíja)
+                        _eg = float(_pb_eod[_i]) * _step_eod      # kWh za krok (+vybíja −nabíja)
                         if _eg > 0:
                             _soc_kwh_eod -= _eg / max(_ed, 0.5)
                         else:
