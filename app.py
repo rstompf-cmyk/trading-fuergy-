@@ -7499,8 +7499,12 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                                if "batt_kw_realistic" in dview.columns else None)
                         _pv = float(pd.to_numeric(dview["plan_batt_kw"], errors="coerce").fillna(0).iloc[_pos]) if "plan_batt_kw" in dview.columns else 0.0
                         _sv = float(pd.to_numeric(dview["soc_pct"], errors="coerce").fillna(0).iloc[_pos]) if "soc_pct" in dview.columns else 0.0
+                        _damv = (float(pd.to_numeric(dview["plan_batt_dam_kw"], errors="coerce").fillna(0).iloc[_pos])
+                                 if "plan_batt_dam_kw" in dview.columns else None)
+                        _vdtv = (float(pd.to_numeric(dview["plan_batt_vdt_kw"], errors="coerce").fillna(0).iloc[_pos])
+                                 if "plan_batt_vdt_kw" in dview.columns else None)
                         print(f"[DIAG-EVE {view_day} {_hh}:00] act_green={_act_l[_pos]:.0f}kW "
-                              f"plan={_pv:.0f}kW realistic={_rv} soc={_sv:.1f}% has_real={_has_real}")
+                              f"plan={_pv:.0f}kW dam={_damv} vdt={_vdtv} realistic={_rv} soc={_sv:.1f}% has_real={_has_real}")
         except Exception as _e_dbg_eve:
             print(f"[DIAG-EVE] {_e_dbg_eve}")
         # 15-min agregat ako druhy dataset (transparentny prehlad)
