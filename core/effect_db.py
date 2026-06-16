@@ -265,6 +265,39 @@ def get_period_effect(profile_name: str, date_from: str, date_to: str,
         }
 
 
+def get_period_dist_fee(profile_name: str, date_from: str, date_to: str,
+                         grid_fee_eur_mwh: float) -> float:
+    """Distribučná úspora za obdobie (kumulatív, od štartu) = grid_fee × ušetrený import.
+
+    User-pravidlo (2026-06-15): poplatok len na reálnu spotrebu zo siete; nabíjanie
+    (z FTV aj grid-arbitráž) je vyňaté → do importu počítame iba VYBÍJANIE.
+    Per minútu z effect_minute:
+      baseline_import = max(load − ftv, 0)
+      skutočný_import = max(load − ftv − max(batt, 0), 0)   (max(batt,0) = len discharge)
+    Σ(baseline − skutočný) [kW·min] / 60 = ušetrené kWh; × grid_fee/1000 = €.
+    Konzistentné s cum_dt/cum_rt (rovnaký zdroj effect_minute, vrátane dnešku cez Fázu A).
+    """
+    gf = float(grid_fee_eur_mwh or 0.0)
+    if gf <= 0:
+        return 0.0
+    from sqlalchemy import text
+    with SessionLocal() as session:
+        pid = _profile_id(session, profile_name)
+        if pid is None:
+            return 0.0
+        row = session.execute(text(
+            "SELECT COALESCE(SUM("
+            "  MAX(load_kw_real - ftv_kw_real, 0.0)"
+            "  - MAX(load_kw_real - ftv_kw_real - MAX(batt_kw_real, 0.0), 0.0)"
+            "), 0.0) "
+            "FROM effect_minute "
+            "WHERE profile_id = :pid "
+            "AND substr(time_iso,1,10) >= :f AND substr(time_iso,1,10) <= :t"
+        ), {"pid": pid, "f": date_from, "t": date_to}).first()
+        red_kw_min = float(row[0] or 0.0)
+        return round(gf * (red_kw_min / 60.0) / 1000.0, 2)
+
+
 def get_daily_series(profile_name: str, date_from: str, date_to: str,
                        joint_flags: Optional[Dict] = None) -> pd.DataFrame:
     """Denné riadky pre chC graf "Po dňoch" + Excel sheet.

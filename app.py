@@ -7183,6 +7183,14 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                         _today_vdt = 0.0
                 r["cum_vdt_arb"] = float(_eff_db_period["vdt_arb_eur"]) + _today_vdt
                 r["cum_total"] = r["cum_dt"] + r["cum_rt"] + r["cum_vdt_arb"]
+                # DIST-FEE kumulatív (od štartu) — konzistentne s cum_dt/cum_rt cez effect_minute
+                try:
+                    _gf_cum = float((_ui_load("plan", {}) or {}).get("grid_fee", 0) or 0)
+                    r["cum_dist"] = _eff_db_mod.get_period_dist_fee(
+                        _active_profile_eff, _eff_db_from, _eff_db_to, _gf_cum)
+                except Exception as _e_cumdist:
+                    print(f"[DIST-FEE cum] {_e_cumdist}")
+                    r["cum_dist"] = 0.0
         except Exception as _e_dbf4:
             print(f"[livesim F4] effect_db.get_period_effect zlyhal: {_e_dbf4}")
             _eff_db_period = {"_error": str(_e_dbf4)}
@@ -7350,6 +7358,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{r['cum_total']:.1f} €</div></div>"
         f"<div class='card'><div class='l'>z toho DT</div><div class='v'>{r['cum_dt']:.1f} €</div></div>"
         f"<div class='card'><div class='l'>z toho odchýlka (RT)</div><div class='v'>{r['cum_rt']:.1f} €</div></div>"
+        f"<div class='card'><div class='l'>z toho distribúcia (od štartu)</div><div class='v'>{r.get('cum_dist', 0.0):.1f} €</div></div>"
         f"{_vdt_arb_card}"
         f"{_vdt_eff_cards}"
         f"{_rt_eff_card}"
