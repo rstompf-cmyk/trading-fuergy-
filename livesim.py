@@ -314,7 +314,21 @@ def _minute_all(live_minutes=None, min_from_date=None, progress_cb=None) -> pd.D
         # `live_minutes` merge nižšie → 5-min TTL prebudovával celé zbytočne každých 5 min.
         # Default 1 h (settlement včerajšej ZCO ~11:30 D+1 sa zachytí do hodiny). Env override.
         _sk_ttl = int(os.environ.get("SK_MINUTE_TTL_S", "3600"))
-        if cached is not None and (now_ts - cached.get("ts", 0)) < _sk_ttl:
+        # Bug SK-HIST-STALE (2026-06-16, user TBB): cache zneplatni AJ keď sú historian CSV
+        # novšie (backfill prepísal dáta). Inak 1h TTL drží starú „gappy" verziu (120 dní bez
+        # minút) aj PO doplnení histórie → falošný HISTORIAN GAP + nedopočítaný rok. Po backfille
+        # majú out/sk/historian_*.csv novší mtime než cache → vynúti rebuild z čerstvých dát.
+        _hist_mtime = 0.0
+        try:
+            import glob as _glob_h
+            for _hf in _glob_h.glob(os.path.join("out", "sk", "historian_*.csv")):
+                _m = os.path.getmtime(_hf)
+                if _m > _hist_mtime:
+                    _hist_mtime = _m
+        except Exception:
+            pass
+        if (cached is not None and (now_ts - cached.get("ts", 0)) < _sk_ttl
+                and cached.get("ts", 0) >= _hist_mtime):
             mn = cached["df"]
         else:
             try:
