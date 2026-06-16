@@ -467,7 +467,15 @@ def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
     grid_fee = float(p_params.get("grid_fee", getattr(cfg, "grid_fee", 22.0)))
     cycle_cost = float(p_params.get("cycle_cost", getattr(cfg, "cycle_cost", 2.0)))
     bkwh = float(p_params.get("batt_kwh", cfg.batt_kwh))
-    dtprof = price*ex/1000 - (price + grid_fee)*im/1000 - cycle_cost*(ch+di)/2/1000
+    # DIST-FEE-CONSUMPTION-ONLY (2026-06-15): poplatok len na spotrebný import
+    # (nabíjanie z FTV aj grid-arbitráž vyňaté). Default vypnuté → golden nezmenené.
+    if bool(p_params.get("dist_fee_consumption_only", False)):
+        _cu_p = np.asarray(schedule.get("_curtail_kwh",
+                           schedule.get("plan_curtail_kwh", [0.0]*n)), float)
+        _cons_im_p = np.maximum(im - ex - ch - _cu_p, 0.0)
+        dtprof = price*ex/1000 - price*im/1000 - grid_fee*_cons_im_p/1000 - cycle_cost*(ch+di)/2/1000
+    else:
+        dtprof = price*ex/1000 - (price + grid_fee)*im/1000 - cycle_cost*(ch+di)/2/1000
     d1_cycles = float((ch.sum() + di.sum())/2/bkwh) if bkwh > 0 else 0.0
     # RT mask zo zapečeného plánu (preferované) — ak rt_freedom=False v čase ukladania, je už upravená
     _rtm = plan.get("rt_mask")
@@ -1042,8 +1050,21 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         _di = np.asarray(sch.get("_discharge_kw", [0.0]*len(sch)), float)
                         _gf = float(plan_params.get("grid_fee", cfg.grid_fee)) if plan_params else float(cfg.grid_fee)
                         _cc = float(plan_params.get("cycle_cost", cfg.cycle_cost)) if plan_params else float(cfg.cycle_cost)
-                        dtprof = (_price_real*_ex/1000.0 - (_price_real + _gf)*_im/1000.0
-                                  - _cc*(_ch + _di)/2/1000.0)
+                        # DIST-FEE-CONSUMPTION-ONLY (2026-06-15, user): distribučný poplatok
+                        # patrí len na REÁLNU spotrebu zo siete, nie na nabíjanie batérie
+                        # (z FTV ani grid-arbitráž). Spotrebný import = max(import − export −
+                        # nabíjanie − curtail, 0) (z bilancie uzla load−pv−di = im−ex−ch−cu).
+                        # Default vypnuté → ostatné (golden) profily nezmenené.
+                        _cons_only = bool((plan_params or {}).get("dist_fee_consumption_only", False))
+                        if _cons_only:
+                            _cu_s = np.asarray(sch.get("_curtail_kwh",
+                                               sch.get("plan_curtail_kwh", [0.0]*len(sch))), float)
+                            _cons_im = np.maximum(_im - _ex - _ch - _cu_s, 0.0)
+                            dtprof = (_price_real*_ex/1000.0 - _price_real*_im/1000.0
+                                      - _gf*_cons_im/1000.0 - _cc*(_ch + _di)/2/1000.0)
+                        else:
+                            dtprof = (_price_real*_ex/1000.0 - (_price_real + _gf)*_im/1000.0
+                                      - _cc*(_ch + _di)/2/1000.0)
                         # Bug VV (2026-06-08): pripočítaj TOU distribučný náklad k importu
                         # ak profile má joint_lp.optimize_distribution:true. Joint LP optimizer
                         # to už zaratáva v plánovacej fáze (joint_lp.py line 269-271), ale
