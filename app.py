@@ -4756,7 +4756,9 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         def _finalize(agg_df):
             # Bug #608: total_eur = DT + RT + VDT arbitráž
             _vdt_arb_col = agg_df["vdt_arb_eur"].fillna(0) if "vdt_arb_eur" in agg_df.columns else 0
-            agg_df["total_eur"] = agg_df["dt_eur"].fillna(0) + agg_df["rt_eur"].fillna(0) + _vdt_arb_col
+            _dist_col = agg_df["dist_fee_eur"].fillna(0) if "dist_fee_eur" in agg_df.columns else 0
+            agg_df["total_eur"] = (agg_df["dt_eur"].fillna(0) + agg_df["rt_eur"].fillna(0)
+                                   + _vdt_arb_col + _dist_col)
             agg_df["prinos_bat_plan_eur"] = agg_df["total_eur"] - agg_df["baseline_eur"].fillna(0)
             agg_df["batt_cycles"] = (agg_df["batt_charge_kwh"] + agg_df["batt_discharge_kwh"]) / 2.0 / max(float(_pui_plan.get("batt_kwh", 200.0)), 1.0)
             return _vdt_eff_decorate(agg_df)   # Bug VDT-EFEKTIVITA: + nákup/predaj per deň
@@ -4914,7 +4916,7 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         # Ekonomika
         _total_dt   = float(daily["dt_eur"].sum())
         _total_rt   = float(daily["rt_eur"].sum())
-        _total_spolu = _total_dt + _total_rt
+        _total_spolu = _total_dt + _total_rt + _total_dist
         _total_bl   = float(daily["baseline_eur"].sum())
         _total_dist = float(daily["dist_fee_eur"].sum()) if "dist_fee_eur" in daily.columns else 0.0
         _prinos     = _total_spolu - _total_bl
@@ -5405,7 +5407,9 @@ pip install reportlab matplotlib</code>
         def _finalize(a):
             # Bug #608: total_eur = DT + RT + VDT arbitráž
             _vdt_arb_col2 = a["vdt_arb_eur"].fillna(0) if "vdt_arb_eur" in a.columns else 0
-            a["total_eur"] = a["dt_eur"].fillna(0) + a["rt_eur"].fillna(0) + _vdt_arb_col2
+            _dist_col2 = a["dist_fee_eur"].fillna(0) if "dist_fee_eur" in a.columns else 0
+            a["total_eur"] = (a["dt_eur"].fillna(0) + a["rt_eur"].fillna(0)
+                              + _vdt_arb_col2 + _dist_col2)
             a["prinos_eur"] = a["total_eur"] - a["baseline_eur"].fillna(0)
             a["cycles"] = (a["batt_charge_kwh"] + a["batt_discharge_kwh"]) / 2.0 / max(_bkwh_max, 1.0)
             return _vdt_eff_decorate(a)        # Bug VDT-EFEKTIVITA: + nákup/predaj per deň
@@ -5545,7 +5549,7 @@ pip install reportlab matplotlib</code>
         # ── KPI: Ekonomika ──
         _total_dt = float(daily["dt_eur"].sum())
         _total_rt = float(daily["rt_eur"].sum())
-        _total_spolu = _total_dt + _total_rt
+        _total_spolu = _total_dt + _total_rt + _total_dist
         _total_bl = float(daily["baseline_eur"].sum())
         _total_dist = float(daily["dist_fee_eur"].sum()) if "dist_fee_eur" in daily.columns else 0.0
         _prinos = _total_spolu - _total_bl
@@ -7182,8 +7186,10 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                     except Exception:
                         _today_vdt = 0.0
                 r["cum_vdt_arb"] = float(_eff_db_period["vdt_arb_eur"]) + _today_vdt
-                r["cum_total"] = r["cum_dt"] + r["cum_rt"] + r["cum_vdt_arb"]
-                # DIST-FEE kumulatív (od štartu) — konzistentne s cum_dt/cum_rt cez effect_minute
+                # DIST-FEE kumulatív (od štartu) — SAMOSTATNÝ value stream (úspora zo
+                # samospotreby: batéria/FTV kryje load → ušetrený distribučný poplatok).
+                # NIE je súčasťou DT (DT = trhová arbitráž, distribúcia = meranie), preto
+                # sa PRIPOČÍTAVA do Zisk SPOLU (user 2026-06-15). Konzistentne cez effect_minute.
                 try:
                     _gf_cum = float((_ui_load("plan", {}) or {}).get("grid_fee", 0) or 0)
                     r["cum_dist"] = _eff_db_mod.get_period_dist_fee(
@@ -7191,6 +7197,8 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 except Exception as _e_cumdist:
                     print(f"[DIST-FEE cum] {_e_cumdist}")
                     r["cum_dist"] = 0.0
+                r["cum_total"] = (r["cum_dt"] + r["cum_rt"] + r["cum_vdt_arb"]
+                                  + r.get("cum_dist", 0.0))
         except Exception as _e_dbf4:
             print(f"[livesim F4] effect_db.get_period_effect zlyhal: {_e_dbf4}")
             _eff_db_period = {"_error": str(_e_dbf4)}
@@ -7363,7 +7371,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         f"{_vdt_eff_cards}"
         f"{_rt_eff_card}"
         f"{bl_cum_card}"
-        f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt:.1f} €</div>"
+        f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt+_d_dist:.1f} €</div>"
         f"<div style='font-size:11px;color:#555'>DT {d_dt:+.1f} · RT {d_rt:+.1f} · VDT {_d_vdt:+.1f} · Dist {_d_dist:+.1f} €</div></div>"
         f"<div class='card' style='background:#eef7ee'><div class='l'>Úspora na distribúcii {view_day}</div>"
         f"<div class='v' style='color:#2E7D32'>{_d_dist:+.1f} €</div>"
