@@ -8383,7 +8383,11 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                      f"<form method='get' style='display:inline-flex;gap:6px;align-items:center'>"
                      f"<input type='hidden' name='start' value='{view_day or ''}'>"
                      f"<input type='hidden' name='case' value='{r.get('case', 'plan_d1') if isinstance(r, dict) else 'plan_d1'}'>"
-                     f"<label style='font-size:12px'>Posunúť späť:</label>"
+                     # B (#27): prezeranie iných dní v tabuľke — viditeľný dátum-picker (view param)
+                     f"<label style='font-size:12px'>Deň:</label>"
+                     f"<input type='date' name='view' value='{view_day or ''}' onchange='this.form.submit()' "
+                     f"style='font-size:12px;padding:3px;border:1px solid #ccc;border-radius:4px'>"
+                     f"<label style='font-size:12px;margin-left:8px'>Posunúť späť:</label>"
                      f"<button type='submit' name='table_offset' value='{_t_off + _t_rows}' "
                      f"style='padding:4px 8px;font-size:12px'>← Predošlých {_t_rows}</button>"
                      + (f"<button type='submit' name='table_offset' value='{max(0, _t_off - _t_rows)}' "
