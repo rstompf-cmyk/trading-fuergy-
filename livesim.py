@@ -314,21 +314,7 @@ def _minute_all(live_minutes=None, min_from_date=None, progress_cb=None) -> pd.D
         # `live_minutes` merge nižšie → 5-min TTL prebudovával celé zbytočne každých 5 min.
         # Default 1 h (settlement včerajšej ZCO ~11:30 D+1 sa zachytí do hodiny). Env override.
         _sk_ttl = int(os.environ.get("SK_MINUTE_TTL_S", "3600"))
-        # Bug SK-HIST-STALE (2026-06-16, user TBB): cache zneplatni AJ keď sú historian CSV
-        # novšie (backfill prepísal dáta). Inak 1h TTL drží starú „gappy" verziu (120 dní bez
-        # minút) aj PO doplnení histórie → falošný HISTORIAN GAP + nedopočítaný rok. Po backfille
-        # majú out/sk/historian_*.csv novší mtime než cache → vynúti rebuild z čerstvých dát.
-        _hist_mtime = 0.0
-        try:
-            import glob as _glob_h
-            for _hf in _glob_h.glob(os.path.join("out", "sk", "historian_*.csv")):
-                _m = os.path.getmtime(_hf)
-                if _m > _hist_mtime:
-                    _hist_mtime = _m
-        except Exception:
-            pass
-        if (cached is not None and (now_ts - cached.get("ts", 0)) < _sk_ttl
-                and cached.get("ts", 0) >= _hist_mtime):
+        if cached is not None and (now_ts - cached.get("ts", 0)) < _sk_ttl:
             mn = cached["df"]
         else:
             try:
@@ -801,6 +787,35 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         prov_date = today.date()           # dnešok je provizórny (odhad ZCO)
 
     bkwh = cfg.batt_kwh
+    # #27: VDT closed-price LEN PRE HISTÓRIU vo zvolenom rozsahu dní (od–do). Reálny
+    # dnešok + budúcnosť VŽDY na živej ceste (nikdy neprepisovať). Prázdny rozsah =
+    # živá cesta nezmenená pre celú históriu (default → golden bez zmeny).
+    _vdt_cl_from = str((plan_params or {}).get("vdt_closed_from", "") or "")[:10]
+    _vdt_cl_to = str((plan_params or {}).get("vdt_closed_to", "") or "")[:10]
+    try:
+        _vdt_real_today = today.date().isoformat()
+    except Exception:
+        import datetime as _dtc27
+        _vdt_real_today = _dtc27.date.today().isoformat()
+    def _vdt_use_closed_for(_day_iso):
+        if not _vdt_cl_from or not _vdt_cl_to:
+            return False
+        _di = str(_day_iso)[:10]
+        if _di >= _vdt_real_today:          # dnešok + budúcnosť VŽDY živé
+            return False
+        return _vdt_cl_from <= _di <= _vdt_cl_to
+    def _vdt_batt_kw_for(_prof, _day_iso, _dt_h=0.25):
+        import vdt_state as _vsx
+        if _vdt_use_closed_for(_day_iso):
+            return _vsx.get_closedprice_batt_kw(_prof, _day_iso, dt_h=_dt_h)
+        return _vsx.get_realized_batt_kw(_prof, today_iso=_day_iso, dt_h=_dt_h)
+    def _vdt_kwh_view_for(_prof, _day_iso):
+        import vdt_state as _vsx
+        if _vdt_use_closed_for(_day_iso):
+            return ((_vsx._compute_closedprice_day(_prof, _day_iso) or {}).get("kwh_batt_view")
+                    or [0.0] * 96)
+        return ((_vsx._load_vdt_realized(_prof, _day_iso) or {}).get("kwh_batt_view")
+                or [0.0] * 96)
     # PODPIS nastavení – ak sa zmenia (plán/RT/granularita), log je neaktuálny → prepočítaj odznova
     _po = _plan_override(plan_params)
     # podpis šablóny overridov (per-day override sa berie ako "súčasť dnešného stavu" — log dneška ho aplikuje
@@ -919,7 +934,9 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
            "ftv_scenarios": ftv_scen_sig,
            "profile": _prof_sig,
            "profile_rt": _prof_rt_sig,   # Bug PROFILE-RT2-SIG
-           "csv_cols_v": "15"}  # bump: Bug VDT-DOUBLE — dam/vdt stĺpce do CSV (render nesmie VDT pripočítať 2×)
+           # #27: rozsah closed-price VDT (zmena → re-sim historických dní v rozsahu)
+           "vdt_closed": f"{_vdt_cl_from}|{_vdt_cl_to}",
+           "csv_cols_v": "16"}  # bump: #27 vdt_closed range (+ Bug VDT-DOUBLE dam/vdt stĺpce)
     sig_s = json.dumps(sig, sort_keys=True, default=str)
     meta = _load_meta(meta_path)
     if meta is not None and meta.get("settings_sig") != sig_s:
@@ -1277,9 +1294,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 _prof_sch = _ga_sch(profile)
                 _bkw_max_clip = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
                 if _prof_sch:
-                    _vdt_kw_96 = _vs_sch.get_realized_batt_kw(_prof_sch,
-                                                              today_iso=d.isoformat(),
-                                                              dt_h=0.25)
+                    _vdt_kw_96 = _vdt_batt_kw_for(_prof_sch, d.isoformat())   # #27: closed pre históriu v rozsahu
                     if isinstance(_vdt_kw_96, list) and len(_vdt_kw_96) >= 96 and any(_vdt_kw_96):
                         _clipped_slots = 0
                         if step == 15 and len(sch) >= 96:
@@ -1400,9 +1415,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     if _profile:
                         # VDT je VŽDY 15-min granularita → pidx15 nezávislé od `step`.
                         pidx15 = [min(95, max(0, _period_index(t, day, 15))) for t in tr["ts15"]]
-                        vdt_arr_kw = _vs.get_realized_batt_kw(_profile,
-                                                              today_iso=d.isoformat(),
-                                                              dt_h=0.25)
+                        vdt_arr_kw = _vdt_batt_kw_for(_profile, d.isoformat())   # #27: closed pre históriu v rozsahu
                         if isinstance(vdt_arr_kw, list) and len(vdt_arr_kw) >= 96:
                             vdt_per_min = [float(vdt_arr_kw[j] or 0.0) for j in pidx15]
                 except Exception:
@@ -1432,8 +1445,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     if _ga2 is not None:
                         _prof2 = _ga2(profile)
                         if _prof2:
-                            _vdt_st = _vs2._load_vdt_realized(_prof2, d.isoformat())
-                            _vdt_kwh_arr = (_vdt_st or {}).get("kwh_batt_view") or [0.0] * 96
+                            _vdt_kwh_arr = _vdt_kwh_view_for(_prof2, d.isoformat())   # #27: closed pre históriu v rozsahu
                             pidx15_grid = [min(95, max(0, _period_index(t, day, 15)))
                                             for t in tr["ts15"]]
                             vdt_kwh_per_min = [float(_vdt_kwh_arr[j] or 0.0) for j in pidx15_grid]
@@ -1793,6 +1805,41 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             tr["vdt_arb_min"] = 0.0
                     except Exception as _e_vdt:
                         tr["vdt_arb_min"] = 0.0
+                    # #27: pre HISTÓRIU vo zvolenom rozsahu prepíš vdt_arb_min arbitrážou
+                    # z REÁLNYCH UZAVRETÝCH cien (closed sim), nie z paper trades CSV.
+                    if _vdt_use_closed_for(d.isoformat()):
+                        try:
+                            import vdt_state as _vscl27
+                            from core.profile_resolver import get_active as _ga27
+                            _prof27 = _ga27(profile) or profile
+                            _cl27 = _vscl27._compute_closedprice_day(_prof27, d.isoformat())
+                            _cl_kwh27 = _cl27.get("kwh_batt_view") or [0.0] * 96
+                            _cl_px27 = _cl27.get("prices_per_slot") or [float("nan")] * 96
+                            if "dt_real_eur" in tr.columns:
+                                _dtpm27 = pd.to_numeric(tr["dt_real_eur"], errors="coerce").fillna(0).values
+                            else:
+                                _rdt27 = _real_dt_hourly(d.isoformat())
+                                _dtpm27 = (np.array([float(_rdt27[min(23, pd.Timestamp(t).hour)])
+                                                     for t in tr["time"]], dtype=float)
+                                           if _rdt27 is not None else np.zeros(len(tr), dtype=float))
+                            _arbmin27 = np.zeros(len(tr), dtype=float)
+                            _tarr27 = pd.to_datetime(tr["time"], errors="coerce")
+                            for _ci in range(96):
+                                _ck = float(_cl_kwh27[_ci] or 0.0)
+                                _cp = _cl_px27[_ci]
+                                if abs(_ck) < 0.01 or not np.isfinite(_cp):
+                                    continue
+                                _chh, _cmm = divmod(_ci * 15, 60)
+                                _css = pd.to_datetime(f"{d.isoformat()} {_chh:02d}:{_cmm:02d}:00")
+                                _cmask = (_tarr27 >= _css) & (_tarr27 < _css + pd.Timedelta(minutes=15))
+                                _cn = int(_cmask.sum())
+                                if _cn <= 0:
+                                    continue
+                                _cdt_avg = float(np.mean(_dtpm27[_cmask.values]))
+                                _arbmin27[_cmask.values] += (_ck * (_cp - _cdt_avg)) / 1000.0 / _cn
+                            tr["vdt_arb_min"] = np.round(_arbmin27, 4)
+                        except Exception:
+                            pass
                 except Exception as _e:
                     tr["batt_kw_realistic"] = tr["plan_batt_kw"]
                     tr["ftv_min_curtailed_kw"] = 0.0

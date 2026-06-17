@@ -96,7 +96,10 @@ DEF = dict(lat=49.5961, lon=17.3634, kwp=99.0, tilt=30.0, azimuth=0.0, eff=0.85,
            soc_min=5.0, soc_max=95.0, soc_init=50.0, terminal_soc=50.0,
            grid_kw=100.0, grid_fee=22.0, cycle_cost=2.0,
            min_spread=30.0, min_trade=0.0, price_scale=1.0, pv_scale=1.0, allow_curtail=True,
-           zco_bias_w=0.0)
+           zco_bias_w=0.0,
+           # #27: rozsah dní pre VDT oceňovanie reálnymi UZAVRETÝMI cenami (len história).
+           # Prázdne = vypnuté (živé oceňovanie pre celú históriu, default správanie).
+           vdt_closed_from="", vdt_closed_to="")
 
 
 # Kurz EUR/CZK — pre ČEPS odhady ZCO ktoré sú v CZK.

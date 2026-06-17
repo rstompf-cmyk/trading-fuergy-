@@ -679,6 +679,136 @@ def get_realized_batt_kw(profile: str, today_iso: Optional[str] = None,
     return [float(k) / dt_h for k in kwh_arr]
 
 
+# ────── #27: VDT podľa reálnych UZAVRETÝCH cien (LEN HISTÓRIA, vybraný rozsah) ──────
+# Náhradné oceňovanie VDT pre HISTORICKÉ dni: namiesto živých paper trades sa VDT
+# obchody nasimulujú LP optimizerom na REÁLNYCH OKTE VDT uzavretých cenách
+# (vdt_arbitrage.build_backtest_snapshot → value per slot; use_orderbook=False =
+# value pre nákup AJ predaj, bez spreadu = len cross-slot arbitráž). Vracia
+# VDT-EXTRA (nad DAM nomináciu — zabráni dvojitému započítaniu DAM), rovnaký
+# kontrakt ako get_realized_batt_kw / get_realized_prices_per_slot, aby livesim
+# len prehodil zdroj. Dnešok/budúcnosť sa SEM nikdy nedostane (gate je v livesime:
+# iba deň < dnešok a vo zvolenom rozsahu). Cache per (profil, deň, kľúčové parametre).
+_CLOSEDPRICE_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _compute_closedprice_day(profile: str, day_iso: str) -> Dict[str, Any]:
+    import math as _m
+    day_iso = str(day_iso)[:10]
+    zeros = {"kwh_batt_view": [0.0] * 96, "prices_per_slot": [float("nan")] * 96,
+             "total_eur": 0.0, "source": "closed: no-op"}
+    try:
+        # Profil parametre (rovnaké kľúče ako compute_current_state, market-agnostic)
+        import profiles as _pr
+        prof = _pr.load_profile(profile) or {}
+        plan = prof.get("plan") or {}
+        batt_kw = float(plan.get("batt_kw") or 100.0)
+        batt_kwh = float(plan.get("batt_kwh") or 800.0)
+        eff_c = float(plan.get("eff_c") or 0.95)
+        eff_d = float(plan.get("eff_d") or 0.95)
+        grid_fee = float(plan.get("grid_fee") or 0.0)
+        cycle_cost = float(plan.get("cycle_cost") or 0.0)
+        min_spread = float(plan.get("min_spread") if plan.get("min_spread") is not None
+                           else (plan.get("min_spread_eur") or 5.0))
+        soc_min = float((plan.get("soc_min") if plan.get("soc_min") is not None
+                         else plan.get("soc_min_pct")) or 5.0)
+        soc_max = float((plan.get("soc_max") if plan.get("soc_max") is not None
+                         else plan.get("soc_max_pct")) or 100.0)
+        max_cycles = plan.get("max_cycles_per_day")
+        ck = (f"{profile}|{day_iso}|{batt_kwh:.0f}|{batt_kw:.0f}|{min_spread:.1f}"
+              f"|{soc_min:.0f}|{soc_max:.0f}|{max_cycles}")
+        _c = _CLOSEDPRICE_CACHE.get(ck)
+        if _c is not None:
+            return _c
+
+        import datetime as _dt2
+        date = _dt2.date.fromisoformat(day_iso)
+        import vdt_arbitrage as _arb
+        import vdt_optimizer as _opt
+        snap = _arb.build_backtest_snapshot(date)
+        if snap is None or snap.empty or snap["price_eur"].notna().sum() == 0:
+            _CLOSEDPRICE_CACHE[ck] = zeros
+            return zeros
+
+        # DAM nominácia pre daný deň (ak plán existuje) — batt view (+dis −chg) = lower bounds
+        dam = _load_dam_nomination(profile, day_iso)
+        dam_view = (dam.get("kwh_batt_view") if dam else None) or [0.0] * 96
+        # Start SOC — pre históriu neutrálny stred rozsahu. VDT-extra je SOC-neutrálne
+        # (optimizer soc_neutral), takže medzidenná SOC kontinuita ostáva na DAM pláne;
+        # optimizer si auto-zarovná bounds, a ak je infeasible → ok=False → no-op (safe).
+        soc_start = (soc_min + soc_max) / 2.0
+        res = _opt.optimize_vdt_day(
+            snap, batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
+            grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
+            soc_min_pct=soc_min, soc_max_pct=soc_max, soc_start_pct=soc_start,
+            soc_end_min_pct=soc_start,
+            max_cycles_per_day=(float(max_cycles) if max_cycles else None),
+            dam_commitments=dam_view, slot_minutes=15,
+            use_orderbook=False, future_only=False,
+        )
+        if not res.get("ok"):
+            _CLOSEDPRICE_CACHE[ck] = zeros
+            return zeros
+
+        # closed ceny per slot_idx
+        price_by_idx: Dict[int, float] = {}
+        try:
+            for _i in range(len(snap)):
+                _r = snap.iloc[_i]
+                _pv = _r.get("price_eur")
+                price_by_idx[int(_r.get("slot_idx"))] = (float(_pv) if _pv is not None
+                                                          else float("nan"))
+        except Exception:
+            pass
+
+        batt_view = [0.0] * 96
+        for tr in res.get("trades", []):
+            i = int(tr.get("slot_idx", -1))
+            if 0 <= i < 96:
+                batt_view[i] = (float(tr.get("discharge_kwh", 0) or 0)
+                                - float(tr.get("charge_kwh", 0) or 0))
+        # VDT-EXTRA = trade nad DAM nomináciu (KRITICKÉ: zabráni dvojitému započítaniu DAM)
+        vdt_only = [batt_view[i] - float(dam_view[i] if i < len(dam_view) else 0.0)
+                    for i in range(96)]
+        prices = [float("nan")] * 96
+        total_eur = 0.0
+        for i in range(96):
+            if abs(vdt_only[i]) > 0.01:
+                _p = price_by_idx.get(i, float("nan"))
+                prices[i] = _p
+                if _m.isfinite(_p):
+                    total_eur += vdt_only[i] * _p / 1000.0
+        out = {"kwh_batt_view": vdt_only, "prices_per_slot": prices,
+               "total_eur": total_eur,
+               "source": f"closed OKTE VDT (profile={profile}, day={day_iso})"}
+        _CLOSEDPRICE_CACHE[ck] = out
+        return out
+    except Exception:
+        return zeros
+
+
+def get_closedprice_batt_kw(profile: str, today_iso: Optional[str] = None,
+                            dt_h: float = 0.25) -> List[float]:
+    """#27: 96-slot signed kW pre VDT ocenené reálnymi UZAVRETÝMI cenami (len história).
+    Rovnaký kontrakt ako get_realized_batt_kw (+ discharge / − charge)."""
+    today_iso = today_iso or dt.date.today().isoformat()
+    try:
+        c = _compute_closedprice_day(profile, today_iso)
+        kwh_arr = c.get("kwh_batt_view") or [0.0] * 96
+    except Exception:
+        return [0.0] * 96
+    dt_h = max(0.001, float(dt_h))
+    return [float(k) / dt_h for k in kwh_arr]
+
+
+def get_closedprice_prices_per_slot(profile: str, today_iso: str) -> list:
+    """#27: 96-slot ceny (€/MWh) VDT-extra obchodov za reálne uzavreté ceny, inak NaN."""
+    try:
+        c = _compute_closedprice_day(profile, str(today_iso)[:10])
+        return c.get("prices_per_slot") or [float("nan")] * 96
+    except Exception:
+        return [float("nan")] * 96
+
+
 # ────────────────────────── CLI smoke test ──────────────────────────
 
 if __name__ == "__main__":

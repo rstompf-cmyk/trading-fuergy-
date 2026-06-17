@@ -2465,6 +2465,8 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 <span>⚖️ <b>VDT breakeven auto</b> (prah z účinnosti + fees)</span><input name="vdt_breakeven_auto" type="checkbox" {"checked" if f.get("vdt_breakeven_auto", False) else ""}></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="Explicitná rezerva výkonu batérie pre VDT/RT: D-1 LP nominuje max (batt_kw − rezerva) v oboch smeroch. Nahrádza denný kWh strop ako nástroj delenia kapacity DAM vs intraday. 0 = bez rezervy.">
 <span>🪫 <b>VDT kapacitná rezerva [kW]</b> (headroom pre intraday)</span><input name="vdt_capacity_reserve_kw" type="number" step="any" min="0" value="{f.get('vdt_capacity_reserve_kw', 0.0)}" style="width:90px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="LEN PRE HISTÓRIU: vo zvolenom rozsahu dní sa VDT obchody ocenia reálnymi OKTE VDT UZAVRETÝMI cenami (value pre nákup aj predaj, len cross-slot arbitráž), namiesto živých paper trades. Reálny dnešok + budúcnosť ostávajú na klasickej živej simulácii. Prázdne = vypnuté.">
+<span>📅 <b>VDT uzavreté ceny — rozsah dní</b> (len história)</span><span style="display:flex;gap:6px"><input name="vdt_closed_from" type="date" value="{f.get('vdt_closed_from','')}" style="padding:4px;border:1px solid #ccc;border-radius:6px"><input name="vdt_closed_to" type="date" value="{f.get('vdt_closed_to','')}" style="padding:4px;border:1px solid #ccc;border-radius:6px"></span></label>
 <div style="margin:10px 0;padding:10px 12px;border:2px solid #5b7fb5;border-radius:10px;background:#f4f8ff">
 <div style="font-weight:700;color:#1F4E78;margin-bottom:6px" title="Voľba RT enginu + jeho parametre na jednom mieste. Ukladá sa do rt sekcie profilu.">🤖 RT poradca — engine a parametre</div>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20" title="v1 = signálová heuristika (kdis/kchg/margin/dtk). v2 = ekonomický: E[ZCO] z kalibrovaného spreadu vs prahy marže. v3 = marginálna hodnota energie: predaj/nákup teraz len ak E[ZCO] prekoná najlepšiu BUDÚCU alternatívu (committed plán, voľné okná zvyšku dňa, RT maska) — výkon vyplynie z objemu energie s kladnou maržou. Fyzické ochrany (SOC/grid/audit) platia pre všetky.">
@@ -15230,8 +15232,13 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          joint_trade_ftv: str = Form(default=""),
          joint_trade_load: str = Form(default=""),
          joint_use_vdt: str = Form(default=""),
-         joint_optimize_dist: str = Form(default="")):
+         joint_optimize_dist: str = Form(default=""),
+         vdt_closed_from: str = Form(default=""),
+         vdt_closed_to: str = Form(default="")):
     d = dt.date.fromisoformat(date)
+    # #27: rozsah dní pre VDT oceňovanie reálnymi uzavretými cenami (len história).
+    _vdt_cl_from = str(vdt_closed_from or "")[:10]
+    _vdt_cl_to = str(vdt_closed_to or "")[:10]
     # Stropy denného obchodovania (kWh/deň). 0 alebo záporné = bez stropu.
     _mex = float(max_export_kwh_day) if max_export_kwh_day and max_export_kwh_day > 0 else None
     _mim = float(max_import_kwh_day) if max_import_kwh_day and max_import_kwh_day > 0 else None
@@ -15339,6 +15346,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
                           max_import_kwh_day=float(max_import_kwh_day or 0),
                           baseline_im_mode=_bim_mode, baseline_im_value=_bim_val,
                           baseline_ex_mode=_bex_mode, baseline_ex_value=_bex_val,
+                          vdt_closed_from=_vdt_cl_from, vdt_closed_to=_vdt_cl_to,  # #27
                           joint_lp=_joint_flags))
     # Uloženie joint_lp flags do aktívneho profilu (pre lookup z iných miest)
     try:
