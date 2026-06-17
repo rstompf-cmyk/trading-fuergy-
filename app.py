@@ -8321,6 +8321,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             # Bug GG: query param ?table_offset=N + ?table_rows=M pre scroll do minulosti
             _t_off = max(0, int(table_offset or 0))
             _t_rows = max(5, min(96, int(table_rows or 20)))
+            _case_nav = r.get('case', 'plan_d1') if isinstance(r, dict) else 'plan_d1'   # B (#27): pre navigáciu dátum-pickera
             # Najnovších N slotov posunutých o offset (offset=0 → najnovšie, offset=20 → predošlých 20)
             _agg_all = _agg.copy()
             if _t_off > 0 and len(_agg) > _t_off:
@@ -8383,10 +8384,13 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                      f"<form method='get' style='display:inline-flex;gap:6px;align-items:center'>"
                      f"<input type='hidden' name='start' value='{view_day or ''}'>"
                      f"<input type='hidden' name='case' value='{r.get('case', 'plan_d1') if isinstance(r, dict) else 'plan_d1'}'>"
-                     # B (#27): prezeranie iných dní v tabuľke — viditeľný dátum-picker (view param)
+                     # B (#27): prezeranie iných dní — PRIAMA navigácia (len view+case, bez
+                     # pinovania `start` na zobrazený deň; inak by skoršie dni vypadli z rozsahu
+                     # a tabuľka by zmizla). Dáta sú v load_series (celá história), view filtruje deň.
                      f"<label style='font-size:12px'>Deň:</label>"
-                     f"<input type='date' name='view' value='{view_day or ''}' onchange='this.form.submit()' "
-                     f"style='font-size:12px;padding:3px;border:1px solid #ccc;border-radius:4px'>"
+                     f'<input type="date" value="{view_day or ""}" '
+                     f'onchange="window.location.href=\'/livesim?case={_case_nav}&view=\'+encodeURIComponent(this.value)" '
+                     f'style="font-size:12px;padding:3px;border:1px solid #ccc;border-radius:4px">'
                      f"<label style='font-size:12px;margin-left:8px'>Posunúť späť:</label>"
                      f"<button type='submit' name='table_offset' value='{_t_off + _t_rows}' "
                      f"style='padding:4px 8px;font-size:12px'>← Predošlých {_t_rows}</button>"
