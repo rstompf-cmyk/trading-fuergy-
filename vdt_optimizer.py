@@ -134,8 +134,13 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
         max_sell_mw = np.full(n, batt_kw / 1000.0)
 
     # Identifikuj sloty kde nemáme cenu (NaN) — vyradíme z obchodu (price 0, mw 0)
-    buy_valid = np.array([(p is not None and not pd.isna(p)) for p in buy_price])
-    sell_valid = np.array([(p is not None and not pd.isna(p)) for p in sell_price])
+    # Bug VDT-ZERO-PRICE (2026-06-17, user: "množstvo na VDT za 0,0 neakceptujem;
+    # záporné áno, to je bežná prax"): cena presne 0 = placeholder/chýbajúca (nie
+    # reálny trh) → vyradiť z DOBROVOĽNÉHO VDT. Záporné ceny sú PLATNÉ (prebytok na
+    # trhu). DAM commitment prejde aj tak (nižšie buy_valid|dam_chg>0, cena cez
+    # dam_clearing fallback). Zarovnané s loggerom (scheduler `if _px == 0: continue`).
+    buy_valid = np.array([(p is not None and not pd.isna(p) and float(p) != 0.0) for p in buy_price])
+    sell_valid = np.array([(p is not None and not pd.isna(p) and float(p) != 0.0) for p in sell_price])
     # DAM clearing cena ako fallback ak orderbook nemá ask/bid (forced DAM trade).
     # Bez tohto fallbacku by LP videl trade za 0 €/MWh (nesprávne free profit) a
     # render by ukázal "0.00 €/MWh" čo zavádza užívateľa.
