@@ -391,6 +391,8 @@ def job_vdt_advisor():
                     # Obnovuje invariant VDT-EXTRA-ONLY (43dacef), ktorý d41f278 nechtiac obišiel.
                     _dam_fp = res.get("dam_commits", []) or []   # batt: +vybíja −nabíja, zarovnané s fp
                     _ob_sx = res.get("orderbook_per_slot", {}) or {}
+                    # efektívny min_spread profilu (po prípadnom vdt_breakeven_auto) — gate na close
+                    _ms_sx = float((res.get("params") or {}).get("min_spread", 5.0) or 5.0)
                     def _ob_px_sx(_si, _side):
                         _e = _ob_sx.get(_si) or _ob_sx.get(str(_si)) or {}
                         return _e.get("bid_eur") if _side == "discharge" else _e.get("ask_eur")
@@ -437,6 +439,23 @@ def job_vdt_advisor():
                         _slot_start = sl.split("-")[0].strip()
                         _dam_clr = float(_dam_map_sx.get(
                             f"{_day_iso_sx} {_slot_start}:00", 0.0) or 0.0)
+                        # Bug VDT-CLOSE-PRICE (2026-06-17, user: "na DAM predané 160, na VDT
+                        # spätne kúpené 247"): UZATVÁRACÍ extra (opačný smer než DAM nominácia
+                        # daného slotu) sa smie zaúčtovať LEN ak rešpektuje min_spread voči DAM
+                        # clearingu — inak je to stratový papierový round-trip (predaj lacno na
+                        # DAM / spätný nákup draho na VDT). OTVÁRACIE extra (rovnaký smer ako DAM
+                        # alebo DAM=0) rieši optimizer (párový min_spread), tie prejdú. Vynútený
+                        # short, čo sa nedá uzavrieť so ziskom ≥ min_spread, padne na odchýlku
+                        # (ZCO) — nevyrábame vlastnoručnú stratu.
+                        _dam_dir_sx = (1.0 if _dam_i > 0.5 else (-1.0 if _dam_i < -0.5 else 0.0))
+                        _is_close_sx = (_dam_dir_sx != 0.0) and ((_extra > 0) != (_dam_dir_sx > 0))
+                        if _is_close_sx and _dam_clr > 0:
+                            if action_e == "charge":      # spätný nákup zatvára DAM predaj
+                                if (_dam_clr - _px) < _ms_sx:
+                                    continue
+                            else:                          # spätný predaj zatvára DAM nákup
+                                if (_px - _dam_clr) < _ms_sx:
+                                    continue
                         _adv.append_extra_paper_trade(
                             profile=prof_name,
                             slot=sl,
