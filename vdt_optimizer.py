@@ -144,6 +144,11 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
     # DAM clearing cena ako fallback ak orderbook nemá ask/bid (forced DAM trade).
     # Bez tohto fallbacku by LP videl trade za 0 €/MWh (nesprávne free profit) a
     # render by ukázal "0.00 €/MWh" čo zavádza užívateľa.
+    # #30-B (user 2026-06-18: "len reálne BID/ASK, žiadny forecast"): tento fallback NIE je
+    # forecast-leak. Forecast/chýbajúce ceny → price_eur=NaN → fillna(0.0) → dam_clearing=0
+    # → VDT-ZERO-PRICE (nižšie buy_valid/sell_valid: float(p)!=0.0) ho VYRADÍ → netradeable.
+    # Reálny DAM (>0) sa použije len pre DNEŠNÉ záväzky (DAM dnes publikované). Zajtrajšie
+    # forecast záväzky sú vynulované v advisore (#30-A). VOĽNÝ obchod = LEN reálny order-book.
     if "price_eur" in df.columns:
         dam_clearing = pd.to_numeric(df["price_eur"], errors="coerce").fillna(0.0).values
     else:

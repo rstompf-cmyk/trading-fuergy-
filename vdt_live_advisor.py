@@ -415,7 +415,10 @@ def get_live_recommendation(*,
                       "ts": dt.datetime.now().isoformat(timespec="seconds"),
                       "error": ""}
 
-    # 2. Snapshot dnes + zajtra
+    # 2. Snapshot dnes + zajtra. Cross-day obchodovanie je správne a žiaduce — gate NIE je
+    # čas (16:00 nie je presný), ale REÁLNA DOSTUPNOSŤ order-book ponúk: slot sa obchoduje
+    # IBA ak má reálny BID/ASK (rieši optimizer: slot bez order-booku → max_kwh=0). Žiadny
+    # forecast/predbežná cena sa NESMIE použiť na uzavretie obchodu (#30, user 2026-06-18).
     today = dt.date.today()
     try:
         snapshot = _arb.get_market_snapshot(today, days_ahead=1, from_current_slot=True)
@@ -464,6 +467,31 @@ def get_live_recommendation(*,
             dam_commits_grid = _load_dam_commitments_for_snapshot(snapshot, today,
                                                                     basis="grid",
                                                                     profile=active_profile)
+            # #30-A (user 2026-06-18: "vyhoď každý forecast na základe ktorého uzatváraš
+            # obchod; len reálne BID/ASK"): zajtrajšie DAM záväzky použiť LEN ak je zajtrajšie
+            # DAM REÁLNE publikované. Inak je zajtrajší D-1 plán forecast-based → VDT by proti
+            # nemu cross-day pároval nákup = špekulácia (VW_sim_2). Vtedy vynuluj zajtrajšiu
+            # časť záväzkov (gate = REÁLNOSŤ dát, nie čas). Dnešok ostáva (DAM reálne).
+            try:
+                _tom_iso = (today + dt.timedelta(days=1)).isoformat()
+                import seps_sk as _ss_da
+                _dam_tom_pub = bool(_ss_da.load_okte_dt_for_day(_tom_iso) or {})
+                if not _dam_tom_pub and dam_commits is not None:
+                    _snap_dates = [str(snapshot.iloc[_i].get("date", ""))[:10]
+                                   for _i in range(len(snapshot))]
+                    _n_zero = 0
+                    for _i in range(min(len(dam_commits), len(_snap_dates))):
+                        if _snap_dates[_i] == _tom_iso:
+                            dam_commits[_i] = 0.0
+                            if dam_commits_grid is not None and _i < len(dam_commits_grid):
+                                dam_commits_grid[_i] = 0.0
+                            _n_zero += 1
+                    if _n_zero:
+                        print(f"[vdt_live_advisor] #30-A: zajtra ({_tom_iso}) DAM nepublikované "
+                              f"→ vynulovaných {_n_zero} forecast-based zajtrajších DAM záväzkov "
+                              f"(žiadny cross-day forecast pár)")
+            except Exception as _e_da:
+                print(f"[vdt_live_advisor] #30-A gate zlyhal: {_e_da}")
             if dam_commits:
                 batt_total = sum(abs(v) for v in dam_commits)
                 grid_total = sum(abs(v) for v in (dam_commits_grid or []))
