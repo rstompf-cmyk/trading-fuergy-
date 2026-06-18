@@ -436,7 +436,7 @@ def _plan_override(pp):
     return out
 
 
-def _decompose_dtprof(price, pv, ex, im, ch, di, cu, grid_fee, cycle_cost, flags, cons_only=False):
+def _decompose_dtprof(price, pv, ex, im, ch, di, cu, grid_fee, cycle_cost, flags, cons_only=False, dt=1.0):
     """DT efekt rozložený na NEZÁVISLÉ per-element členy (BAT / FTV / LOAD).
 
     User (2026-06-16, TBB): toggle = čo sa počíta do obchodu. Vypnutie ktorejkoľvek
@@ -460,6 +460,13 @@ def _decompose_dtprof(price, pv, ex, im, ch, di, cu, grid_fee, cycle_cost, flags
     price = _np.asarray(price, float); pv = _np.asarray(pv, float)
     ex = _np.asarray(ex, float); im = _np.asarray(im, float)
     ch = _np.asarray(ch, float); di = _np.asarray(di, float); cu = _np.asarray(cu, float)
+    # BUG 15-MIN-DTPROF (2026-06-18): ch/di sú _charge_kw/_discharge_kw v kW, kým
+    # ex/im/pv/cu sú kWh ZA SLOT. Pri 60-min kW == kWh/h (numericky), ale pri 15-min
+    # je kW 4× väčšie než kWh za 15-min slot → batériový DT člen 4× nafúknutý.
+    # Prepočet na kWh za slot cez dt (=step/60). dt=1.0 → no-op (golden nezmenené).
+    _dt = float(dt) if dt else 1.0
+    if abs(_dt - 1.0) > 1e-9:
+        ch = ch * _dt; di = di * _dt
     load = _np.maximum(pv + di + im - ch - ex - cu, 0.0)
     pv_load = _np.minimum(pv, load)
     pv_batt = _np.minimum(_np.maximum(pv - pv_load, 0.0), ch)
@@ -519,9 +526,12 @@ def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
                   "trade_ftv": bool(_jlf_dp.get("trade_ftv", True)),
                   "trade_load": bool(_jlf_dp.get("trade_load", True))}
                  if _jlf_dp.get("enabled") else {"trade_batt": True, "trade_ftv": True, "trade_load": True})
+    _dt_dp = float(step_min) / 60.0
     dtprof = _decompose_dtprof(price, pvper, ex, im, ch, di, _cu_dp, grid_fee, cycle_cost,
-                               _flags_dp, cons_only=bool(p_params.get("dist_fee_consumption_only", False)))
-    d1_cycles = float((ch.sum() + di.sum())/2/bkwh) if bkwh > 0 else 0.0
+                               _flags_dp, cons_only=bool(p_params.get("dist_fee_consumption_only", False)),
+                               dt=_dt_dp)
+    # BUG 15-MIN-DTPROF: ch/di sú kW → cykly = kWh throughput = sum(kW)·dt /2 /bkwh.
+    d1_cycles = float((ch.sum() + di.sum()) * _dt_dp / 2 / bkwh) if bkwh > 0 else 0.0
     # RT mask zo zapečeného plánu (preferované) — ak rt_freedom=False v čase ukladania, je už upravená
     _rtm = plan.get("rt_mask")
     rt_mask_eff = np.asarray(_rtm, float) if (_rtm and len(_rtm) == n) else None
@@ -1155,7 +1165,8 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         _cu_rp = np.asarray(sch.get("_curtail_kwh", sch.get("plan_curtail_kwh", [0.0]*len(sch))), float)
                         _pv_rp = np.asarray(sch.get("pv_kwh", [0.0]*len(sch)), float)
                         dtprof = _decompose_dtprof(_price_real, _pv_rp, _ex, _im, _ch, _di, _cu_rp,
-                                                   _gf, _cc, _flags_rp, cons_only=_cons_only)
+                                                   _gf, _cc, _flags_rp, cons_only=_cons_only,
+                                                   dt=float(step) / 60.0)  # BUG 15-MIN-DTPROF: ch/di kW→kWh/slot
                         # Bug VV (2026-06-08): pripočítaj TOU distribučný náklad k importu
                         # ak profile má joint_lp.optimize_distribution:true. Joint LP optimizer
                         # to už zaratáva v plánovacej fáze (joint_lp.py line 269-271), ale

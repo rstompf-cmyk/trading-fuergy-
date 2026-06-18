@@ -878,8 +878,21 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                 _dpp = _predp[_predp.time.dt.date == d].sort_values("time")
                 _ph = (_dpp.pred_isot.values * float(fp.get("price_scale", 1.0)))[:24]
                 if len(_ph) >= 24:
-                    price15 = _up_px15(_ph)
-                    print(f"[15-MIN] {date_iso}: reálne 15-min OTE chýbajú → upsample hodinovej predikcie (D+1)")
+                    # Dedikovaný 15-min model (vnútrohodinový tvar na hodinovej predikcii).
+                    # OOS +24 % vs plochá kópia. Flat upsample ostáva poistka ak model chýba/zlyhá.
+                    _used15m = False
+                    try:
+                        from price_model_15m import load_cached as _pm15_load
+                        _m15 = _pm15_load("out/price_model_15m.joblib")
+                        if _m15 is not None:
+                            price15 = _m15.predict_shape(_ph, d, _wxp[["time", "gti", "temp", "cloud"]])
+                            _used15m = True
+                            print(f"[15-MIN] {date_iso}: reálne 15-min OTE chýbajú → 15-min MODEL (tvar na hodinovej predikcii, D+1)")
+                    except Exception as _em15:
+                        print(f"[15-MIN] {date_iso}: 15-min model zlyhal ({_em15}) → flat upsample")
+                    if not _used15m:
+                        price15 = _up_px15(_ph)
+                        print(f"[15-MIN] {date_iso}: reálne 15-min OTE chýbajú → flat upsample hodinovej predikcie (D+1)")
             except Exception as _ep15:
                 print(f"[15-MIN] {date_iso}: cenový fallback (predikcia) zlyhal: {_ep15}")
         n = min(len(pv15), len(price15))
