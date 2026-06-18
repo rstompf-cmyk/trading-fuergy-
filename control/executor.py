@@ -68,21 +68,102 @@ class SimExecutor(DummyExecutor):
 
 
 class RealExecutor(Executor):
-    """Reálny executor — setpoint cez Realio→Bender, SOC z reálneho merania, PER
-    BATÉRIA (host/creds/tagy z DB battery). NAPOJENIE NA realio JE ĎALŠÍ INTEGRAČNÝ
-    KROK (vyžaduje realio per-battery refactor — dnes je realio single-config).
-    Zatiaľ vyhadzuje, aby sa real mód omylom nespustil bez wiringu."""
+    """Reálny executor — PER BATÉRIA Bender (Realio) cez DB realio_* polia.
+
+    Číta SOC + dual-write setpoint cez realio NÍZKOÚROVŇOVÉ funkcie
+    (_fetch_latest_via_bender / _send_tag_writes) s per-batéria `cfg` postaveným z
+    DB riadku batérie — REUSE, BEZ dotyku globálneho realio configu či prod
+    write_setpoint(). Rieši single-config blocker (každá batéria vlastný host/creds/tagy).
+
+    BEZPEČNOSŤ — dvojitá poistka:
+      1. build_executor stavia RealExecutor LEN pre mode=='real',
+      2. WRITE na HW iba ak env FLEET_REAL_WRITE=1; inak DRY-RUN (zostaví write +
+         zaloguje, ale NEpošle). Default = dry-run → real batéria sa nedá omylom
+         ovládať pred commissioningom.
+    read_soc je read-only (bezpečné). Bez dosiahnuteľného Bendera → raise →
+    control loop fail-safe degraded (NEzhodí flotilu).
+
+    Konvencia setpointu: + vybíja / − nabíja (kW). Zápis = kW × 1000 → W do
+    REG_Regulator_Param3 + REG_Regulator_Manual_Plan=enable (dual-write, 1 minúta).
+    POZOR: ZNAMIENKO W voči Benderu treba OVERIŤ pri commissioningu reálnej batérie
+    (ak Bender používa opačné, doplniť per-batéria sign flag).
+    POZNÁMKA (multi-battery): realio._get_session cachuje 1 session per host globálne
+    — pre veľa batérií na RÔZNYCH hostoch to re-loginuje pri prepnutí (korektné, ale
+    pomalé); pri 20-30 doplniť per-host session pool v realio (samostatný krok)."""
 
     def __init__(self, battery: dict):
         self.battery = battery
+        self.cfg = self._build_cfg(battery)
+
+    @staticmethod
+    def _build_cfg(battery: dict) -> dict:
+        """Per-batéria realio cfg = realio defaulty + override z DB (host/creds/tagy)."""
+        import realio
+        cfg = realio._fresh_default()
+        host = (battery.get("realio_host") or "").strip()
+        cfg["host"] = host.rstrip("/") if host else ""
+        if battery.get("realio_username"):
+            cfg["username"] = battery["realio_username"]
+        if battery.get("realio_password"):
+            cfg["password"] = battery["realio_password"]
+        if battery.get("realio_tags_read"):
+            cfg["tags_read"] = {**cfg["tags_read"], **battery["realio_tags_read"]}
+        if battery.get("realio_tags_write"):
+            cfg["tags_write"] = {**cfg["tags_write"], **battery["realio_tags_write"]}
+        cfg["enabled"] = True
+        cfg["control_enabled"] = True
+        return cfg
+
+    @staticmethod
+    def _real_write_enabled() -> bool:
+        import os
+        return os.environ.get("FLEET_REAL_WRITE", "0") == "1"
+
+    def _build_setpoint_writes(self, setpoint_kw: float) -> list:
+        """Dual-write list (mode enable + setpoint W), rovnaký minútový timestamp."""
+        import realio
+        tw = self.cfg.get("tags_write") or {}
+        sp_tag = tw.get("batt_setpoint_kw")
+        if not sp_tag:
+            raise RuntimeError("batt_setpoint_kw tag nie je nakonfigurovaný (realio_tags_write)")
+        ts = realio._minute_aligned_ms()
+        writes = []
+        mode_tag = tw.get("batt_control_mode")
+        if mode_tag:
+            writes.append({"tag": mode_tag,
+                           "value": float(self.cfg.get("control_mode_enable_value", 2)),
+                           "time": ts})
+        writes.append({"tag": sp_tag, "value": float(setpoint_kw) * 1000.0, "time": ts})  # kW→W
+        return writes
 
     def apply_setpoint(self, battery_id: int, setpoint_kw: float, dt_h: float = 1.0 / 60.0) -> Dict:
-        raise NotImplementedError(
-            "RealExecutor: realio per-battery wiring ešte nie je hotový "
-            "(integračný krok). Batéria nesmie ísť do real módu bez neho.")
+        import realio
+        if not self.cfg.get("host"):
+            raise RuntimeError("realio_host nie je nastavený pre batériu (real mód)")
+        writes = self._build_setpoint_writes(setpoint_kw)
+        if self._real_write_enabled():
+            res = realio._send_tag_writes(self.cfg, writes)
+            if not res.get("ok"):
+                raise RuntimeError(f"Bender write zlyhal: {res.get('msg')}")
+        else:
+            print(f"[RealExecutor bat {battery_id}] DRY-RUN setpoint {float(setpoint_kw):+.1f} kW "
+                  f"(FLEET_REAL_WRITE!=1 → nezapísané) tags={[w['tag'] for w in writes]}", flush=True)
+        soc = self.read_soc(battery_id)
+        return {"soc_pct": soc, "applied_kw": float(setpoint_kw)}
 
     def read_soc(self, battery_id: int) -> float:
-        raise NotImplementedError("RealExecutor: realio per-battery wiring chýba.")
+        import realio
+        if not self.cfg.get("host"):
+            raise RuntimeError("realio_host nie je nastavený pre batériu (real mód)")
+        tag = (self.cfg.get("tags_read") or {}).get("batt_soc_pct")
+        if not tag:
+            raise RuntimeError("batt_soc_pct tag nie je nakonfigurovaný (realio_tags_read)")
+        raw = realio._fetch_latest_via_bender(self.cfg, [tag])
+        v = raw.get(tag)
+        if v is None:
+            raise RuntimeError("SOC nečitateľný z Bendera")
+        scale = float((self.cfg.get("scale_read") or {}).get("batt_soc_pct", 1.0))
+        return float(v) * scale
 
 
 def build_executor(battery: dict, soc_pct: float = 50.0) -> Executor:

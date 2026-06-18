@@ -32,9 +32,10 @@ def test_sim_path_end_to_end():
 
     sim_id = fleet.register_battery("SIM1", "sk", mode="simulation",
                                     batt_kw=1000, batt_kwh=2000, eff=0.95, enabled=True)
+    # real batéria BEZ hostu → RealExecutor padne rýchlo ("host nenastavený"),
+    # bez siete → deterministicky degraded (overuje fail-safe izoláciu)
     real_id = fleet.register_battery("REAL1", "sk", mode="real",
-                                     batt_kw=990, batt_kwh=2150, enabled=True,
-                                     realio_host="10.0.0.9")
+                                     batt_kw=990, batt_kwh=2150, enabled=True)
 
     assert {b["name"] for b in fleet.list_batteries(enabled_only=True)} == {"SIM1", "REAL1"}
 

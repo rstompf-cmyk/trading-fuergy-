@@ -52,7 +52,7 @@ def test_real_battery_degraded_does_not_crash_loop():
     sid = fleet.register_battery("SIM2", "sk", mode="simulation",
                                  batt_kw=500, batt_kwh=1000, enabled=True)
     rid = fleet.register_battery("REAL1", "sk", mode="real",
-                                 batt_kw=990, batt_kwh=2150, enabled=True, realio_host="x")
+                                 batt_kw=990, batt_kwh=2150, enabled=True)  # bez hostu → rýchly fail-safe
 
     control_loop.run(tick_sec=0.001, max_ticks=2, dt_h=0.25)   # nesmie vyhodiť
 
