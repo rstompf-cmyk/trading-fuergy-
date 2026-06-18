@@ -8027,7 +8027,8 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"<div style='height:360px'><canvas id='chPl'></canvas></div>"
                 f"<script>new Chart(document.getElementById('chPl'),{{type:'line',data:{{labels:{Ld},datasets:["
                 f"{{label:'DAM nominácia (D-1, záväzná)',data:{PG},borderColor:'#1F4E78',backgroundColor:'rgba(31,78,120,.10)',fill:true,stepped:true,pointRadius:0,borderWidth:2.2}},"
-                f"{{label:'VDT plán (extras nad DAM, návrh)',data:{VDT_PLAN},borderColor:'#2196F3',backgroundColor:'rgba(33,150,243,.15)',stepped:true,pointRadius:0,borderWidth:1.8,borderDash:[3,3]}},"
+                # #29 (user 2026-06-18): graf zobrazuje LEN uzavreté VDT obchody — dataset
+                # „VDT plán (návrh)" odstránený (návrh nie je uzavretý obchod, mätie).
                 f"{{label:'VDT realizované (paper trades)',data:{VDT_REAL},borderColor:'#E65100',backgroundColor:'rgba(230,81,0,.15)',stepped:true,pointRadius:0,borderWidth:1.8}},"
                 f"{{label:'Aktuálna nominácia (DAM + uzavreté VDT)',data:{DAM_VDT},borderColor:'#0D47A1',stepped:true,pointRadius:0,borderWidth:2.4}},"
                 f"{{label:'Plán batérie kW (info)',data:{PB},borderColor:'#999',borderDash:[3,3],pointRadius:0,borderWidth:1,hidden:true}},"
@@ -8041,8 +8042,6 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"<p style='color:#666;font-size:12px;margin:4px 0'>"
                 f"<b>DAM nominácia (D-1)</b> = pôvodný plán uzavretý deň vopred po OKTE DAM uzávierke "
                 f"— záväzná voči trhu (svetlomodrá, vyplnená). "
-                f"<b>VDT plán</b> = návrh intraday obchodov nad DAM z <code>/vdt/live_advisor</code> "
-                f"(svetlomodrá čiarkovaná). "
                 f"<b>VDT realizované</b> = uzavreté paper trades z <code>vdt_paper_trades.csv</code> (oranžová). "
                 f"<b>Aktuálna nominácia (DAM + uzavreté VDT)</b> = pôvodná D-1 nominácia + všetky VDT trade-y "
                 f"čo medzitým prešli (tmavomodrá) — toto musí batéria + FTV fyzicky trafiť aby nevznikla ZCO. "
