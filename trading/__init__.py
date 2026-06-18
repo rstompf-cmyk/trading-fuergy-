@@ -1,0 +1,13 @@
+# -*- coding: utf-8 -*-
+"""trading/ — VPP trading plumbing na kontraktoch (asset ↔ agregácia ↔ control).
+
+NEOBSAHUJE ekonomiku (VDT/RT rozhodovanie ostáva v existujúcich moduloch a napojí
+sa na Order v samostatnej golden-chránenej session). Tu len PREPOJENIE:
+  • availability.battery_availability — batéria → AvailabilityReport (čo vie spraviť),
+  • dispatch.dispatch_order — Order bloku → split na batérie → enqueue setpoint
+    príkazov (most na control loop cez existujúce IPC instance_command).
+"""
+from .availability import battery_availability
+from .dispatch import build_block_reports, dispatch_order
+
+__all__ = ["battery_availability", "build_block_reports", "dispatch_order"]

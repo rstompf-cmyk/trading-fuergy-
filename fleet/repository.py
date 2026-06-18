@@ -88,6 +88,58 @@ def set_enabled(battery_id: int, enabled: bool) -> None:
             b.updated_at = _now()
 
 
+# ── bloky (agregačné skupiny) ─────────────────────────────────────────────
+def create_block(name: str, country: str, *, split_strategy: str = "free_capacity",
+                 enabled: bool = True) -> int:
+    """UPSERT bloku podľa name. Vráti id."""
+    now = _now()
+    with get_session() as s:
+        b = s.query(m.Block).filter_by(name=name).one_or_none()
+        if b is None:
+            b = m.Block(name=name, created_at=now)
+            s.add(b)
+        b.country = country
+        b.split_strategy = split_strategy
+        b.enabled = bool(enabled)
+        b.updated_at = now
+        s.flush()
+        return b.id
+
+
+def get_block(block_id: int) -> Optional[Dict]:
+    with get_session() as s:
+        b = s.get(m.Block, block_id)
+        if not b:
+            return None
+        return {"id": b.id, "name": b.name, "country": b.country,
+                "split_strategy": b.split_strategy, "enabled": b.enabled}
+
+
+def list_blocks() -> List[Dict]:
+    with get_session() as s:
+        return [{"id": b.id, "name": b.name, "country": b.country,
+                 "split_strategy": b.split_strategy, "enabled": b.enabled}
+                for b in s.query(m.Block).order_by(m.Block.id).all()]
+
+
+def assign(battery_id: int, block_id: Optional[int] = None,
+           account_id: Optional[int] = None) -> int:
+    """Versioned priradenie batérie do bloku/účtu. Uzavrie predchádzajúce aktívne
+    (valid_to=now) a otvorí nové (valid_to=NULL). Vráti id nového priradenia."""
+    now = _now()
+    with get_session() as s:
+        prev = (s.query(m.Assignment)
+                  .filter(m.Assignment.battery_id == battery_id,
+                          m.Assignment.valid_to.is_(None)).all())
+        for a in prev:
+            a.valid_to = now
+        new = m.Assignment(battery_id=battery_id, block_id=block_id,
+                           account_id=account_id, valid_from=now, valid_to=None)
+        s.add(new)
+        s.flush()
+        return new.id
+
+
 # ── assignment (battery → block → account) ────────────────────────────────
 def active_assignment(battery_id: int) -> Optional[Dict]:
     with get_session() as s:

@@ -9,6 +9,7 @@ Verejné API (plain dicts, žiadne ORM objekty von):
 """
 from .repository import (
     register_battery, list_batteries, get_battery, set_enabled,
+    create_block, get_block, list_blocks, assign,
     active_assignment, batteries_in_block,
     write_status, get_status, fleet_status,
     enqueue_command, pending_commands, mark_command_consumed,
@@ -16,6 +17,7 @@ from .repository import (
 
 __all__ = [
     "register_battery", "list_batteries", "get_battery", "set_enabled",
+    "create_block", "get_block", "list_blocks", "assign",
     "active_assignment", "batteries_in_block",
     "write_status", "get_status", "fleet_status",
     "enqueue_command", "pending_commands", "mark_command_consumed",
