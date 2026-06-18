@@ -659,13 +659,14 @@ def _resolve_terminal_soc(date_iso: str, fp: dict, price_arr_today) -> float:
     Zajtrajšie ceny: reálny DAM (market.fetch_dam_prices) ak je publikovaný,
     inak None → fixed. Generické pre ľubovoľný profil (všetko z fp)."""
     mode = str(fp.get("terminal_soc_mode") or "fixed")
-    # #30 (user 2026-06-18: „koniec je ľubovoľný, tam nesmie byť žiadne obmedzenie,
-    # tento parameter zrušme — proste ako to vyjde z ekonomiky"): koniec dňa sa
-    # NEVYNUCUJE na žiadnu fixnú hodnotu. Terminál = soc_min (fyzická podlaha,
-    # nezáväzná navyše) → SOC smie skončiť kdekoľvek ≥ soc_min podľa ekonomiky.
-    # Vyššie ho dvihne LEN ekonomika cez next_day_price (drž energiu ak sa zajtra
-    # oplatí), nikdy nie fixná konštanta terminal_soc (tá je teraz ignorovaná).
-    base_term = float(fp.get("soc_min", DEF.get("soc_min", 5.0)) or 5.0)
+    # #30 (user 2026-06-18): koniec dňa sa NEVYNUCUJE — „proste ako to vyjde z ekonomiky".
+    # Bug TBB-TERMINAL-INFEASIBLE (2026-06-18): base_term = soc_min bolo ZLE — keď štart SOC
+    # < soc_min (nesené nízke SOC), joint_lp si per-slot podlahu auto-zníži na štart, ALE
+    # terminál ≥ soc_min vynútil dobiť späť → pri load/grid obmedzeniach LP infeasible
+    # (TBB 171/171). Preto base_term = 0: terminál nezáväzný, koniec drží LEN fyzická per-slot
+    # podlaha (soc_min, auto-adjust) → SOC smie skončiť kdekoľvek ≥ podlaha podľa ekonomiky,
+    # bez núteného recharge. Vyššie ho dvihne LEN ekonomika cez next_day_price.
+    base_term = 0.0
     if mode != "next_day_price":
         return base_term
     try:

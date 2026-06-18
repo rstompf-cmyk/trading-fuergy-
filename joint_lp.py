@@ -451,12 +451,22 @@ def optimize_joint_day(pv_kwh, load_kwh, dam_price_eur, *,
     # limit. Per-stream bounds (IM_DAM≤g_im, IM_VDT≤g_im) inak dovolia súčet až 2×limit
     # → plán prekročí grid_kw_import/export a guard #625-C ho zhodí. Tu obmedzíme TOTAL
     # (DAM+VDT) na slot na fyzický limit siete pre import aj export.
+    # Bug GRID-LIMIT-LOAD-INFEASIBLE (2026-06-18, TBB plán 171/171 infeasible na prode):
+    # import limit zahŕňal aj IM_LOAD (povinné pokrytie spotreby) → keď load−FTV−vybíjanie
+    # > grid_import, rovnosť load bilancie sa nedala splniť → LP infeasible KAŽDÝ deň.
+    # SHARED-METER model: sieť spotrebu kryje VŽDY; import limit obmedzuje nabíjanie+obchod,
+    # NIE povinný load. Preto per-slot import strop = max(grid_import, load[i]) → IM_LOAD
+    # (≤ load) sa vždy zmestí, batéria/obchod ostáva obmedzený limitom keď je load nízky.
+    # FTV-only profily (load=0) → max(g_im,0)=g_im, žiadna zmena.
+    _nload = len(load) if load is not None else 0
     for i in range(T):
+        _load_i = float(load[i]) if i < _nload else 0.0
+        _im_cap_i = max(g_im_kwh, _load_i)
         _row_im_t = np.zeros(n)
         _row_im_t[idx(IM_DAM, i)] = 1.0
         _row_im_t[idx(IM_VDT, i)] = 1.0
         A_ub.append(_row_im_t)
-        b_ub.append(g_im_kwh)
+        b_ub.append(_im_cap_i)
         _row_ex_t = np.zeros(n)
         _row_ex_t[idx(EX_DAM, i)] = 1.0
         _row_ex_t[idx(EX_VDT, i)] = 1.0
