@@ -773,6 +773,75 @@ class InstanceCommand(Base):
     )
 
 
+# ─── VPP trading contract-rows (perzistencia kontraktov core/schemas/vpp.py) ──
+class TradeOrder(Base):
+    """Perzistovaný Order (trading → trh/split). Audit + IPC: trading proces ho
+    zapíše, split/dispatch ho rozdelí na Allocation. order_id = contract id."""
+    __tablename__ = "trade_order"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    block_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    country: Mapped[str] = mapped_column(String(4), nullable=False)
+    day: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    slot_idx: Mapped[int] = mapped_column(Integer, nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)            # buy|sell
+    volume_kwh: Mapped[float] = mapped_column(Float, nullable=False)
+    price_eur_mwh: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(8), nullable=False)          # dt|rt|vdt
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="planned")
+    submitted_at: Mapped[Optional[str]] = mapped_column(String(32))
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("country IN ('sk','cz')", name="ck_order_country"),
+        CheckConstraint("side IN ('buy','sell')", name="ck_order_side"),
+        CheckConstraint("source IN ('dt','rt','vdt')", name="ck_order_source"),
+        Index("idx_order_day_block", "day", "block_id"),
+    )
+
+
+class AllocationRow(Base):
+    """Perzistovaná Allocation (split → batéria). +vybíja/−nabíja. applied_at=NULL
+    = ešte nevykonaná (control loop ju môže čítať ako cieľ)."""
+    __tablename__ = "allocation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    battery_id: Mapped[int] = mapped_column(ForeignKey("battery.id", ondelete="CASCADE"),
+                                            nullable=False, index=True)
+    block_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    day: Mapped[str] = mapped_column(String(10), nullable=False)
+    slot_idx: Mapped[int] = mapped_column(Integer, nullable=False)
+    share_kwh: Mapped[float] = mapped_column(Float, nullable=False)
+    setpoint_kw: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(8), nullable=False)
+    applied_at: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    __table_args__ = (
+        Index("idx_alloc_battery_slot", "battery_id", "day", "slot_idx"),
+    )
+
+
+class AvailabilityReportRow(Base):
+    """Perzistovaný AvailabilityReport (batéria → trading). Audit dostupnosti."""
+    __tablename__ = "availability_report"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    battery_id: Mapped[int] = mapped_column(ForeignKey("battery.id", ondelete="CASCADE"),
+                                            nullable=False, index=True)
+    day: Mapped[str] = mapped_column(String(10), nullable=False)
+    slot_idx: Mapped[int] = mapped_column(Integer, nullable=False)
+    soc_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    free_charge_kw: Mapped[float] = mapped_column(Float, nullable=False)
+    free_discharge_kw: Mapped[float] = mapped_column(Float, nullable=False)
+    free_kwh: Mapped[float] = mapped_column(Float, nullable=False)
+    eff: Mapped[float] = mapped_column(Float, nullable=False, default=0.95)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
 __all__ = [
     # auth
     "User", "UserProfileAccess", "AuthSession", "AuditLog",
@@ -788,4 +857,6 @@ __all__ = [
     "LivesimMeta", "LivesimTraceDay",
     # VPP fleet (multi-batéria / reálne riadenie) — dormantné kým fleet mód off
     "Battery", "Block", "Account", "Assignment", "InstanceStatus", "InstanceCommand",
+    # VPP trading contract-rows
+    "TradeOrder", "AllocationRow", "AvailabilityReportRow",
 ]

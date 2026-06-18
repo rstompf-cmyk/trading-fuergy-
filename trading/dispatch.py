@@ -40,12 +40,13 @@ def block_aggregate(block_id: int, day: str, slot_idx: int,
 
 
 def dispatch_order(order: Order, *, dt_h: float = 0.25, strategy: Optional[str] = None,
-                   enqueue: bool = True) -> List:
-    """Rozdelí Order bloku na batérie a (voliteľne) zapíše setpoint príkazy.
+                   enqueue: bool = True, persist: bool = False) -> List:
+    """Rozdelí Order bloku na batérie a (voliteľne) zapíše setpoint príkazy / DB.
 
-    Vráti [Allocation]. enqueue=True → každá alokácia sa premietne na
-    fleet.enqueue_command(setpoint) → control loop ju vykoná. enqueue=False =
-    len výpočet (dry / náhľad)."""
+    Vráti [Allocation].
+      • enqueue=True  → každá alokácia → fleet.enqueue_command(setpoint) (control vykoná).
+      • persist=True  → Order + Allocation sa zapíšu do DB (trading audit/IPC ledger).
+    enqueue=False+persist=False = len výpočet (dry / náhľad)."""
     import fleet
     bid = int(order.block_id)
     reports = build_block_reports(bid, order.day, order.slot_idx, dt_h=dt_h)
@@ -54,6 +55,11 @@ def dispatch_order(order: Order, *, dt_h: float = 0.25, strategy: Optional[str] 
     blk = fleet.get_block(bid)
     strat = strategy or (blk or {}).get("split_strategy") or "free_capacity"
     allocs = split_order(order, reports, strategy=strat, dt_h=dt_h)
+    if persist:
+        from . import repository as repo
+        repo.save_order(order)
+        if allocs:
+            repo.save_allocations(allocs)
     if enqueue:
         for a in allocs:
             fleet.enqueue_command(int(a.battery_id), "setpoint", {

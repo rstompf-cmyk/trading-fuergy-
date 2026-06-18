@@ -15,8 +15,11 @@ def _setup_db():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     os.environ["DB_URL"] = f"sqlite:///{path}"
+    # purge moduly držiace db binding (db/fleet/trading) — nech sa re-importujú
+    # s novým engine pre nový DB_URL (inak FK na batériu v inej DB)
     for mod in list(sys.modules):
-        if mod == "db" or mod.startswith("db.") or mod == "fleet" or mod.startswith("fleet."):
+        if (mod in ("db", "fleet", "trading")
+                or mod.startswith(("db.", "fleet.", "trading."))):
             del sys.modules[mod]
     import db
     db.init_db()
@@ -92,9 +95,45 @@ def test_dispatch_empty_block():
     assert dispatch_order(_order(blk), dt_h=0.25) == []
 
 
+def test_persist_order_and_allocations():
+    _setup_db()
+    import fleet, trading
+    from trading.dispatch import dispatch_order
+
+    b1 = fleet.register_battery("B1", "sk", mode="simulation", batt_kw=1000, batt_kwh=2000, enabled=True)
+    b2 = fleet.register_battery("B2", "sk", mode="simulation", batt_kw=1000, batt_kwh=2000, enabled=True)
+    blk = fleet.create_block("BLK1", "sk")
+    fleet.assign(b1, blk); fleet.assign(b2, blk)
+
+    allocs = dispatch_order(_order(blk, side="sell", vol=300.0), dt_h=0.25,
+                            enqueue=False, persist=True)
+    # Order v DB
+    orders = trading.list_orders(day="2026-06-18")
+    assert len(orders) == 1 and orders[0]["order_id"] == "o1" and orders[0]["side"] == "sell"
+    # Allocations v DB (pending) pre obe batérie
+    pend1 = trading.pending_allocations(battery_id=b1)
+    pend2 = trading.pending_allocations(battery_id=b2)
+    assert len(pend1) == 1 and len(pend2) == 1
+    # mark applied → už nie pending
+    trading.mark_allocation_applied(pend1[0]["id"])
+    assert trading.pending_allocations(battery_id=b1) == []
+
+
+def test_save_availability_row():
+    _setup_db()
+    import fleet, trading
+    from trading.availability import battery_availability
+    b1 = fleet.register_battery("B1", "sk", mode="simulation", batt_kw=1000, batt_kwh=2000, enabled=True)
+    rep = battery_availability(fleet.get_battery(b1), 70.0, "2026-06-18", 40, dt_h=0.25)
+    rid = trading.save_availability(rep)
+    assert rid > 0
+
+
 if __name__ == "__main__":
     test_availability_report_capacity()
     test_dispatch_splits_and_commands_then_control_executes()
     test_dispatch_buy_negative_setpoint()
     test_dispatch_empty_block()
+    test_persist_order_and_allocations()
+    test_save_availability_row()
     print("✓ trading dispatch testy OK")

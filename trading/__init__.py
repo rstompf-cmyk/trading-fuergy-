@@ -8,6 +8,12 @@ sa na Order v samostatnej golden-chránenej session). Tu len PREPOJENIE:
     príkazov (most na control loop cez existujúce IPC instance_command).
 """
 from .availability import battery_availability
-from .dispatch import build_block_reports, dispatch_order
+from .dispatch import build_block_reports, block_aggregate, dispatch_order
+from .repository import (save_order, list_orders, save_allocations,
+                         pending_allocations, mark_allocation_applied, save_availability)
 
-__all__ = ["battery_availability", "build_block_reports", "dispatch_order"]
+__all__ = [
+    "battery_availability", "build_block_reports", "block_aggregate", "dispatch_order",
+    "save_order", "list_orders", "save_allocations", "pending_allocations",
+    "mark_allocation_applied", "save_availability",
+]
