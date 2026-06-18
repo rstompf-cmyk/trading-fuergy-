@@ -16804,6 +16804,17 @@ def download(date: str):
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+# ── VPP fleet admin/monitor router (aditívny, web/ balík) ──────────────────
+# Read-only zoznam batérií + status + enable/disable/tick/add. Dormantný kým
+# nie sú fleet tabuľky/batérie; bežiacej appky sa inak nedotýka. Auth middleware
+# (ak AUTH_REQUIRED=1) ho chráni rovnako ako ostatné routes.
+try:
+    from web.fleet import router as _fleet_router
+    app.include_router(_fleet_router)
+except Exception as _e_fleet:
+    print(f"[fleet] router init zlyhal — beh bez /fleet: {_e_fleet}")
+
+
 if __name__ == "__main__":
     # Spustenie cez `python app.py` — background úlohy (livesim loop, scheduler,
     # backfill) sa štartujú cez lifespan, takže fungujú aj keď spustíš app cez
