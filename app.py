@@ -5959,6 +5959,44 @@ def livesim_table_xlsx(case: str = "plan_d1", day: str = None):
     ws.freeze_panes = "A2"
     for _col in ws.columns:
         ws.column_dimensions[_col[0].column_letter].width = 14
+
+    # ── Hárok „Hodinový (priemer)": agregácia 96×15-min → 24 hodín ─────────────
+    # Výkon (kW) = priemer štvrťhodín; energia (work_kwh) = súčet; SOC% = koniec
+    # hodiny; ceny (€/MWh) = priemer. Hodinový pohľad vedľa 15-min (user 2026-06-18).
+    try:
+        gh = g.copy()
+        gh["_hour"] = pd.to_datetime(gh["_slot"]).dt.floor("1h")
+        _agg_h = {"plan_batt_kw": "mean", "soc_pct": "last", "ftv_kw": "mean",
+                  "dt_eur": "mean", "work_kwh": "sum"}
+        for _opt in ("plan_batt_dam_kw", "plan_batt_vdt_kw", "dt_real_eur", "vdt_eur"):
+            if _opt in gh.columns:
+                _agg_h[_opt] = "mean"
+        gh2 = gh.groupby("_hour").agg(_agg_h).reset_index()
+        ws2 = wb.create_sheet("Hodinový (priemer)")
+        ws2.append(headers)
+        for _c in ws2[1]:
+            _c.fill = _hdr_fill; _c.font = _hdr_font
+            _c.alignment = Alignment(horizontal="center")
+        for _, r in gh2.iterrows():
+            ts = pd.Timestamp(r["_hour"]); ts_end = ts + pd.Timedelta(hours=1)
+            ws2.append([
+                ts.strftime("%Y-%m-%d %H:%M"), ts_end.strftime("%H:%M"),
+                round(float(r.get('plan_batt_kw', 0)), 1),
+                round(float(r.get('plan_batt_dam_kw', 0)), 1),
+                round(float(r.get('plan_batt_vdt_kw', 0)), 1),
+                round(float(r.get('work_kwh', 0)), 2),
+                round(float(r.get('soc_pct', 0)), 1),
+                round(float(r.get('ftv_kw', 0)), 1),
+                round(float(r.get('dt_eur', 0)), 1),
+                round(float(r.get('dt_real_eur', 0)), 1),
+                round(float(r.get('vdt_eur', 0)), 1),
+            ])
+        ws2.freeze_panes = "A2"
+        for _col in ws2.columns:
+            ws2.column_dimensions[_col[0].column_letter].width = 14
+    except Exception as _eh:
+        print(f"[livesim_table_xlsx] hodinový hárok zlyhal: {_eh}")
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
