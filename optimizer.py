@@ -12,6 +12,49 @@ import numpy as np, pandas as pd
 from scipy.optimize import linprog
 
 
+def _diagnose_infeasible(c, A_ub, b_ub, A_eq, b_eq, bounds, T, pv, socmin, socmax, batt_kwh):
+    """Beží LEN keď je LP infeasible — zistí, ktorý constraint to spôsobuje (jednotlivé
+    aj kumulatívne uvoľnenie). Vráti string do chybovej hlášky. Bezpečné — golden cesta
+    (úspešný LP) sem nikdy nepríde."""
+    try:
+        from scipy.optimize import linprog as _lp
+        EX, IM, CU, SOC = 2*T, 3*T, 4*T, 5*T
+        Aeq = np.array(A_eq); beq = np.array(b_eq)
+
+        def _solve(b):
+            rr = _lp(c, A_ub=A_ub, b_ub=b_ub, A_eq=Aeq, b_eq=beq, bounds=b, method="highs")
+            return bool(rr.success)
+
+        def m_term(b):  b[SOC + T - 1] = (socmin, socmax)
+        def m_curt(b):
+            for t in range(T): b[CU + t] = (0.0, max(float(pv[t]), 0.0))
+        def m_exp(b):
+            for t in range(T): b[EX + t] = (0.0, 1e9)
+        def m_imp(b):
+            for t in range(T): b[IM + t] = (0.0, 1e9)
+        def m_soc(b):
+            for t in range(T): b[SOC + t] = (0.0, float(batt_kwh))
+
+        relax = [("terminal_soc", m_term), ("allow_curtail", m_curt),
+                 ("grid_export", m_exp), ("grid_import/block_neg", m_imp), ("soc_band", m_soc)]
+        singles = []
+        for nm, fn in relax:
+            b = list(bounds); fn(b)
+            if _solve(b):
+                singles.append(nm)
+        # kumulatívne (over že aspoň všetko spolu rieši — inak je problém v rovnostiach/bilancii)
+        b_all = list(bounds)
+        for _, fn in relax: fn(b_all)
+        all_ok = _solve(b_all)
+        if singles:
+            return f" | DIAG: feasible ak uvoľním JEDEN z: {singles}"
+        if all_ok:
+            return " | DIAG: feasible len pri uvoľnení VIACERÝCH naraz (kombinácia limitov: terminal/curtail/grid/SOC)"
+        return " | DIAG: infeasible aj po uvoľnení všetkých bound-ov → problém v BILANCII uzla (load−pv vs limity siete/curtail)"
+    except Exception as _e:
+        return f" | DIAG zlyhal: {_e}"
+
+
 def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
                  eff_c=0.95, eff_d=0.95, soc_min_pct=5, soc_max_pct=95,
                  soc_init_pct=50, grid_kw=100.0, grid_fee=22.0, cycle_cost=2.0,
@@ -130,19 +173,23 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
         bounds.append((0, _di_cap))                                  # di
     for t in range(T): bounds.append((0, grid_kw_export*dt))   # ex (limit dodávky do siete)
     for t in range(T):
-        # ub_im: ak je load > 0, MUSÍME povoliť import aspoň na pokrytie load (inak infeasible).
-        # allow_grid_charge=False obmedzí import na max=load[t] (nedovolíme nabíjať batériu zo siete).
-        if allow_grid_charge or _has_load:
-            ub_im = grid_kw_import*dt
+        _load_t = float(load[t]) if _has_load else 0.0
+        # SIEŤ VŽDY KRYJE SPOTREBU: per-slot import strop = max(grid_limit, load[t]).
+        # Limit obmedzuje NABÍJANIE/obchod, NIE povinné pokrytie spotreby (parita s joint_lp,
+        # bug GRID-LIMIT-LOAD-INFEASIBLE). Bug 15-MIN-LOAD-PEAK (2026-06-18): pri 60-min sa
+        # load posiela ako HODINOVÝ PRIEMER (zhladený), pri 15-min ako REÁLNY load za slot
+        # (so špičkami). Starý strop grid_kw_import*dt bez load-reliefu → keď 15-min load špička
+        # > grid_import*dt, rovnosť pokrytia load infeasible KAŽDÝ deň (pri 60-min priemer ukryl
+        # špičku → preto 60-min prešiel, 15-min padal).
+        _g_im_kwh = grid_kw_import * dt
+        if allow_grid_charge:
+            ub_im = max(_g_im_kwh, _load_t)        # grid limit pre nabíjanie/obchod, load vždy pokrytý
+        elif _has_load:
+            ub_im = _load_t                        # iba pokrytie load (žiadne nabíjanie zo siete)
         else:
-            ub_im = 0
-        if not allow_grid_charge and _has_load:
-            # iba pokrytie load (nie nabíjanie batérie zo siete)
-            ub_im = min(ub_im, float(load[t]))
-        if block_neg_import and pr[t] < 0:        # nenakupovať pri zápornej cene
-            ub_im = min(ub_im, float(load[t]))     # ale load treba pokryť aj pri záporných (môžeme zlepšiť neskôr)
-            if not _has_load:
-                ub_im = 0
+            ub_im = 0.0
+        if block_neg_import and pr[t] < 0:         # nenakupovať pri zápornej cene (load výnimka)
+            ub_im = _load_t                        # load treba pokryť aj pri zápornej cene
         bounds.append((0, ub_im))                                # im
     for t in range(T): bounds.append((0, (max(pv[t], 0) if allow_curtail else 0.0)))  # cu (orezanie FTV)
     # Pri block_planned_discharge LP nemôže vybíjať → ak terminal_soc > soc_init, LP nemá ako
@@ -171,7 +218,8 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     r = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=np.array(A_eq), b_eq=np.array(b_eq),
                 bounds=bounds, method="highs")
     if not r.success:
-        raise RuntimeError("LP sa nevyriešil: " + r.message)
+        _diag = _diagnose_infeasible(c, A_ub, b_ub, A_eq, b_eq, bounds, T, pv, socmin, socmax, batt_kwh)
+        raise RuntimeError("LP sa nevyriešil: " + r.message + _diag)
     x = r.x
     x = np.where(np.abs(x) < 1e-6, 0.0, x)           # očisti numerický šum (-0.0)
     g = lambda k: x[k*T:(k+1)*T]
