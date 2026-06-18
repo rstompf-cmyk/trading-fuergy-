@@ -156,3 +156,37 @@ services:
     # Spustenie len: `docker compose up -d trading-fuergy-dev`
     profiles:
       - dev
+
+  # ===========================================================================
+  # control-loop-dev (VPP) - samostatny real-time tick flotily, vedla web dev.
+  # Zdiela dev DB (./data-dev/db) -> pise instance_status, web ho cita na /fleet.
+  # Spustenie: docker compose --profile dev up -d control-loop-dev
+  # FLEET_REAL_WRITE nechaj zakomentovane kym nie je realna bateria odskusana!
+  # ---------------------------------------------------------------------------
+  control-loop-dev:
+    image: trading-fuergy:dev
+    container_name: control-loop-dev
+    restart: unless-stopped
+    depends_on:
+      - trading-fuergy-dev
+    command: ["python", "-m", "workers.control_loop"]
+    volumes:
+      - ./data-dev/db:/app/db/data
+      - ./data-dev/out:/app/out
+      - ./data-dev/realio_cookies.json:/app/realio_cookies.json
+      - ./core:/app/core:ro
+    env_file:
+      - ./.env
+    environment:
+      TZ: "Europe/Bratislava"
+      USE_DB: "1"
+      FLEET_CONTROL: "1"
+      FLEET_TICK_SEC: "60"
+      # FLEET_REAL_WRITE: "1"   # odkomentovat az po commissioningu realnej baterie
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    profiles:
+      - dev
