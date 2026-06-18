@@ -644,6 +644,135 @@ class LivesimTraceDay(Base):
     profile: Mapped["Profile"] = relationship()
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# VPP FLEET — multi-batéria / reálne riadenie (project-modularizacia-skalovanie).
+# Backbone pre 20-30 reálne riadených batérií. ADITÍVNE + DORMANTNÉ kým fleet mód
+# nie je zapnutý (ako LivesimMeta). Topológia (battery/block/account/assignment) +
+# IPC jadro↔inštancia (instance_status/command). Kontrakty viď core/schemas/vpp.py.
+# ════════════════════════════════════════════════════════════════════════════
+
+class Battery(Base):
+    """Asset / inštancia batérie. Samostatný proces (real-time vykonanie + safety).
+    Per-batéria realio config (rieši single-config blocker — viac Bender hostov).
+    profile_id = odkaz na Profile pre plán/parametre/mód (znovupoužitie)."""
+    __tablename__ = "battery"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    country: Mapped[str] = mapped_column(String(4), nullable=False)            # 'sk'|'cz'
+    profile_id: Mapped[Optional[int]] = mapped_column(ForeignKey("profile.id"), index=True)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="simulation")  # simulation|real
+    batt_kw: Mapped[float] = mapped_column(Float, default=0.0)
+    batt_kwh: Mapped[float] = mapped_column(Float, default=0.0)
+    eff: Mapped[float] = mapped_column(Float, default=0.95)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)   # „spustiť ako inštanciu"
+    # Per-batéria realio (real mód) — vlastný Bender host/creds/tagy
+    realio_host: Mapped[Optional[str]] = mapped_column(String(255))
+    realio_username: Mapped[Optional[str]] = mapped_column(String(64))
+    realio_password: Mapped[Optional[str]] = mapped_column(Text)               # encrypted at rest (TODO)
+    realio_tags_read: Mapped[dict] = mapped_column(JSON, default=dict)
+    realio_tags_write: Mapped[dict] = mapped_column(JSON, default=dict)
+    realio_fve_control: Mapped[dict] = mapped_column(JSON, default=dict)
+    realio_poll_sec: Mapped[int] = mapped_column(Integer, default=60)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("mode IN ('simulation','real')", name="ck_battery_mode"),
+        CheckConstraint("country IN ('sk','cz')", name="ck_battery_country"),
+    )
+
+
+class Block(Base):
+    """Agregačný blok — skupina batérií idúcich na trh SPOLU. Split stratégia
+    určuje delenie objemu na batérie."""
+    __tablename__ = "block"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    country: Mapped[str] = mapped_column(String(4), nullable=False)
+    split_strategy: Mapped[str] = mapped_column(String(24), default="free_capacity")  # free_capacity|soc_headroom|eff
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("country IN ('sk','cz')", name="ck_block_country"),
+    )
+
+
+class Account(Base):
+    """Obchodný účet (multi-account!). V jednej krajine ich VIAC — každý vlastné
+    prihlasovacie údaje; batérie/bloky sa priradia ku konkrétnemu účtu."""
+    __tablename__ = "account"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    label: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    country: Mapped[str] = mapped_column(String(4), nullable=False)
+    product: Mapped[str] = mapped_column(String(8), default="vdt")             # 'vdt'|'dam'|...
+    username: Mapped[Optional[str]] = mapped_column(String(64))
+    password: Mapped[Optional[str]] = mapped_column(Text)                      # encrypted at rest (TODO)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("country IN ('sk','cz')", name="ck_account_country"),
+    )
+
+
+class Assignment(Base):
+    """Versioned mapovanie batéria → blok → účet. valid_to=NULL = aktuálne platné.
+    Pravidlo: jedna batéria má v danom čase max jeden AKTÍVNY VDT účet."""
+    __tablename__ = "assignment"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    battery_id: Mapped[int] = mapped_column(ForeignKey("battery.id", ondelete="CASCADE"),
+                                             nullable=False, index=True)
+    block_id: Mapped[Optional[int]] = mapped_column(ForeignKey("block.id"))
+    account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("account.id"))
+    valid_from: Mapped[str] = mapped_column(String(32), nullable=False)
+    valid_to: Mapped[Optional[str]] = mapped_column(String(32))                # NULL = aktuálne
+
+    __table_args__ = (
+        Index("idx_assignment_active", "battery_id", "valid_to"),
+    )
+
+
+class InstanceStatus(Base):
+    """IPC: inštancia → jadro. Posledný stav per batéria (UPSERT). Fleet Monitor číta."""
+    __tablename__ = "instance_status"
+
+    battery_id: Mapped[int] = mapped_column(ForeignKey("battery.id", ondelete="CASCADE"),
+                                            primary_key=True)
+    ts: Mapped[str] = mapped_column(String(32), nullable=False)
+    pid: Mapped[Optional[int]] = mapped_column(Integer)
+    alive: Mapped[bool] = mapped_column(Boolean, default=False)
+    health: Mapped[str] = mapped_column(String(16), default="unknown")         # ok|degraded|down
+    soc_pct: Mapped[Optional[float]] = mapped_column(Float)
+    last_setpoint_kw: Mapped[Optional[float]] = mapped_column(Float)
+    mode: Mapped[Optional[str]] = mapped_column(String(16))
+    error: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class InstanceCommand(Base):
+    """IPC: jadro → inštancia. Príkazy (start/stop/setpoint/mode); inštancia ich
+    konzumuje (consumed_at). FIFO per batéria."""
+    __tablename__ = "instance_command"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    battery_id: Mapped[int] = mapped_column(ForeignKey("battery.id", ondelete="CASCADE"),
+                                            nullable=False, index=True)
+    ts: Mapped[str] = mapped_column(String(32), nullable=False)
+    type: Mapped[str] = mapped_column(String(16), nullable=False)              # start|stop|restart|setpoint|mode
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    consumed_at: Mapped[Optional[str]] = mapped_column(String(32), index=True) # NULL = čaká na spracovanie
+
+    __table_args__ = (
+        Index("idx_command_pending", "battery_id", "consumed_at"),
+    )
+
+
 __all__ = [
     # auth
     "User", "UserProfileAccess", "AuthSession", "AuditLog",
@@ -657,4 +786,6 @@ __all__ = [
     "UiSettings", "Case", "RealioConfig", "ActiveMarket",
     # livesim storage (CSV→DB)
     "LivesimMeta", "LivesimTraceDay",
+    # VPP fleet (multi-batéria / reálne riadenie) — dormantné kým fleet mód off
+    "Battery", "Block", "Account", "Assignment", "InstanceStatus", "InstanceCommand",
 ]
