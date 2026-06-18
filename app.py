@@ -855,6 +855,33 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             # No-FTV profil: 24 hodín × 0 kW
             pv_h = np.zeros(24)
         pv15 = np.repeat(pv_h[:24], 4) / 4.0
+        # 15-MIN MERGE (2026-06-18): pre D+1 (alebo deň bez reálnych uzavretých 15-min OTE)
+        # neexistuje 15-min cenová predikcia → FALLBACK: hodinová ISOT predikcia (ako 60-min
+        # vetva) rozkopírovaná na 15-min (cena ROVNAKÁ v hodine, np.repeat). Reálne OTE 15-min
+        # majú PRIORITU (použijú sa keď sú kompletné). Hodinový pohľad = priemer 15-min.
+        _p15a = (np.asarray(price15, dtype=float) if price15 is not None and len(price15)
+                 else np.array([]))
+        if not (_p15a.size >= 96 and int(np.isfinite(_p15a[:96]).sum()) >= 90):
+            try:
+                from core.granularity import upsample_price_h_to_15 as _up_px15
+                _wxp = (wx[["time", "gti", "temp", "cloud"]].copy() if _kwp15 > 0.01 else
+                        pd.DataFrame({"time": pd.date_range(pd.Timestamp(d), periods=24, freq="h"),
+                                      "gti": np.zeros(24), "temp": np.full(24, 15.0),
+                                      "cloud": np.full(24, 50.0)}))
+                _wxp["isot_eur"] = np.nan
+                _h2p = _isot_history(d, days=8).copy()
+                for _c in ["gti", "temp", "cloud"]:
+                    _h2p[_c] = np.nan
+                _ctxp = pd.concat([_h2p[["time", "isot_eur", "gti", "temp", "cloud"]], _wxp],
+                                  ignore_index=True)
+                _predp = _model().predict(_ctxp)
+                _dpp = _predp[_predp.time.dt.date == d].sort_values("time")
+                _ph = (_dpp.pred_isot.values * float(fp.get("price_scale", 1.0)))[:24]
+                if len(_ph) >= 24:
+                    price15 = _up_px15(_ph)
+                    print(f"[15-MIN] {date_iso}: reálne 15-min OTE chýbajú → upsample hodinovej predikcie (D+1)")
+            except Exception as _ep15:
+                print(f"[15-MIN] {date_iso}: cenový fallback (predikcia) zlyhal: {_ep15}")
         n = min(len(pv15), len(price15))
         npd = bool(fp.get("no_planned_discharge", False))
         rtf = bool(fp.get("rt_freedom", True))
@@ -15570,56 +15597,6 @@ a{{color:#1F4E78}}</style></head><body>
                 meta=dict(source="/plan", price_kind="predicted"))
         except Exception as _e:
             plan_saved_path = f"ERR: {_e}"
-
-    # === KROK 1 (15-MIN MERGE, 2026-06-18): paralelne vygeneruj + ulož 15-min plán ===
-    # ADITÍVNE — 60-min flow vyššie (display/Excel/save) ostáva NEDOTKNUTÝ. 15-min je
-    # canonical pre livesim (Krok 2). Inputy upsamplnuté z hodinovej predikcie:
-    # CENA sa KOPÍRUJE (rovnaká v hodine), ENERGIA (PV/load) /4. Reálne 15-min OTE ceny
-    # doplníme neskôr; hodinový pohľad = priemer 15-min. Fail-safe: try/except → ak 15-min
-    # zlyhá, 60-min plán ostáva v platnosti.
-    try:
-        from core.granularity import (upsample_price_h_to_15 as _up_px,
-                                       upsample_series_h_to_15 as _up_ser,
-                                       upsample_mask_h_to_15 as _up_msk)
-        _dprice15 = _up_px(decision_price)
-        _sprice15 = _up_px(price_arr)
-        _pv15 = _up_ser(pv_arr, divide=True)
-        _load15 = _up_ser(load24, divide=True) if load24 is not None else None
-        _mult96 = _up_msk(mult24)
-        _rt96 = _up_msk(rt_mask24)
-        _vdt_committed_15 = _vdtb_p(_prof_vb, d.isoformat(), T=96, step_min=15)
-        _has_mult = not np.allclose(np.asarray(mult24, dtype=float), 1.0)
-        _sch15, _summ15 = _od_or_joint(
-            _pv15, _dprice15, joint_flags=_joint_flags,
-            vdt_committed_kw=_vdt_committed_15, vdt_capacity_reserve_kw=_vcr_eff_p,
-            settle_price=_sprice15, batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
-            soc_min_pct=soc_min, soc_max_pct=soc_max, soc_init_pct=soc_init,
-            soc_reserve_pct=float(soc_reserve_pct or 0.0),
-            rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
-            grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
-            grid_fee=grid_fee, cycle_cost=cycle_cost, allow_grid_charge=agc,
-            terminal_soc_pct=_term_eff, allow_curtail=acu,
-            min_spread_eur=min_spread, min_trade_mwh=min_trade,
-            block_neg_import=bool(block_neg_import), block_planned_discharge=npd,
-            load_kwh=_load15, dt=0.25, max_export_kwh_day=_mex, max_import_kwh_day=_mim,
-            batt_kw_override=(_mult96 if _has_mult else None))
-        if ps is not None:
-            _scols15 = ["batt_kw", "grid_kwh", "pv_kwh", "price_eur", "curtail_kwh",
-                        "soc_pct", "order_mwh", "_charge_kw", "_discharge_kw",
-                        "_export_kwh", "_import_kwh", "soc_kwh", "load_kwh"]
-            _sched15 = {c: _sch15[c].tolist() for c in _scols15 if c in _sch15.columns}
-            _bk15 = np.asarray(_sch15["batt_kw"].values, float)
-            _rtm15 = np.asarray(_rt96, dtype=float).reshape(-1)
-            if not rtf and not bool(np.all(np.abs(_bk15) < 0.5)):
-                _rtm15 = np.where(np.abs(_bk15) > 0.5, _rtm15, 0.0)
-            ps.save_plan(date, 15, "dentrh", params=meta, schedule=_sched15, summary=_summ15,
-                         mults=list(map(float, np.asarray(_mult96).reshape(-1))),
-                         rt_mask=list(map(float, _rtm15)),
-                         block_planned_discharge=npd, zco_bias_w=zbw, rt_freedom=rtf,
-                         meta=dict(source="/plan", price_kind="predicted_upsampled_15min"))
-            print(f"[15-MIN] {date}: 15-min plán uložený paralelne (96 slotov, zisk={_summ15.get('ZISK_EUR', _summ15.get('zisk_eur', 0)):.1f})")
-    except Exception as _e15:
-        print(f"[15-MIN] {date}: 15-min plán zlyhal (60-min ostáva v platnosti): {_e15}")
 
     rows = ""
     mult24_arr = np.asarray(mult24, dtype=float).reshape(-1)
