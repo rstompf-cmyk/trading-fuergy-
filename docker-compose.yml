@@ -183,6 +183,8 @@ services:
       FLEET_CONTROL: "1"
       FLEET_TICK_SEC: "60"
       # FLEET_REAL_WRITE: "1"   # odkomentovat az po commissioningu realnej baterie
+    healthcheck:
+      disable: true   # control loop nie je web server - nededit /me healthcheck
     logging:
       driver: json-file
       options:
