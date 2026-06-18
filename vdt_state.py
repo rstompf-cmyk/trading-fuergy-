@@ -714,8 +714,11 @@ def _compute_closedprice_day(profile: str, day_iso: str) -> Dict[str, Any]:
         soc_max = float((plan.get("soc_max") if plan.get("soc_max") is not None
                          else plan.get("soc_max_pct")) or 100.0)
         max_cycles = plan.get("max_cycles_per_day")
+        _soc_init_ck = float(plan.get("soc_init_pct",
+                             plan.get("soc_init", (soc_min + soc_max) / 2.0))
+                             or (soc_min + soc_max) / 2.0)
         ck = (f"{profile}|{day_iso}|{batt_kwh:.0f}|{batt_kw:.0f}|{min_spread:.1f}"
-              f"|{soc_min:.0f}|{soc_max:.0f}|{max_cycles}")
+              f"|{soc_min:.0f}|{soc_max:.0f}|{max_cycles}|si{_soc_init_ck:.1f}")
         _c = _CLOSEDPRICE_CACHE.get(ck)
         if _c is not None:
             return _c
@@ -732,10 +735,16 @@ def _compute_closedprice_day(profile: str, day_iso: str) -> Dict[str, Any]:
         # DAM nominácia pre daný deň (ak plán existuje) — batt view (+dis −chg) = lower bounds
         dam = _load_dam_nomination(profile, day_iso)
         dam_view = (dam.get("kwh_batt_view") if dam else None) or [0.0] * 96
-        # Start SOC — pre históriu neutrálny stred rozsahu. VDT-extra je SOC-neutrálne
-        # (optimizer soc_neutral), takže medzidenná SOC kontinuita ostáva na DAM pláne;
-        # optimizer si auto-zarovná bounds, a ak je infeasible → ok=False → no-op (safe).
-        soc_start = (soc_min + soc_max) / 2.0
+        # Bug #27-SOC-BASE (2026-06-18, user VW_simulacia_3): štart SOC MUSÍ byť reálny
+        # soc_init plánu, NIE stred rozsahu (~52 %). Pri 52 % báze optimizer našiel rannú
+        # arbitráž (SOC až 100 % ráno), ktorá v DT pláne (soc_init 5 % → DAM ramp) NIE je →
+        # closed-price VDT bol „feasible" len v 52 %-bubline; engine ho na reálnej
+        # 5 %-trajektórii buď zahodil (zeros) alebo orezal → simulácia sa rozišla s plánom
+        # (overené simuláciou: starý SOC −42 %, nový v pásme). Zo soc_init + DAM commitments
+        # optimizer drží tú istú trajektóriu ako realita → VDT-extra dodateľný, simulácia ho sleduje.
+        soc_start = float(plan.get("soc_init_pct",
+                          plan.get("soc_init", (soc_min + soc_max) / 2.0))
+                          or (soc_min + soc_max) / 2.0)
         res = _opt.optimize_vdt_day(
             snap, batt_kw=batt_kw, batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
             grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
