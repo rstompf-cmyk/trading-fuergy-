@@ -172,6 +172,8 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
         _di_cap = 0.0 if block_planned_discharge else float(_dis_caps[t])*dt
         bounds.append((0, _di_cap))                                  # di
     for t in range(T): bounds.append((0, grid_kw_export*dt))   # ex (limit dodávky do siete)
+    _im_open = []          # ub_im BEZ block_neg (pre feasibility-fallback nižšie)
+    _blocked_any = False   # bol aspoň jeden slot zúžený kvôli block_neg_import?
     for t in range(T):
         _load_t = float(load[t]) if _has_load else 0.0
         # SIEŤ VŽDY KRYJE SPOTREBU: per-slot import strop = max(grid_limit, load[t]).
@@ -183,13 +185,17 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
         # špičku → preto 60-min prešiel, 15-min padal).
         _g_im_kwh = grid_kw_import * dt
         if allow_grid_charge:
-            ub_im = max(_g_im_kwh, _load_t)        # grid limit pre nabíjanie/obchod, load vždy pokrytý
+            ub_open = max(_g_im_kwh, _load_t)      # grid limit pre nabíjanie/obchod, load vždy pokrytý
         elif _has_load:
-            ub_im = _load_t                        # iba pokrytie load (žiadne nabíjanie zo siete)
+            ub_open = _load_t                      # iba pokrytie load (žiadne nabíjanie zo siete)
         else:
-            ub_im = 0.0
+            ub_open = 0.0
+        _im_open.append(ub_open)
+        ub_im = ub_open
         if block_neg_import and pr[t] < 0:         # nenakupovať pri zápornej cene (load výnimka)
             ub_im = _load_t                        # load treba pokryť aj pri zápornej cene
+            if ub_open > _load_t + 1e-9:
+                _blocked_any = True
         bounds.append((0, ub_im))                                # im
     for t in range(T): bounds.append((0, (max(pv[t], 0) if allow_curtail else 0.0)))  # cu (orezanie FTV)
     # Pri block_planned_discharge LP nemôže vybíjať → ak terminal_soc > soc_init, LP nemá ako
@@ -217,6 +223,19 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     b_ub = np.array(b_ub_vals) if b_ub_vals else None
     r = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=np.array(A_eq), b_eq=np.array(b_eq),
                 bounds=bounds, method="highs")
+    if not r.success and block_neg_import and _blocked_any:
+        # FEASIBILITY-FALLBACK (BUG 15-MIN-BLOCK-NEG, 2026-06-18, profil Simulacia_Coop):
+        # block_neg_import je EKONOMICKÁ preferencia („nenakupuj pri zápornej cene"), NIE
+        # fyzická nutnosť — import pri zápornej cene je vždy možný (a vlastne ziskový).
+        # Ak blokovanie spôsobilo infeasibilitu (typicky pri 15-min: viac záporných slotov +
+        # batéria sa nemá ako nabiť na terminál), povolíme neg-price import a skúsime znova.
+        for t in range(T):
+            bounds[IM + t] = (0, _im_open[t])
+        r = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=np.array(A_eq), b_eq=np.array(b_eq),
+                    bounds=bounds, method="highs")
+        if r.success:
+            print("[optimize_day] block_neg_import uvoľnené (inak infeasible) — "
+                  "import pri zápornej cene povolený pre tento deň")
     if not r.success:
         _diag = _diagnose_infeasible(c, A_ub, b_ub, A_eq, b_eq, bounds, T, pv, socmin, socmax, batt_kwh)
         raise RuntimeError("LP sa nevyriešil: " + r.message + _diag)

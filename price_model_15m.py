@@ -139,17 +139,63 @@ def _oos_eval(hist, weather, test_days=14):
           f"({(mae_f-mae_m)/mae_f*100:+.1f} %)")
 
 
-def main():
-    BASE = "."
-    hist = pd.read_csv(f"{BASE}/out/sk/historian_C_OKTE_ISOT_15m_final.csv")
-    weather = pd.read_csv(f"{BASE}/out/price_train_2026.csv", parse_dates=["time"])
+# 15-min ISOT historian — kandidáti v poradí preferencie (najčerstvejší/najúplnejší prvý).
+# C_WEB_OKTE_ISOT_15m = live, kompletný 96 slotov/deň (udržiava scheduler historian_extend).
+# _final = staršia kurátorská verzia (fallback). Vyberie sa prvý existujúci s najnovším dátumom.
+_HIST_CANDIDATES = [
+    "out/sk/historian_C_WEB_OKTE_ISOT_15m.csv",
+    "out/sk/historian_C_OKTE_ISOT_15m_final.csv",
+    "out/cz/historian_C_WEB_OKTE_ISOT_15m.csv",
+]
+
+
+def _load_historian(base: str = "."):
+    """Vráti (df, path) najčerstvejšieho dostupného 15-min ISOT historiánu, alebo (None, None)."""
+    import os
+    best = None
+    for rel in _HIST_CANDIDATES:
+        p = os.path.join(base, rel)
+        if not os.path.exists(p):
+            continue
+        try:
+            df = pd.read_csv(p)
+            if "value" not in df.columns:
+                # zjednoť názov hodnotového stĺpca
+                cand = [c for c in df.columns if c.lower() in ("value", "cena", "price", "isot_eur", "cena_eur")]
+                df = df.rename(columns={(cand[0] if cand else df.columns[1]): "value"})
+            tcol = "time_utc" if "time_utc" in df.columns else df.columns[0]
+            last = pd.to_datetime(df[tcol]).max()
+            if best is None or last > best[2]:
+                best = (df, p, last)
+        except Exception as _e:
+            print(f"  (historian {p}: {_e})")
+    if best is None:
+        return None, None
+    print(f"  historian: {best[1]} (do {best[2]})")
+    return best[0], best[1]
+
+
+def retrain(base: str = ".") -> str:
+    """Natrénuje + uloží 15-min model z najčerstvejšieho historiánu. Volá scheduler aj CLI.
+    Vráti status string. Ak historian/dáta chýbajú, vyhodí výnimku (volajúci ošetrí)."""
+    hist, hpath = _load_historian(base)
+    if hist is None:
+        raise FileNotFoundError("žiadny 15-min ISOT historian nenájdený (out/sk/historian_*ISOT*15m*.csv)")
+    weather = pd.read_csv(f"{base}/out/price_train_2026.csv", parse_dates=["time"])
     try:
         _oos_eval(hist, weather)
     except Exception as e:
         print(f"  (OOS eval preskočené: {e})")
     m = PriceModel15().fit(hist, weather)
-    m.save(f"{BASE}/out/price_model_15m.joblib")
-    print(f"15-min shape model uložený: out/price_model_15m.joblib (n_feat={len(FEAT)})")
+    outp = f"{base}/out/price_model_15m.joblib"
+    m.save(outp)
+    msg = f"15-min model uložený: {outp} (n_feat={len(FEAT)}, historian={hpath})"
+    print(msg)
+    return msg
+
+
+def main():
+    retrain(".")
 
 
 if __name__ == "__main__":
