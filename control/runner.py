@@ -30,13 +30,20 @@ def build_fleet_executors(soc_default: float = 50.0) -> Dict[int, Executor]:
     return execs
 
 
-def tick_fleet(executors: Dict[int, Executor], dt_h: float = 1.0 / 60.0) -> Dict[int, dict]:
+def tick_fleet(executors: Dict[int, Executor], dt_h: float = 1.0 / 60.0,
+               setpoints: Dict[int, float] | None = None) -> Dict[int, dict]:
     """Jeden control tick naprieč flotilou. Každá batéria izolovane — chyba jednej
-    (vrátane real bez wiringu → fail-safe) NEzhodí ostatné. Vráti {battery_id: result}."""
+    (vrátane real bez wiringu → fail-safe) NEzhodí ostatné. Vráti {battery_id: result}.
+
+    `setpoints` (voliteľné): {battery_id: kw} = aktuálny držaný setpoint per batéria.
+    Príkaz z DB ho prepíše; bez príkazu sa drží táto hodnota (perzistencia medzi
+    tickmi v control loope). Bez setpoints → 0 (spätne kompatibilné)."""
+    setpoints = setpoints or {}
     results: Dict[int, dict] = {}
     for bid, ex in executors.items():
         try:
-            results[bid] = tick(bid, ex, dt_h=dt_h)
+            results[bid] = tick(bid, ex, current_setpoint_kw=float(setpoints.get(bid, 0.0)),
+                                 dt_h=dt_h)
         except Exception as e:
             # tick() sám nehádže, ale poistka pre istotu — izolácia per batéria
             results[bid] = {"target_kw": 0.0, "soc_pct": None, "health": "degraded",
