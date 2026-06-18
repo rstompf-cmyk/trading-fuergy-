@@ -9,13 +9,15 @@ sa na Order v samostatnej golden-chránenej session). Tu len PREPOJENIE:
 """
 from .availability import battery_availability
 from .dispatch import build_block_reports, block_aggregate, dispatch_order
-from .economics_bridge import vdt_trades_to_orders, dispatch_vdt_trades
+from .economics_bridge import (trades_to_orders, vdt_trades_to_orders, dt_trades_to_orders,
+                               dispatch_vdt_trades, rt_to_control_ticks, dispatch_control_ticks)
 from .repository import (save_order, list_orders, save_allocations,
                          pending_allocations, mark_allocation_applied, save_availability)
 
 __all__ = [
     "battery_availability", "build_block_reports", "block_aggregate", "dispatch_order",
-    "vdt_trades_to_orders", "dispatch_vdt_trades",
+    "trades_to_orders", "vdt_trades_to_orders", "dt_trades_to_orders", "dispatch_vdt_trades",
+    "rt_to_control_ticks", "dispatch_control_ticks",
     "save_order", "list_orders", "save_allocations", "pending_allocations",
     "mark_allocation_applied", "save_availability",
 ]

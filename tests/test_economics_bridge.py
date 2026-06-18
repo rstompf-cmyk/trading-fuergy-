@@ -98,8 +98,37 @@ def test_dispatch_vdt_trades_end_to_end():
     assert len(fleet.pending_commands(b1)) == 1 and len(fleet.pending_commands(b2)) == 1
 
 
+def test_dt_source_and_generic():
+    from trading.economics_bridge import dt_trades_to_orders, trades_to_orders
+    trades = [{"slot_idx": 5, "action": "discharge",
+               "discharge_kwh": 200, "sell_price_eur_mwh": 95.0}]
+    dt_orders = dt_trades_to_orders(trades, block_id=2, account_id="acc", country="cz", day="2026-06-18")
+    assert len(dt_orders) == 1 and dt_orders[0].source == "dt" and dt_orders[0].side == "sell"
+    gen = trades_to_orders(trades, block_id=2, account_id="acc", country="cz", day="2026-06-18", source="dt")
+    assert gen[0].source == "dt"
+
+
+def test_rt_control_ticks_and_dispatch():
+    _setup_db()
+    import fleet
+    from trading.economics_bridge import rt_to_control_ticks, dispatch_control_ticks
+
+    b1 = fleet.register_battery("B1", "sk", mode="simulation", batt_kw=1000, batt_kwh=2000, enabled=True)
+    ticks = rt_to_control_ticks({b1: -250.0}, ttl_sec=90)
+    assert len(ticks) == 1 and ticks[0].source == "rt" and ticks[0].ttl_sec == 90
+    assert ticks[0].setpoint_kw == -250.0
+
+    n = dispatch_control_ticks(ticks)
+    assert n == 1
+    pend = fleet.pending_commands(b1)
+    assert len(pend) == 1 and pend[0]["payload"]["kw"] == -250.0 and pend[0]["payload"]["source"] == "rt"
+    assert pend[0]["payload"]["ttl_sec"] == 90
+
+
 if __name__ == "__main__":
     test_trade_mapping_and_skips()
     test_integration_with_real_optimizer()
     test_dispatch_vdt_trades_end_to_end()
+    test_dt_source_and_generic()
+    test_rt_control_ticks_and_dispatch()
     print("✓ economics_bridge testy OK")
