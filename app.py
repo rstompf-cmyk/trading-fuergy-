@@ -981,16 +981,16 @@ def version_endpoint():
 
 
 @app.get("/plan_batch", response_class=HTMLResponse)
-def plan_batch_form(from_date: str = None, to_date: str = None, step_min: int = 60,
-                    kind: str = "plan"):
+def plan_batch_form(from_date: str = None, to_date: str = None, step_min: int = 15,
+                    kind: str = "dentrh"):  # 15-MIN MERGE: default 15-min
     """Samostatná stránka pre hromadné generovanie plánov za rozsah dátumov.
     Voliteľné query params (`from_date`, `to_date`, `step_min`, `kind`) pre-vyplnia formulár —
     napríklad keď príde redirect zo `/simulacia` pri chýbajúcich plánoch."""
     today = dt.date.today()
     default_from = from_date or (today - dt.timedelta(days=7)).isoformat()
     default_to = to_date or (today + dt.timedelta(days=1)).isoformat()
-    sel_step = int(step_min) if int(step_min) in (15, 60) else 60
-    sel_kind = kind if kind in ("plan", "dentrh") else "plan"
+    sel_step = int(step_min) if int(step_min) in (15, 60) else 15
+    sel_kind = kind if kind in ("plan", "dentrh") else "dentrh"
     # výpis existujúcich plánov pre prehľad
     existing = ps.list_plans() if ps is not None else []
     by_step = {60: [], 15: []}
@@ -1023,8 +1023,8 @@ hodnôt vo formulári <a href="/">/Plán D-1</a> a <a href="/dentrh">/Denný trh
 <label><span>Do (vrátane)</span><input name="to_date" type="date" value="{default_to}" required></label>
 <label><span>Krok plánu</span>
   <select name="step_min">
-    <option value="60"{" selected" if sel_step == 60 else ""}>60 min (D-1 hodinový — kind=plan, predikované ceny)</option>
-    <option value="15"{" selected" if sel_step == 15 else ""}>15 min (Denný trh 15-min — kind=dentrh, reálne OTE day-ahead)</option>
+    <option value="15"{" selected" if sel_step == 15 else ""}>15 min — kind=dentrh (ODPORÚČANÉ; reálne OTE 15-min, inak upsample hodinovej predikcie)</option>
+    <option value="60"{" selected" if sel_step == 60 else ""}>60 min — kind=plan (legacy hodinový, predikované ceny)</option>
   </select></label>
 <label><span>Typ plánu (kind)</span>
   <select name="kind">
@@ -1084,7 +1084,7 @@ hodnôt vo formulári <a href="/">/Plán D-1</a> a <a href="/dentrh">/Denný trh
 
 @app.post("/plan_batch", response_class=HTMLResponse)
 def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
-                step_min: int = Form(default=60), kind: str = Form(default="plan"),
+                step_min: int = Form(default=15), kind: str = Form(default="dentrh"),  # 15-MIN MERGE: default 15-min
                 # voliteľné: ak pošle main /plan alebo /dentrh form spolu s rozsahom, prepíšeme ui_settings
                 lat: float = Form(default=None), lon: float = Form(default=None),
                 kwp: float = Form(default=None), tilt: float = Form(default=None),
@@ -1582,7 +1582,7 @@ def profiles_apply(name: str = Form(...), redirect_to: str = Form(default="")):
                 if cur_ls.get("start") != new_start:
                     cur_ls["start"] = new_start
                     ls_changes.append(f"start → <b>{new_start}</b>")
-                # 3. use_rt = default True (per memo #130 sa pre 15-min stejne force-uje False v dt_15min)
+                # 3. use_rt = default True (15-MIN MERGE: RT je dostupný aj v 15-min móde)
                 if cur_ls.get("use_rt") is not True:
                     cur_ls["use_rt"] = True
                     ls_changes.append("use_rt → <b>True</b>")
@@ -4476,8 +4476,9 @@ def _livesim_live_minutes():
 def _livesim_modes():
     cases = cc.list_cases()
     base = "realistic" if "realistic" in cases else (cases[0] if cases else "realistic")
-    return {"plan_d1": ("Plán D-1 (hodinový)", base, 60),
-            "dt_15min": ("Denný trh 15-min", base, 15)}
+    # 15-MIN MERGE: 15-min plán (RT+VDT) je primárny; hodinový plan_d1 ostáva legacy.
+    return {"dt_15min": ("Plán 15-min (RT+VDT)", base, 15),
+            "plan_d1": ("Plán D-1 (hodinový, legacy)", base, 60)}
 
 
 def _livesim_rt_params_from_profile(prof_plan_rt: dict, cfg):
@@ -5984,13 +5985,14 @@ def livesim_get(case: str = None, start: str = None, view: str = None, curtail: 
         cases = cc.list_cases()
         base = "realistic" if "realistic" in cases else (cases[0] if cases else "realistic")
         # dve pomenované možnosti – OBE používajú nastavenia z 'base' (tvoje naladené), líšia sa granularitou plánu
-        MODES = {"plan_d1": ("Plán D-1 (hodinový)", base, 60),
-                 "dt_15min": ("Denný trh 15-min", base, 15)}
-        saved = _ui_load("livesim", {"case": "plan_d1",
+        # 15-MIN MERGE: 15-min plán (RT+VDT) je primárny; hodinový plan_d1 ostáva legacy.
+        MODES = {"dt_15min": ("Plán 15-min (RT+VDT)", base, 15),
+                 "plan_d1": ("Plán D-1 (hodinový, legacy)", base, 60)}
+        saved = _ui_load("livesim", {"case": "dt_15min",
                                      "start": (dt.date.today() - dt.timedelta(days=7)).isoformat()})
         case = case or saved.get("case")
         if case not in MODES:
-            case = "plan_d1"
+            case = "dt_15min"
         start = start or saved.get("start")
         # --- orezanie FTV: uloží sa do PRÍPADU (pamätá sa + prejaví sa v simulácii) ---
         _bcfg = cc.load_case(base)
@@ -6007,23 +6009,21 @@ def livesim_get(case: str = None, start: str = None, view: str = None, curtail: 
                         pass
         cur_curtail = bool(_bcfg.allow_curtail)
         # --- use_rt toggle (per-livesim, NEZdieľané s case) ---
-        # POZOR: v móde dt_15min je RT odchýlka ZÁKLADNE VYPNUTÁ — 15-min DT ide na čistú cenovú arbitráž,
-        # odchýlka sa nezohľadňuje (ceny už poznáme dopredu, treba ich len optimálne využiť).
+        # 15-MIN MERGE (2026-06-18): RT odchýlka je dostupná AJ v 15-min móde.
+        # Predtým bola v dt_15min vynútene OFF (čistá DT arbitráž). User chce JEDEN
+        # 15-min plán S RT+VDT, takže RT toggle funguje rovnako v oboch módoch.
         _is_dentrh_mode = (case == "dt_15min")
-        if _is_dentrh_mode:
-            cur_use_rt = False
-        else:
-            cur_use_rt = bool(saved.get("use_rt", bool(getattr(_bcfg, "use_rt", True))))
-            if use_rt is not None:
-                new_rt = (str(use_rt) == "1")
-                if new_rt != cur_use_rt:
-                    cur_use_rt = new_rt
-                    # zmena režimu RT → starý log je neaktuálny, zmaž ho
-                    for _p in __import__("glob").glob(f"out/livesim_{case}*"):
-                        try:
-                            os.remove(_p)
-                        except OSError:
-                            pass
+        cur_use_rt = bool(saved.get("use_rt", bool(getattr(_bcfg, "use_rt", True))))
+        if use_rt is not None:
+            new_rt = (str(use_rt) == "1")
+            if new_rt != cur_use_rt:
+                cur_use_rt = new_rt
+                # zmena režimu RT → starý log je neaktuálny, zmaž ho
+                for _p in __import__("glob").glob(f"out/livesim_{case}*"):
+                    try:
+                        os.remove(_p)
+                    except OSError:
+                        pass
         head = ("""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Živá simulácia</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{font-family:-apple-system,Segoe UI,Arial;max-width:1680px;margin:24px auto;padding:0 16px;color:#222}
@@ -6038,18 +6038,11 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                         for k, (lbl, _bc, _st) in MODES.items())
         cuopts = (f'<option value="1"{" selected" if cur_curtail else ""}>povolené</option>'
                   f'<option value="0"{" selected" if not cur_curtail else ""}>vypnuté</option>')
-        # V dt_15min móde je RT vynútene OFF a dropdown je disabled (odchýlka sa nezohľadňuje, ide čistá DT arbitráž).
-        if _is_dentrh_mode:
-            rtopts = f'<option value="0" selected>nie (15-min DT iba arbitráž)</option>'
-            _rt_label = ("RT odchýlka<br><select name=\"use_rt\" disabled "
-                          "style='background:#f0f0f0;color:#888;cursor:not-allowed'>" + rtopts + "</select>"
-                          "<input type='hidden' name='use_rt' value='0'>")
-            _rt_title = "V móde 15-min DT je RT odchýlka VYPNUTÁ (čistá cenová arbitráž — ceny už poznáme z OTE)."
-        else:
-            rtopts = (f'<option value="1"{" selected" if cur_use_rt else ""}>áno (s odchýlkou)</option>'
-                      f'<option value="0"{" selected" if not cur_use_rt else ""}>nie (čistý plán)</option>')
-            _rt_label = f"RT odchýlka<br><select name=\"use_rt\">{rtopts}</select>"
-            _rt_title = "Áno = MW signal RT + FTV-balance vrstva. Nie = batéria ide IBA podľa plánu (žiadna odchýlková arbitráž)."
+        # 15-MIN MERGE: RT toggle je dostupný v oboch módoch (aj 15-min).
+        rtopts = (f'<option value="1"{" selected" if cur_use_rt else ""}>áno (s odchýlkou)</option>'
+                  f'<option value="0"{" selected" if not cur_use_rt else ""}>nie (čistý plán)</option>')
+        _rt_label = f"RT odchýlka<br><select name=\"use_rt\">{rtopts}</select>"
+        _rt_title = "Áno = MW signal RT + FTV-balance vrstva. Nie = batéria ide IBA podľa plánu (žiadna odchýlková arbitráž)."
         form = (f'<form method="get" action="/livesim" style="margin:8px 0 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:end">'
                 f'<label>Prípad<br><select name="case">{opts}</select></label>'
                 f'<label>Dátum štartu<br><input name="start" type="date" value="{start}"></label>'
