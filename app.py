@@ -1129,6 +1129,11 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
         dates = pd.date_range(from_date, to_date, freq="D")
     except Exception as e:
         return f"<p>Zlý rozsah dátumov: {e}</p>"
+    # 15-MIN MERGE: kind MUSÍ sedieť so step_min (15→dentrh, 60→plan). Formulár má dva
+    # nezávislé dropdowny (krok + kind) → dali sa rozladiť na neplatnú dvojicu (napr.
+    # step=15 + kind=plan → _gen_one_plan vyhodí "nesúlad"). Tu vynútime súlad server-side.
+    step_min = 15 if int(step_min) == 15 else 60
+    kind = "dentrh" if int(step_min) == 15 else "plan"
     # ak sú v requeste form polia, prepíšeme ui_settings ešte pred batch
     _overrides = {k: v for k, v in dict(
         lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,
