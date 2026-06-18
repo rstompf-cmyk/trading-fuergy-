@@ -659,7 +659,13 @@ def _resolve_terminal_soc(date_iso: str, fp: dict, price_arr_today) -> float:
     Zajtrajšie ceny: reálny DAM (market.fetch_dam_prices) ak je publikovaný,
     inak None → fixed. Generické pre ľubovoľný profil (všetko z fp)."""
     mode = str(fp.get("terminal_soc_mode") or "fixed")
-    base_term = float(fp.get("terminal_soc", DEF["terminal_soc"]))
+    # #30 (user 2026-06-18: „koniec je ľubovoľný, tam nesmie byť žiadne obmedzenie,
+    # tento parameter zrušme — proste ako to vyjde z ekonomiky"): koniec dňa sa
+    # NEVYNUCUJE na žiadnu fixnú hodnotu. Terminál = soc_min (fyzická podlaha,
+    # nezáväzná navyše) → SOC smie skončiť kdekoľvek ≥ soc_min podľa ekonomiky.
+    # Vyššie ho dvihne LEN ekonomika cez next_day_price (drž energiu ak sa zajtra
+    # oplatí), nikdy nie fixná konštanta terminal_soc (tá je teraz ignorovaná).
+    base_term = float(fp.get("soc_min", DEF.get("soc_min", 5.0)) or 5.0)
     if mode != "next_day_price":
         return base_term
     try:
