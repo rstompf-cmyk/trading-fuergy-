@@ -540,14 +540,21 @@ def get_live_recommendation(*,
         if "infeasible" in err1.lower() or "HiGHS Status 8" in err1:
             try:
                 import vdt_optimizer as _opt
-                # Bug #602: funkcia bola premenovana na optimize_vdt_day.
-                # compute_optimal_trades neexistuje -> AttributeError -> retry path
-                # vzdy zlyhal a infeasible LP s DAM commits sa nikdy nezachranil.
+                # #28 (2026-06-18, user: "VDT a DT musia brať to saldo SPOLU; VDT predaj
+                # nesmie ohroziť DAM záväzok"). PREDTÝM sa pri infeasible zahadzovali
+                # dam_commitments (dam=None) → LP predal voľne SOC potrebnú pre DAM záväzok
+                # → DAM under-delivery + drahé spätné nákupy (sell 374 / buy-back 463).
+                # TERAZ: DAM je posvätný (už zazmluvnený) → ZACHOVÁME dam_commitments a
+                # namiesto toho POTLAČÍME dobrovoľný VDT extra (obrovský min_spread →
+                # objektív nedovolí žiadny voľný obchod, prejde len vynútený DAM lower-bound)
+                # → full_plan = DAM baseline, ŽIADNY over-sell. Ak je LP aj tak infeasible
+                # (DAM sa z aktuálnej SOC fyzicky nedá dodať), VDT extra = 0 a DAM odchýlka
+                # ide cez ZCO (rieši livesim/RT), NIE cez VDT (netto DT+VDT na SOC).
                 _opt2 = _opt.optimize_vdt_day(
                     snapshot=snapshot,
                     batt_kw=batt_kw, batt_kwh=batt_kwh,
                     eff_c=eff_c, eff_d=eff_d,
-                    grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
+                    grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=1e6,
                     soc_min_pct=soc_min_pct, soc_max_pct=soc_max_pct,
                     soc_start_pct=soc_pct,
                     soc_end_min_pct=soc_end_min_pct,
@@ -555,16 +562,16 @@ def get_live_recommendation(*,
                     slot_minutes=15,
                     use_orderbook=use_orderbook,
                     future_only=True,
-                    dam_commitments=None,   # ⚠ vyhadzujeme DAM commitments
+                    dam_commitments=dam_commits,   # #28: ZACHOVANÉ (DAM posvätný)
                 )
                 if _opt2.get("ok"):
                     result = _opt2
-                    dam_status = (dam_status + " · ⚠ relaxed (LP infeasible s commits)"
-                                   if dam_status else "⚠ relaxed (LP infeasible)")
-                    print(f"[vdt_live_advisor] LP infeasible s DAM — retry bez "
-                          f"commits: OK · {len(_opt2.get('trades',[]))} trades")
+                    dam_status = ((dam_status + " · ⚠ VDT extra potlačený (infeasible, DAM zachovaný)")
+                                   if dam_status else "⚠ VDT extra potlačený (DAM zachovaný)")
+                    print(f"[vdt_live_advisor] #28: LP infeasible s extra — DAM zachovaný, "
+                          f"VDT extra potlačený · {len(_opt2.get('trades',[]))} trades")
             except Exception as _e_r:
-                print(f"[vdt_live_advisor] retry zlyhal: {_e_r}")
+                print(f"[vdt_live_advisor] #28 retry zlyhal: {_e_r}")
 
     if not result.get("ok"):
         return {"ok": False, "error": result.get("error", "?"),
