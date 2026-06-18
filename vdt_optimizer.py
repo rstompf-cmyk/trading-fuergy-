@@ -327,16 +327,14 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
     except Exception as e:
         return {"ok": False, "error": f"LP solver zlyhal: {e}", "trades": []}
 
-    # VDT-SOC-NEUTRAL fallback: ak neutralita spôsobí infeasible (napr. soc_end_min
-    # nad rámec start+DAM_net), skús ešte raz bez neutrality (degradované, logované).
-    if (not res.success) and soc_neutral and len(A_ub) >= 2:
-        try:
-            _Aub2 = np.array(A_ub[:-2]); _bub2 = np.array(b_ub[:-2])
-            res = linprog(c_obj, A_ub=_Aub2, b_ub=_bub2, bounds=bounds, method="highs")
-            if res.success:
-                print("[VDT-SOC-NEUTRAL] infeasible s neutralitou → bez nej (degradované)")
-        except Exception:
-            pass
+    # VDT-SOC-NEUTRAL: ŽIADNY fallback bez neutrality (2026-06-18, user: "pár musí
+    # sedieť aj z pohľadu energie; saldo musí byť 0 na konci, nech sa nestane že kúpi
+    # 1000 a predá 100"). Neutralita je VŽDY splniteľná (triviálne riešenie = iba DAM
+    # baseline: c=dam_chg, d=dam_dis → net = dam_net), takže infeasible NIKDY
+    # nespôsobí samotná neutralita, ale iné limity (SOC/grid/výkon). Pôvodný fallback
+    # neutralitu pri infeasible ZAHODIL → LP potom dovolil NEVYVÁŽENÝ dump (kúp 1000 /
+    # predaj 100, visiaca pozícia) — to je presne zakázané. Preto fallback rušíme;
+    # pri infeasible vrátime chybu a volajúci degraduje na "len DAM, žiadne VDT extra".
 
     if not res.success:
         return {"ok": False, "error": f"LP nemá riešenie: {res.message}",
@@ -345,6 +343,21 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
     x = res.x
     charges = x[0::2]
     discharges = x[1::2]
+
+    # VDT-SOC-NEUTRAL hard guard (2026-06-18): defenzívne over, že čisté VDT saldo je
+    # ~0 (čistá zmena SOC = DAM baseline). Ak by solver tol alebo akákoľvek cesta
+    # nechala VDT-extra nevyvážené (kúp 1000 / predaj 100), extra ZAHODÍME a necháme
+    # len DAM baseline (c=dam_chg, d=dam_dis) → vyvážené. Radšej nič ako visiaca
+    # pozícia, ktorú nemáme ako uzavrieť. (Mal by byť no-op, ale je to poistka.)
+    if soc_neutral:
+        _net_solved = float(np.sum(eff_c * charges - discharges / eff_d))
+        _dam_net_g = float(np.sum(eff_c * dam_chg - dam_dis / eff_d))
+        _tol_g = max(1.0, float(soc_neutral_tol_pct) / 100.0 * batt_kwh) * 1.5
+        if abs(_net_solved - _dam_net_g) > _tol_g:
+            print(f"[VDT-SOC-NEUTRAL] saldo {_net_solved:.1f} vs DAM {_dam_net_g:.1f} kWh "
+                  f"mimo tol {_tol_g:.1f} → VDT extra zahodené (len DAM, vyvážené)")
+            charges = np.asarray(dam_chg, dtype=float).copy()
+            discharges = np.asarray(dam_dis, dtype=float).copy()
 
     # Build trades + SOC trajectory
     trades = []
