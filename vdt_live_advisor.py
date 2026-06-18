@@ -1243,6 +1243,18 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
     )
 
 
+def _vdt_price_is_real(px) -> bool:
+    """VDT cena je PLATNÁ len ak je reálna: None/0.0/NaN/inf = neplatná (placeholder,
+    chýbajúci orderbook alebo DAM commitment bez VDT ceny). Záporná cena je PLATNÁ
+    (bežná prax). Pravidlo project-vdt-trading-rules #1 (VDT-ZERO-PRICE)."""
+    import math
+    try:
+        f = float(px)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f) and f != 0.0
+
+
 def append_paper_trade(result: Dict[str, Any]) -> None:
     """Append jednu odporúčanú akciu do paper trading log CSV.
 
@@ -1284,6 +1296,15 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
     # IDLE akcie sa nepasujú cez audit (žiadna rezervácia kapacity).
     _action_upper = action.upper()
     if _action_upper in ("CHARGE", "DISCHARGE", "BUY", "SELL", "BOTH"):
+        # VDT-ZERO-PRICE (writer enforcement, 2026-06-18): VDT obchod sa zapíše LEN s
+        # reálnou cenou. None/0.0/NaN/inf = placeholder (chýbajúci orderbook alebo DAM
+        # commitment BEZ VDT ceny) → NEZAPÍSAŤ. Inak sa napr. DAM nabíjanie zaloguje ako
+        # VDT buy @ 0 → engine ho aplikuje navyše k DAM plánu = DOUBLE-COUNT SOC
+        # (porušenie SOC, VW_simulacia_3 13:30). Záporná cena je PLATNÁ. (Pravidlo #1.)
+        if not _vdt_price_is_real(cur.get("price_eur_mwh")):
+            print(f"[append_paper_trade VDT-ZERO-PRICE] SKIP {profile} slot={slot} "
+                  f"{_action_upper}: neplatná cena ({cur.get('price_eur_mwh')}) — VDT len s reálnou cenou")
+            return
         try:
             from core.capacity_ledger import audit_vdt_order, slot_idx_from_time
             import profiles as _ps_audit
