@@ -285,10 +285,17 @@ def get_period_dist_fee(profile_name: str, date_from: str, date_to: str,
         pid = _profile_id(session, profile_name)
         if pid is None:
             return 0.0
+        # Bug DIST-FEE-DOUBLECOUNT (2026-06-19, profil Simulacia_Coop: záporná dist úspora −337):
+        # pri cons_only=False (default) je distribučný poplatok za nabíjanie zo siete UŽ v DT
+        # (e_batt = (cena+grid_fee)×im_batt). Ak dist zložka brala signed batt_kw_real, pri
+        # NABÍJANÍ (batt<0) zväčšila „skutočný import" → odpočítala ten istý poplatok 2× →
+        # záporná úspora (double-count). Dist = LEN self-consumption (vybíjanie do load) →
+        # MAX(batt_kw_real, 0.0) = iba discharge. Žiadny profil nepoužíva cons_only=True (overené);
+        # ak by sa zapol, charging-fee by bol mimo DT a tu by musel byť signed (NETTO).
         row = session.execute(text(
             "SELECT COALESCE(SUM("
             "  MAX(load_kw_real - ftv_kw_real, 0.0)"
-            "  - MAX(load_kw_real - ftv_kw_real - batt_kw_real, 0.0)"
+            "  - MAX(load_kw_real - ftv_kw_real - MAX(batt_kw_real, 0.0), 0.0)"
             "), 0.0) "
             "FROM effect_minute "
             "WHERE profile_id = :pid "

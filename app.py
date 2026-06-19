@@ -4719,9 +4719,10 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
         df["batt_kwh_min"]     = df["batt_kw_actual"] / 60.0   # energia za minútu
         # DIST-FEE (2026-06-15): distribučná úspora zvlášť = grid_fee × (baseline_import − skutočný_import)
         _gf_x = float(_pui_plan.get("grid_fee", 0) or 0)
-        # NETTO import (2026-06-16): poplatok na skutočný odber zo siete = max(load−FTV−batt,0);
-        # nabíjanie z FTV netto import nezvýši (oslobodené), nabíjanie zo siete áno (TBB).
-        _act_imp_kwh_x = np.maximum(_load_min - _ftv_min - df["batt_kw_actual"].values, 0.0) / 60.0
+        # Bug DIST-FEE-DOUBLECOUNT (2026-06-19): dist = LEN self-consumption (vybíjanie do load),
+        # NIE signed batt. Pri cons_only=False je charging grid-fee už v DT → signed by ho rátal
+        # 2× (záporná úspora). MAX(batt,0) = iba discharge → úspora ≥0, bez double-countu.
+        _act_imp_kwh_x = np.maximum(_load_min - _ftv_min - np.maximum(df["batt_kw_actual"].values, 0.0), 0.0) / 60.0
         df["dist_actual_import_kwh"] = _act_imp_kwh_x
         df["dist_fee_min"] = _gf_x * (_im_kwh - _act_imp_kwh_x) / 1000.0   # € za minútu
         # ZCO (zúčtovacia cena odchýlky) — pre 15-min agregácie potrebujeme priemer
@@ -5431,8 +5432,9 @@ pip install reportlab matplotlib</code>
         _ftv_p = pd.to_numeric(df.get("ftv_min_real_kw", df.get("ftv_kw")), errors="coerce").fillna(0).values
         _load_p = pd.to_numeric(df.get("load_min_real_kw", pd.Series([0.0]*len(df))), errors="coerce").fillna(0).values
         _battp = pd.to_numeric(df["batt_kw_actual"], errors="coerce").fillna(0).values
-        # NETTO import (2026-06-16): poplatok na skutočný odber zo siete = max(load−FTV−batt,0)
-        df["dist_actual_import_kwh"] = np.maximum(_load_p - _ftv_p - _battp, 0.0) / 60.0
+        # Bug DIST-FEE-DOUBLECOUNT (2026-06-19): dist = LEN self-consumption (vybíjanie do load,
+        # MAX(batt,0)). Charging grid-fee je už v DT (cons_only=False) → signed by double-countoval.
+        df["dist_actual_import_kwh"] = np.maximum(_load_p - _ftv_p - np.maximum(_battp, 0.0), 0.0) / 60.0
         df["dist_fee_min"] = _gf_pdf * (np.maximum(_load_p - _ftv_p, 0.0) / 60.0
                                         - df["dist_actual_import_kwh"].values) / 1000.0
 
