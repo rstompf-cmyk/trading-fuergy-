@@ -1,135 +1,128 @@
 # -*- coding: utf-8 -*-
 """
-tools/diag_trades.py — DÔVOD NÁKUPOV: rozloží každý nabíjací (nákup) slot na zdroj
-(DAM plán / RT odchýlka) + cenu + RT dôvod, a skontroluje VDT párovanie (saldo + spread).
+tools/diag_trades.py — DÔVOD NÁKUPOV (analýza nominácie): rozloží PLÁN D-1 (DAM) +
+uzavreté VDT obchody pre daný profil/deň. Funguje aj pre DNEŠOK/plán (na rozdiel od
+livesim CSV, ktorý má len dokončené dni). Zodpovedá hornému grafu „Nominácia".
 
-Použitie (v kontajneri na dev/Windows):
+Použitie (v kontajneri):
     docker exec trading-fuergy-dev python tools/diag_trades.py \
         --profile VW_simulacia_3 --date 2026-06-19 --from-hour 18
 
-Konvencia batérie: + = vybíjanie (predaj), − = nabíjanie (nákup).
+Konvencia batérie: + = vybíjanie (PREDAJ/export), − = nabíjanie (NÁKUP/import).
 """
 from __future__ import annotations
-import argparse, os, sys, glob
+import argparse, os, sys, glob, json
 import pandas as pd, numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _load_livesim(case, port, profile, day):
-    try:
-        import livesim as lsim
-        if profile:
-            os.environ["FTV_PROFILE"] = profile
-        df = lsim.load_series(case, port=str(port), day=day, max_points=10**9)
-        if df is not None and not df.empty:
-            return df
-    except Exception as e:
-        print(f"(load_series: {e})")
-    # fallback: glob CSV priamo
-    for pat in [f"out/**/livesim_{case}*{port}*.csv", f"out/**/livesim_{case}*.csv"]:
-        for f in sorted(glob.glob(pat, recursive=True)):
-            try:
-                t = pd.read_csv(f, parse_dates=["time"])
-                t = t[t["time"].dt.date.astype(str) == day]
-                if not t.empty:
-                    print(f"(fallback CSV: {f})")
-                    return t
-            except Exception:
-                continue
+def _find_plan(profile, date):
+    pats = [f"out/**/plans/{profile}/{date}_*15min*.json",
+            f"out/**/plans/{profile}/{date}_*.json",
+            f"out/plans/{profile}/{date}_*.json"]
+    for p in pats:
+        hits = sorted(glob.glob(p, recursive=True))
+        if hits:
+            return hits[0]
     return None
+
+
+def _find_vdt(profile):
+    try:
+        import vdt_live_advisor as _vla
+        p = _vla.paper_trades_csv_path(profile)
+        if p and os.path.exists(p):
+            return p
+    except Exception:
+        pass
+    hits = sorted(glob.glob("out/**/vdt_paper_trades*.csv", recursive=True))
+    return hits[0] if hits else None
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", required=True)
     ap.add_argument("--date", required=True)
-    ap.add_argument("--case", default="dt_15min")
-    ap.add_argument("--port", default=os.environ.get("PORT", os.environ.get("APP_PORT", "8001")))
     ap.add_argument("--from-hour", type=int, default=18, dest="fromh")
     a = ap.parse_args()
 
-    df = _load_livesim(a.case, a.port, a.profile, a.date)
-    if df is None or df.empty:
-        print(f"Žiadne livesim dáta pre {a.profile} / {a.date} (case={a.case}, port={a.port}).")
-        sys.exit(2)
+    # ── PLÁN D-1 (DAM nominácia) ───────────────────────────────────────────
+    pf = _find_plan(a.profile, a.date)
+    if not pf:
+        print(f"Plán pre {a.profile} / {a.date} nenájdený (out/<trh>/plans/{a.profile}/{a.date}_*.json).")
+    else:
+        d = json.load(open(pf)); s = d.get("schedule", {})
+        bk = np.asarray(s.get("batt_kw", []), float)
+        pr = np.asarray(s.get("price_eur", []), float)
+        soc = np.asarray(s.get("soc_pct", []), float)
+        n = len(bk); step = 15 if n == 96 else 60
+        print(f"\n=== PLÁN D-1 (DAM) {a.profile} / {a.date}  [{pf.split('/')[-1]}, {n} slotov] ===")
+        print(f"{'slot':6} {'batt_kW':>9} {'cena€/MWh':>10} {'SOC%':>6}  smer")
+        buy_kwh = sell_kwh = 0.0; buy_val = sell_val = 0.0
+        for i in range(n):
+            h = (i * step) // 60; mn = (i * step) % 60
+            kw = bk[i] if i < len(bk) else 0.0
+            p = pr[i] if i < len(pr) else 0.0
+            sc = soc[i] if i < len(soc) else 0.0
+            kwh = abs(kw) * (step / 60.0)
+            if kw < -0.5:    # nabíjanie = nákup
+                buy_kwh += kwh; buy_val += kwh * p
+            elif kw > 0.5:
+                sell_kwh += kwh; sell_val += kwh * p
+            if h >= a.fromh and abs(kw) > 0.5:
+                tag = ">> NÁKUP (import)" if kw < 0 else "predaj (export)"
+                flag = "  <<< DRAHÝ NÁKUP" if (kw < 0 and p > 150) else ""
+                print(f"{h:02d}:{mn:02d}  {kw:9.0f} {p:10.1f} {sc:6.1f}  {tag}{flag}")
+        avg_buy = buy_val / buy_kwh if buy_kwh else 0.0
+        avg_sell = sell_val / sell_kwh if sell_kwh else 0.0
+        print(f"  DAM SPOLU: nákup {buy_kwh:.0f} kWh @ Ø {avg_buy:.0f} €/MWh · "
+              f"predaj {sell_kwh:.0f} kWh @ Ø {avg_sell:.0f} €/MWh · netto {sell_kwh-buy_kwh:+.0f} kWh")
+        if buy_kwh and sell_kwh:
+            print(f"  → krížová arbitráž: {'OK (predaj drahší než nákup)' if avg_sell > avg_buy else '⚠ NÁKUP drahší než predaj = STRATOVÉ!'}"
+                  f"  (spread Ø {avg_sell-avg_buy:+.0f} €/MWh)")
 
-    df = df.copy()
-    df["t"] = pd.to_datetime(df["time"])
-    df["slot"] = df["t"].dt.floor("15min")
-    g = lambda c: pd.to_numeric(df[c], errors="coerce") if c in df.columns else pd.Series(np.nan, index=df.index)
-    agg = df.groupby("slot").agg(
-        plan_kw=("plan_batt_kw", "mean") if "plan_batt_kw" in df else ("t", "size"),
-        real_kw=("batt_kw_realistic", "mean") if "batt_kw_realistic" in df else ("t", "size"),
-        dt_eur=("dt_eur", "mean") if "dt_eur" in df else ("t", "size"),
-        vdt_eur=("vdt_eur", "mean") if "vdt_eur" in df else ("t", "size"),
-        soc=("soc_pct", "last") if "soc_pct" in df else ("t", "size"),
-    ).reset_index()
-    # rt_reason: posledný neprázdny v slote
-    rr = {}
-    if "rt_reason" in df.columns:
-        for s, sub in df.groupby("slot"):
-            vals = [x for x in sub["rt_reason"].astype(str) if x and x != "nan"]
-            rr[s] = vals[-1] if vals else ""
-
-    print(f"\n=== NÁKUPY (nabíjanie) {a.profile} / {a.date}, od {a.fromh}:00 ===")
-    print(f"{'slot':6} {'plán_kW':>9} {'real_kW':>9} {'RT_kW':>8} {'DT€/MWh':>9} {'VDT€':>7} {'SOC%':>6}  zdroj / RT dôvod")
-    tot_buy = 0.0
-    for _, r in agg.iterrows():
-        ts = pd.Timestamp(r["slot"])
-        if ts.hour < a.fromh:
-            continue
-        plan = float(r["plan_kw"]); real = float(r["real_kw"]); rt = real - plan
-        is_charge = real < -0.5    # nabíjanie = nákup
-        src = ""
-        if is_charge:
-            if plan < -0.5 and abs(rt) < 0.5:
-                src = "DAM plán (LP arbitráž)"
-            elif rt < -0.5 and plan >= -0.5:
-                src = "RT odchýlka"
-            elif rt < -0.5 and plan < -0.5:
-                src = "DAM plán + RT"
+    # ── VDT uzavreté obchody (párovanie/saldo) ─────────────────────────────
+    vp = _find_vdt(a.profile)
+    print(f"\n=== VDT uzavreté obchody {a.profile} / {a.date} ===")
+    if not vp:
+        print("  vdt_paper_trades.csv nenájdený.")
+    else:
+        try:
+            try:
+                vt = pd.read_csv(vp, on_bad_lines="skip")
+            except TypeError:
+                vt = pd.read_csv(vp, error_bad_lines=False)   # staršia pandas
+            vt = vt[vt["profile"].astype(str) == a.profile]
+            vt["d"] = pd.to_datetime(vt["ts"], errors="coerce").dt.date.astype(str)
+            vt = vt[(vt["d"] == a.date) & (vt["slot"].astype(str).str.contains(":"))]
+            if vt.empty:
+                print("  (žiadne VDT obchody pre tento deň — večerné nákupy sú DAM plán alebo RT)")
             else:
-                src = "?"
-        tag = ">> NÁKUP" if is_charge else ("predaj" if real > 0.5 else "idle")
-        reason = rr.get(r["slot"], "")
-        flag = "  <<< DRAHÝ NÁKUP" if (is_charge and float(r["dt_eur"]) > 150) else ""
-        print(f"{ts.strftime('%H:%M'):6} {plan:9.0f} {real:9.0f} {rt:8.0f} "
-              f"{float(r['dt_eur']):9.1f} {float(r['vdt_eur']):7.0f} {float(r['soc']):6.1f}  "
-              f"{tag:8} {src} {reason}{flag}")
-        if is_charge:
-            tot_buy += abs(real) * 0.25
+                vt["pe"] = pd.to_numeric(vt["price_predicted_eur"], errors="coerce")
+                vt["kwh_a"] = pd.to_numeric(vt["kwh"], errors="coerce").abs()
+                chg = vt[vt["action"].astype(str).str.contains("charge|buy", case=False)]
+                dis = vt[vt["action"].astype(str).str.contains("discharge|sell", case=False)]
+                ck, dk = chg["kwh_a"].sum(), dis["kwh_a"].sum()
+                cb, sp = chg["pe"].mean(), dis["pe"].mean()
+                print(f"  VDT nákup {ck:.0f} kWh @ Ø {cb:.0f} €/MWh · predaj {dk:.0f} kWh @ Ø {sp:.0f} €/MWh")
+                saldo = ck - dk
+                print(f"  SALDO (nákup−predaj) = {saldo:+.0f} kWh  "
+                      f"{'→ OK ~0 (spárované, soc-neutral)' if abs(saldo) < 0.05*max(ck,1) else '→ ⚠ NEVYROVNANÉ = nepárový nákup!'}")
+                if pd.notna(cb) and pd.notna(sp) and cb > sp:
+                    print(f"  ⚠ priemerný VDT NÁKUP ({cb:.0f}) > PREDAJ ({sp:.0f}) → stratový smer!")
+                # večerné VDT nákupy
+                ev = chg[chg["slot"].astype(str).str[:2].astype(int) >= a.fromh]
+                if len(ev):
+                    print(f"  Večerné VDT nákupy (od {a.fromh}:00):")
+                    for _, r in ev.iterrows():
+                        print(f"    {r['slot']}  {r['kwh_a']:.0f} kWh @ {r['pe']:.0f} €/MWh  "
+                              f"(profit_rest_of_day {pd.to_numeric(r.get('profit_eur_rest_of_day'), errors='coerce'):+.1f} €)")
+        except Exception as e:
+            print(f"  (VDT načítanie zlyhalo: {e})")
 
-    # ── VDT párovanie + saldo z paper trades ───────────────────────────────
-    print(f"\n=== VDT obchody (párovanie/saldo) {a.profile} / {a.date} ===")
-    try:
-        import vdt_live_advisor as _vla
-        vp = _vla.paper_trades_csv_path(a.profile)
-        vt = pd.read_csv(vp)
-        vt = vt[(vt["profile"].astype(str) == a.profile)]
-        vt = vt[vt["slot"].astype(str).str.len() > 0]
-        vt["d"] = pd.to_datetime(vt["ts"], errors="coerce").dt.date.astype(str)
-        vt = vt[vt["d"] == a.date]
-        if vt.empty:
-            print("  (žiadne VDT paper trades pre tento deň — nákupy sú DAM/RT, nie VDT)")
-        else:
-            chg = vt[vt["action"].astype(str).str.contains("charge|buy", case=False)]
-            dis = vt[vt["action"].astype(str).str.contains("discharge|sell", case=False)]
-            ch_kwh = pd.to_numeric(chg.get("kwh"), errors="coerce").abs().sum()
-            di_kwh = pd.to_numeric(dis.get("kwh"), errors="coerce").abs().sum()
-            buy_p = pd.to_numeric(chg.get("price_predicted_eur"), errors="coerce")
-            sell_p = pd.to_numeric(dis.get("price_predicted_eur"), errors="coerce")
-            print(f"  VDT nákup {ch_kwh:.0f} kWh @ priemer {buy_p.mean():.0f} €/MWh · "
-                  f"predaj {di_kwh:.0f} kWh @ {sell_p.mean():.0f} €/MWh")
-            print(f"  SALDO (nákup−predaj) = {ch_kwh - di_kwh:+.0f} kWh  "
-                  f"({'OK ~0 (spárované)' if abs(ch_kwh-di_kwh) < 0.05*max(ch_kwh,1) else 'NEVYROVNANÉ! nepárový nákup'})")
-            if len(buy_p) and len(sell_p) and buy_p.mean() > sell_p.mean():
-                print(f"  ⚠ priemerný NÁKUP ({buy_p.mean():.0f}) > priemerný PREDAJ ({sell_p.mean():.0f}) → stratový smer!")
-    except Exception as e:
-        print(f"  (VDT trades sa nepodarilo načítať: {e})")
-
-    print(f"\nSpolu nakúpené (nabíjanie) od {a.fromh}:00: {tot_buy:.0f} kWh")
-    print("Legenda: 'DAM plán' = krížová arbitráž v LP (párované, min_spread). "
-          "'RT odchýlka' = reakcia na sys_MW/SOC-lift (NIE párované — pozri rt_reason).")
+    print("\nLegenda: DAM nákup = nabíjanie v pláne (krížová arbitráž — má sa predať drahšie). "
+          "VDT saldo ~0 = nákupy spárované s predajmi (min_spread). RT/terminál nákupy tu nie sú "
+          "(tie sú v živej realite, nie v D-1 pláne) — tie kupujú aj draho bez páru.")
 
 
 if __name__ == "__main__":
