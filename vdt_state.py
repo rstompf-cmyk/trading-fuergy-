@@ -365,6 +365,36 @@ def _load_vdt_realized(profile: str, today_iso: str) -> Dict[str, Any]:
     # ("2026-06-10T00:00:00") — porovnanie ts[:10] != today_iso potom NIKDY nesedí
     # a funkcia ticho vráti nuly (= VDT trades sa neaplikujú). Normalizuj na YYYY-MM-DD.
     today_iso = str(today_iso)[:10]
+    # CLOSED-ONLY (2026-06-19, user #29): do REALITY (batéria) + tabuľky vstúpia LEN obchody,
+    # ktoré by sa reálne uzavreli na OKTE VDT — slot musí mať reálnu OKTE VDT cenu A smer
+    # realizovateľný (predaj ≤ trh×1.02, nákup ≥ trh×0.98). Bez OKTE dát (CZ/chýbajú) NEfiltruj.
+    _okte_cl = {}
+    try:
+        import seps_sk as _ss_cl
+        _okte_cl = (_ss_cl.load_okte_vdt_for_day(today_iso)
+                    or _ss_cl.load_okte_vdt_preliminary_for_day(today_iso) or {})
+    except Exception:
+        _okte_cl = {}
+    _cl_on = bool(_okte_cl)
+
+    def _clears(_action, _price, _slot_hhmm):
+        if not _cl_on:
+            return True
+        _mp = _okte_cl.get(_slot_hhmm)
+        if _mp is None:
+            return False
+        try:
+            _mp = float(_mp); _pp = float(_price)
+        except Exception:
+            return True
+        if _pp <= 0:
+            return False
+        if _action == "discharge":
+            return _pp <= _mp * 1.02
+        if _action == "charge":
+            return _pp >= _mp * 0.98
+        return True
+
     try:
         import vdt_live_advisor as _vla
         # Bug #620: musíme explicitne odovzdať profile, inak sandbox-aware path
@@ -393,6 +423,9 @@ def _load_vdt_realized(profile: str, today_iso: str) -> Dict[str, Any]:
                 except (ValueError, TypeError):
                     continue
                 # Spočítaj slot index z "HH:MM-HH:MM" formátu
+                # CLOSED-ONLY: preskoč obchod, ktorý by sa reálne neuzavrel na OKTE VDT
+                if not _clears(action, row.get("price_predicted_eur", 0), slot[:5]):
+                    continue
                 try:
                     hh, mm = slot.split("-")[0].split(":")
                     idx = (int(hh) * 60 + int(mm)) // 15
