@@ -1641,7 +1641,14 @@ def profiles_apply(name: str = Form(...), redirect_to: str = Form(default="")):
     except Exception as _ae:
         print(f"[/profiles/apply] {name}: auto-enable bg zlyhal: {_ae}")
 
-    _clear_livesim_logs()           # iný profil = iné nastavenia + iná šablóna → fresh log
+    # Bug CACHE-WIPE-ON-SWITCH-2 (2026-06-19, user: "prepnutie profilu STÁLE prepočítava"):
+    # NEMAŽEME livesim logy pri prepnutí profilu! _clear_livesim_logs() maže VŠETKY
+    # livesim_*.csv + .meta.json (všetky profily) → každé prepnutie zmazalo celý stav →
+    # každý profil sa prepočítal od štartu (ruší per-profil cache + warming + cold-start rcache).
+    # Prepnutie profilu NIE JE zmena nastavení — súbory sú PER-PROFIL (LIVESIM-PER-PROFILE) a
+    # livesim.advance() má settings_sig kontrolu: ak sa šablóna/parametre profilu reálne zmenili,
+    # prepočíta sa SÁM (per-profil). Mazanie logov ostáva LEN tam, kde sa menia nastavenia
+    # (napr. /plan POST). Tým je prepnutie na už zohriaty profil cache-hit (okamžité).
     upd = ", ".join(summary.get("updated", []))
     livesim_case_changed = livesim_case_changed + auto_started_msg
     # Bug Q1: redirect_to podporuje návrat na pôvodnú stránku (napr. /realio?tab=riadenie)
@@ -1654,7 +1661,7 @@ def profiles_apply(name: str = Form(...), redirect_to: str = Form(default="")):
     return (f"<!doctype html><html><head><meta charset='utf-8'>"
              f"<meta http-equiv='refresh' content='1;url={_target_esc}'></head><body>"
              f"<p>✓ Profile <b>{name}</b> aplikovaný. Aktualizované: <code>{upd}</code>{livesim_case_changed}. "
-             f"Livesim log vyresetovaný. Redirect na <code>{_target_esc}</code>…</p></body></html>")
+             f"Redirect na <code>{_target_esc}</code>…</p></body></html>")
 
 
 @app.post("/market/set", response_class=HTMLResponse)
