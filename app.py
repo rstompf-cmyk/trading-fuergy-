@@ -7934,6 +7934,40 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 _csv_p = _pt_path(_cur_prof_real)
             except Exception:
                 _csv_p = _os_v2.path.join(_mk_v.data_dir(), "vdt_paper_trades.csv")
+            # CLOSED-ONLY VDT (2026-06-19, user #29: "ak nie sú zobchodované nech ich nevidím"):
+            # zobraz LEN obchody, ktoré by sa REÁLNE uzavreli na OKTE VDT — v slote musí
+            # existovať reálna OKTE VDT cena A smer musí byť realizovateľný (predaj ≤ trhová
+            # cena, nákup ≥ trhová cena). Render-time filter (platí aj bez pregenerovania).
+            # POISTKA: ak pre deň nie sú OKTE VDT dáta (CZ / chýbajú), NEfiltrujeme (inak by
+            # sa zmazalo všetko). Tol 2 % na hranu.
+            _okte_vdt_closed = {}
+            try:
+                import seps_sk as _ss_vc
+                _okte_vdt_closed = (_ss_vc.load_okte_vdt_for_day(view_day)
+                                    or _ss_vc.load_okte_vdt_preliminary_for_day(view_day) or {})
+            except Exception as _e_okte:
+                print(f"[VDT closed-only] OKTE VDT load zlyhal: {_e_okte}")
+            _vdt_filter_on = bool(_okte_vdt_closed)   # filtruj len ak máme reálne OKTE VDT dáta
+
+            def _vdt_trade_clears(_action, _price, _slot_hhmm):
+                """Uzavrel by sa obchod reálne na OKTE VDT? (predaj ≤ trh, nákup ≥ trh)."""
+                if not _vdt_filter_on:
+                    return True                       # bez OKTE dát needfiltrujem (poistka)
+                _mp = _okte_vdt_closed.get(_slot_hhmm)
+                if _mp is None:
+                    return False                      # v slote žiadna reálna VDT likvidita → nie
+                try:
+                    _mp = float(_mp); _pp = float(_price)
+                except Exception:
+                    return True
+                if _pp <= 0:
+                    return False                      # neplatná cena (placeholder)
+                if _action == "discharge":            # predaj: uzavrie sa ak ask ≤ trh (×1.02)
+                    return _pp <= _mp * 1.02
+                if _action == "charge":               # nákup: uzavrie sa ak bid ≥ trh (×0.98)
+                    return _pp >= _mp * 0.98
+                return True
+
             if _os_v2.path.exists(_csv_p) and _cur_prof_real:
                 with open(_csv_p, newline="") as _f_v2:
                     _rdr = _csv_v.DictReader(_f_v2)
@@ -7964,6 +7998,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                             continue
                         _kwh_r = float(_row.get("kwh", 0) or 0)
                         _act_r = str(_row.get("action", ""))
+                        # CLOSED-ONLY: preskoč obchod, ktorý by sa reálne neuzavrel na OKTE VDT
+                        if not _vdt_trade_clears(_act_r, _row.get("price_predicted_eur", 0), _sl2[:5]):
+                            continue
                         if _act_r == "discharge":
                             _vdt_realized96[_idx2] += _kwh_r
                         elif _act_r == "charge":
