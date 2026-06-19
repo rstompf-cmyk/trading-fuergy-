@@ -63,7 +63,8 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
                        future_only: bool = True,
                        dam_commitments: Optional[list] = None,
                        soc_neutral: bool = True,
-                       soc_neutral_tol_pct: float = 1.0) -> Dict[str, Any]:
+                       soc_neutral_tol_pct: float = 1.0,
+                       residual_cost_basis_eur: Optional[float] = None) -> Dict[str, Any]:
     """LP optimalizácia denného obchodovania.
 
     Args:
@@ -202,6 +203,10 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
                         if soc_end_min_pct is not None else None)
     # Ak end_min > start_soc, LP musí nabíjať aby skončil ≥ end_min,
     # ale ak je dosť času + drahé sloty, ide to. Necháme.
+    # VDT-RESIDUAL-SELLOFF: pri výpredaji rezidua povolíme skončiť až na soc_min
+    # (inak by koncový floor blokoval predaj nabitej energie vo večeri).
+    if residual_cost_basis_eur is not None:
+        soc_end_min_kwh = soc_min_kwh
 
     # ──────────────────────────────────────────────────────────────────────
     # LP formulácia
@@ -240,6 +245,19 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
     c_obj = np.zeros(2 * n)
     c_obj[0::2] = -coeff_c   # min = -max, but coeff_c je už negative → -coeff_c je positive cost
     c_obj[1::2] = -coeff_d   # min: chceme maximalizovať d → c_obj záporné pre d
+
+    # VDT-RESIDUAL-SELLOFF (2026-06-19, user: "nenechať batériu zbytočne nabitú; predaj večer
+    # drahšie ako boli nabíjania"): ak je daná nákladová báza, povolíme ZISKOVÝ výpredaj rezidua
+    # (skončiť nižšie). Pridáme cost_basis na NET zmenu SOC: profit += cost_basis·Σ(ηc·c − d/ηd).
+    # → discharge dostane náklad cost_basis (predá len ak sell > cost_basis + fee + spread),
+    # charge dostane kredit (drží ho jednostranný net-constraint nižšie = žiadny buy-and-hold).
+    # Párované VDT round-tripy: buy noha = kredit, sell noha = náklad → netto ~0 (nepenalizované).
+    # cost_basis = váž. priemer nabíjacích cien dňa (DAM+RT), dodá volajúci. Lineárne, golden-safe (opt-in).
+    _residual_on = residual_cost_basis_eur is not None
+    if _residual_on:
+        _cb = float(residual_cost_basis_eur) / 1000.0
+        c_obj[0::2] += -_cb * eff_c
+        c_obj[1::2] += _cb / eff_d
 
     # Min-spread gate je teraz v účelovej funkcii (viď VDT-HARD-SPREAD vyššie).
     # Post-hoc filter ostáva ako poistka pri klipovaní šumu.
@@ -311,7 +329,12 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
             _row_net[2 * i] = eff_c
             _row_net[2 * i + 1] = -1.0 / eff_d
         A_ub.append(_row_net.copy()); b_ub.append(_dam_net + _tol)
-        A_ub.append(-_row_net); b_ub.append(-(_dam_net - _tol))
+        # VDT-RESIDUAL-SELLOFF: pri zapnutom výpredaji rezidua DROPneme dolnú hranicu
+        # (net ≥ DAM−tol) → povolíme ČISTÝ PREDAJ pod DAM net (skončiť nižšie). Horná
+        # hranica ostáva → žiadny buy-and-hold (nekúpi a nedrží navyše). Ziskovosť riadi
+        # cost_basis v účelovej funkcii + min_spread; SOC feasibilitu SOC bounds.
+        if not _residual_on:
+            A_ub.append(-_row_net); b_ub.append(-(_dam_net - _tol))
 
     A_ub = np.array(A_ub) if A_ub else None
     b_ub = np.array(b_ub) if b_ub else None
@@ -349,7 +372,7 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
     # nechala VDT-extra nevyvážené (kúp 1000 / predaj 100), extra ZAHODÍME a necháme
     # len DAM baseline (c=dam_chg, d=dam_dis) → vyvážené. Radšej nič ako visiaca
     # pozícia, ktorú nemáme ako uzavrieť. (Mal by byť no-op, ale je to poistka.)
-    if soc_neutral:
+    if soc_neutral and not _residual_on:
         _net_solved = float(np.sum(eff_c * charges - discharges / eff_d))
         _dam_net_g = float(np.sum(eff_c * dam_chg - dam_dis / eff_d))
         _tol_g = max(1.0, float(soc_neutral_tol_pct) / 100.0 * batt_kwh) * 1.5

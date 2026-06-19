@@ -537,6 +537,33 @@ def get_live_recommendation(*,
             zco_info = {"ok": False, "error": str(e)[:120],
                           "opportunities": [], "total_profit_eur": 0.0}
 
+    # VDT-RESIDUAL-SELLOFF wiring (2026-06-19, user: "nenechať batériu zbytočne nabitú; predaj
+    # večer drahšie ako boli nabíjania"). Ak profil má flag vdt_residual_selloff, spočítame
+    # nákladovú bázu rezidua = váž. priemer DAM nabíjacích cien dňa (fallback: priemer cien dňa,
+    # ak žiadne DAM nabíjanie — reziduum z RT/štart SOC) a pošleme do optimizera. Ten potom smie
+    # skončiť nižšie (predaj rezidua), ale LEN ak sell > cost_basis + fee + spread (žiadny dump).
+    _residual_cb = None
+    if bool(_pl.get("vdt_residual_selloff", False)):
+        try:
+            _prices_cb = [float(p) if p == p else 0.0
+                          for p in pd.to_numeric(snapshot["price_eur"], errors="coerce").tolist()]
+            _chg_kwh = 0.0; _chg_val = 0.0
+            if dam_commits is not None and len(dam_commits) == len(_prices_cb):
+                for _i_cb, _c_cb in enumerate(dam_commits):
+                    _ck = max(-float(_c_cb or 0.0), 0.0)   # batt-view: − = nabíjanie
+                    _chg_kwh += _ck; _chg_val += _ck * _prices_cb[_i_cb]
+            if _chg_kwh > 1e-6:
+                _residual_cb = _chg_val / _chg_kwh
+            else:
+                _valid_cb = [p for p in _prices_cb if p > 0]
+                _residual_cb = (sum(_valid_cb) / len(_valid_cb)) if _valid_cb else None
+            if _residual_cb is not None:
+                print(f"[VDT-RESIDUAL-SELLOFF] {active_profile}: cost_basis={_residual_cb:.1f} €/MWh "
+                      f"(spread={min_spread:.0f}) → povolený ziskový výpredaj rezidua")
+        except Exception as _e_cb:
+            print(f"[VDT-RESIDUAL-SELLOFF] cost_basis zlyhal: {_e_cb}")
+            _residual_cb = None
+
     # 4. LP optimize
     try:
         result = _opt.optimize_vdt_day(
@@ -553,6 +580,7 @@ def get_live_recommendation(*,
             use_orderbook=use_orderbook,
             future_only=True,
             dam_commitments=dam_commits,
+            residual_cost_basis_eur=_residual_cb,
         )
     except Exception as e:
         return {"ok": False, "error": f"optimizer zlyhal: {e}",
