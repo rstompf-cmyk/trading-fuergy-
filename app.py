@@ -7534,25 +7534,48 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _dist_reduction_kwh = float(_dist_r.get("import_reduction_kwh", 0.0))
     except Exception as _e_dist:
         print(f"[DIST-FEE karta] {_e_dist}")
-    cards = (
-        f"{_f4_diag_banner}"
-        f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin:10px 0'>"
-        f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{r['cum_total']:.1f} €</div></div>"
-        f"<div class='card'><div class='l'>z toho DT</div><div class='v'>{r['cum_dt']:.1f} €</div></div>"
-        f"<div class='card'><div class='l'>z toho odchýlka (RT)</div><div class='v'>{r['cum_rt']:.1f} €</div></div>"
-        f"<div class='card'><div class='l'>z toho distribúcia (od štartu)</div><div class='v'>{r.get('cum_dist', 0.0):.1f} €</div></div>"
-        f"{_vdt_arb_card}"
-        f"{_vdt_eff_cards}"
-        f"{_rt_eff_card}"
-        f"{bl_cum_card}"
-        f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt+_d_dist:.1f} €</div>"
-        f"<div style='font-size:11px;color:#555'>DT {d_dt:+.1f} · RT {d_rt:+.1f} · VDT {_d_vdt:+.1f} · Dist {_d_dist:+.1f} €</div></div>"
-        f"<div class='card' style='background:#eef7ee'><div class='l'>Úspora na distribúcii {view_day}</div>"
-        f"<div class='v' style='color:#2E7D32'>{_d_dist:+.1f} €</div>"
-        f"<div style='font-size:11px;color:#555'>{_dist_reduction_kwh:+.0f} kWh menej odberu zo siete · poplatok {_gf_dist:.2f} €/MWh</div></div>"
-        f"<div class='card' style='background:#eef7ee'><div class='l'>FTV výroba za deň</div><div class='v'>{d_ftv:.0f} kWh</div></div></div>"
-        f"<h2 style='margin:6px 0'>Hodnoty teraz</h2><div style='display:flex;gap:12px;flex-wrap:wrap;margin:4px 0'>{now_cards}</div>"
-        f"{reco_card}")
+    # CARDS-ROBUST (2026-06-19, user: "po úprave načítania vypadli sumárne displeje"):
+    # ktorákoľvek komponenta kariet (now_cards / _vdt_eff_cards / DB override …) môže pri
+    # niektorých dátach hodiť výnimku/NameError → predtým to zhodilo CELÝ card blok a sumáre
+    # zmizli. Obalíme to: pri zlyhaní vykreslíme aspoň hlavné kumulatívne + denné karty z `r`
+    # (cez .get) a zalogujeme príčinu. Sumáre sa tým NIKDY nestratia.
+    def _num(v, d=0.0):
+        try: return float(v)
+        except Exception: return d
+    try:
+        cards = (
+            f"{_f4_diag_banner}"
+            f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin:10px 0'>"
+            f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{r['cum_total']:.1f} €</div></div>"
+            f"<div class='card'><div class='l'>z toho DT</div><div class='v'>{r['cum_dt']:.1f} €</div></div>"
+            f"<div class='card'><div class='l'>z toho odchýlka (RT)</div><div class='v'>{r['cum_rt']:.1f} €</div></div>"
+            f"<div class='card'><div class='l'>z toho distribúcia (od štartu)</div><div class='v'>{r.get('cum_dist', 0.0):.1f} €</div></div>"
+            f"{_vdt_arb_card}"
+            f"{_vdt_eff_cards}"
+            f"{_rt_eff_card}"
+            f"{bl_cum_card}"
+            f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt+_d_dist:.1f} €</div>"
+            f"<div style='font-size:11px;color:#555'>DT {d_dt:+.1f} · RT {d_rt:+.1f} · VDT {_d_vdt:+.1f} · Dist {_d_dist:+.1f} €</div></div>"
+            f"<div class='card' style='background:#eef7ee'><div class='l'>Úspora na distribúcii {view_day}</div>"
+            f"<div class='v' style='color:#2E7D32'>{_d_dist:+.1f} €</div>"
+            f"<div style='font-size:11px;color:#555'>{_dist_reduction_kwh:+.0f} kWh menej odberu zo siete · poplatok {_gf_dist:.2f} €/MWh</div></div>"
+            f"<div class='card' style='background:#eef7ee'><div class='l'>FTV výroba za deň</div><div class='v'>{d_ftv:.0f} kWh</div></div></div>"
+            f"<h2 style='margin:6px 0'>Hodnoty teraz</h2><div style='display:flex;gap:12px;flex-wrap:wrap;margin:4px 0'>{now_cards}</div>"
+            f"{reco_card}")
+    except Exception as _e_cards:
+        import traceback as _tb_cards
+        print(f"[livesim cards] full render zlyhal → fallback sumáre: {_e_cards}\n{_tb_cards.format_exc()}")
+        cards = (
+            f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin:10px 0'>"
+            f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{_num(r.get('cum_total')):.1f} €</div></div>"
+            f"<div class='card'><div class='l'>z toho DT</div><div class='v'>{_num(r.get('cum_dt')):.1f} €</div></div>"
+            f"<div class='card'><div class='l'>z toho odchýlka (RT)</div><div class='v'>{_num(r.get('cum_rt')):.1f} €</div></div>"
+            f"<div class='card'><div class='l'>z toho VDT</div><div class='v'>{_num(r.get('cum_vdt_arb')):.1f} €</div></div>"
+            f"<div class='card'><div class='l'>z toho distribúcia</div><div class='v'>{_num(r.get('cum_dist')):.1f} €</div></div>"
+            f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div>"
+            f"<div class='v' style='color:#2E7D32'>{_num(d_dt)+_num(d_rt)+_num(_d_vdt)+_num(_d_dist):.1f} €</div></div>"
+            f"<div class='card' style='background:#eef7ee'><div class='l'>FTV výroba za deň</div><div class='v'>{_num(d_ftv):.0f} kWh</div></div>"
+            f"</div><p style='color:#C0392B;font-size:12px'>⚠ časť kariet sa nevykreslila (pozri log) — sumáre zobrazené z dostupných dát.</p>")
     _liverow = None; _lagmin = None
     if _tt is not None and len(_tt):
         _lvr = _tt[_tt.get("is_live", 1) == 1] if "is_live" in _tt.columns else _tt
