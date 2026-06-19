@@ -1,15 +1,18 @@
 #!/bin/bash
-# PROD deploy: dev -> refactor-v2 (FF) push. Prod (8000) bezi z refactor-v2.
-# Predpoklad: 15-min sada uz je commitnuta na dev (cez deploy_vdt_fix.sh).
-# Tento skript len pridá prod upgrade skript + FF-pushne dev do refactor-v2.
+# PROD deploy: commit VSETKYCH poslednych zmien na dev + FF push dev -> refactor-v2.
+# Prod (8000) bezi z refactor-v2. Samostatny: aj keby nebezal deploy_vdt_fix.sh, commitne
+# kompletny balik. Idempotentny (ak uz commitnute -> "nic nove na commit").
 set -e
 cd "$(cd "$(dirname "$0")" && pwd)"
 rm -f .git/index.lock
 echo "=== branch (musi byt dev) ==="; cat .git/HEAD
-echo "=== HEAD dev ==="; git log --oneline -1
-# pridaj prod upgrade skript na dev ak este nie je commitnuty
-git add scripts/upgrade_prod.ps1 deploy_prod.sh 2>/dev/null || true
-git commit -m "prod: upgrade_prod.ps1 (refactor-v2 rebuild + 15-min model + re-sim reminder)" || echo "(nic nove na commit)"
+echo "=== HEAD dev pred ==="; git log --oneline -1
+# Kompletny balik poslednych zmien (15-min merge + cenovy model + auto-retrain + LP fixy +
+# DTPROF fix + cache-wipe-on-switch-2 + Excel + deploy skripty).
+git add app.py livesim.py optimizer.py scheduler.py price_model_15m.py \
+        tools/export_livesim_xlsx.py scripts/upgrade_dev.ps1 scripts/upgrade_prod.ps1 deploy_prod.sh 2>/dev/null || true
+git add -f out/price_model_15m.joblib 2>/dev/null || true   # pribalit model (Windows nema historian na trening)
+git commit -m "PROD release: 15-min merge + cenovy model (auto-retrain) + LP load-peak/block-neg fix + DTPROF 4x + cache-wipe-on-switch-2 (rychle prepnutie profilu) + Excel hodinovy harok" || echo "(nic nove na commit)"
 git push origin dev
 echo "=== FF push dev -> refactor-v2 ==="
 git push origin dev:refactor-v2

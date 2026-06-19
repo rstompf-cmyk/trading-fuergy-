@@ -25,11 +25,15 @@ Write-Host "==> 3/6 up -d" -ForegroundColor Cyan
 docker compose up -d $Service
 Start-Sleep -Seconds 6
 
-Write-Host "==> 4/6 generuj 15-min cenovy model (fallback ak chyba historian)" -ForegroundColor Cyan
-try {
-    docker exec $Service python price_model_15m.py
-} catch {
-    Write-Host "    (model sa nevygeneroval - app pojde na flat upsample)" -ForegroundColor Yellow
+Write-Host "==> 4/6 15-min cenovy model" -ForegroundColor Cyan
+if (Test-Path "out/price_model_15m.joblib") {
+    Write-Host "    model je pribaleny v repe (git) - trening netreba" -ForegroundColor Green
+} else {
+    try {
+        docker exec $Service python price_model_15m.py
+    } catch {
+        Write-Host "    model chyba aj trening zlyhal (historian?) - app pojde na flat upsample" -ForegroundColor Yellow
+    }
 }
 
 Write-Host "==> 5/6 verify novy kod v kontajneri (grep markery)" -ForegroundColor Cyan
