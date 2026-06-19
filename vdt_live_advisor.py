@@ -557,7 +557,14 @@ def get_live_recommendation(*,
             else:
                 _valid_cb = [p for p in _prices_cb if p > 0]
                 _residual_cb = (sum(_valid_cb) / len(_valid_cb)) if _valid_cb else None
-            if _residual_cb is not None:
+            # GUARD (2026-06-19): cost_basis musí byť KLADNÁ reálna cena. cost_basis≤0
+            # (žiadne dáta / prázdne ceny) = "predaj čokoľvek nad spread" = nebezpečne
+            # agresívne → radšej NEZAPNÚŤ selloff (None = pôvodné soc_neutral správanie).
+            if _residual_cb is None or not (_residual_cb > 0):   # None/NaN/≤0 → nezapni
+                print(f"[VDT-RESIDUAL-SELLOFF] {active_profile}: cost_basis neplatná "
+                      f"({_residual_cb}) → selloff VYPNUTÝ pre tento beh (bezpečne)")
+                _residual_cb = None
+            else:
                 print(f"[VDT-RESIDUAL-SELLOFF] {active_profile}: cost_basis={_residual_cb:.1f} €/MWh "
                       f"(spread={min_spread:.0f}) → povolený ziskový výpredaj rezidua")
         except Exception as _e_cb:

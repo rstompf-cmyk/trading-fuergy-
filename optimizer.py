@@ -12,10 +12,19 @@ import numpy as np, pandas as pd
 from scipy.optimize import linprog
 
 
+# Rozpočet diagnostiky na proces — každé volanie robí ~6 extra LP solveov. Pri veľkom
+# batchi s veľa infeasible dňami (napr. TBB 15-min) by to inak násobilo čas. Po vyčerpaní
+# vrátime len krátku hlášku (bez bisektu). Reset nie je nutný (stačí pár vzoriek na diagnózu).
+_DIAG_BUDGET = [25]
+
+
 def _diagnose_infeasible(c, A_ub, b_ub, A_eq, b_eq, bounds, T, pv, socmin, socmax, batt_kwh):
     """Beží LEN keď je LP infeasible — zistí, ktorý constraint to spôsobuje (jednotlivé
     aj kumulatívne uvoľnenie). Vráti string do chybovej hlášky. Bezpečné — golden cesta
     (úspešný LP) sem nikdy nepríde."""
+    if _DIAG_BUDGET[0] <= 0:
+        return " | DIAG: (rozpočet diagnostiky vyčerpaný — viď skoršie DIAG riadky)"
+    _DIAG_BUDGET[0] -= 1
     try:
         from scipy.optimize import linprog as _lp
         EX, IM, CU, SOC = 2*T, 3*T, 4*T, 5*T

@@ -115,12 +115,25 @@ def upsert_minute_batch(profile_name: str, market: str, df: pd.DataFrame) -> int
             return 0
 
         rows = []
-        for _, r in df.iterrows():
-            t = r.get("time")
-            if t is None or pd.isna(t):
+        # PERF (2026-06-19): iterrows() + per-riadok _iso_to_ms(tz_localize)+strftime nad ~244k
+        # riadkami (170 dní × 1440 min) tvorili veľký kus effectdb času. Vektorizujeme:
+        #  • time_iso + time_ms RAZ na celý df (nie tz_localize per riadok),
+        #  • iterujeme cez to_dict("records") (plain dicty, nie Series per riadok).
+        # t_ms = rovnaká tz konverzia (Europe/Bratislava→UTC) ako _iso_to_ms → identické hodnoty
+        # (overené testom). DST-ambiguózne minúty → NaT → preskočíme (pôvodný kód tam dával
+        # nezmysel tiež). .get() sémantika + _maybe_float nezmenené. Bulk INSERT nižšie ostáva.
+        _dd = df.copy()
+        _ts = pd.to_datetime(_dd.get("time"), errors="coerce")
+        _utc = _ts.dt.tz_localize("Europe/Bratislava", nonexistent="shift_forward",
+                                   ambiguous="NaT").dt.tz_convert("UTC")
+        _dd["__t_iso"] = _ts.dt.strftime("%Y-%m-%d %H:%M:%S")
+        _dd["__t_ms"] = _utc.values.astype("int64") // 1_000_000   # NaT→min int, skip cez __ok
+        _dd["__ok"] = _ts.notna().values & _utc.notna().values
+        for r in _dd.to_dict("records"):
+            if not r.get("__ok"):
                 continue
-            t_iso = pd.Timestamp(t).strftime("%Y-%m-%d %H:%M:%S")
-            t_ms = _iso_to_ms(t_iso)
+            t_iso = r["__t_iso"]
+            t_ms = int(r["__t_ms"])
             rows.append({
                 "profile_id": pid,
                 "time_iso": t_iso,

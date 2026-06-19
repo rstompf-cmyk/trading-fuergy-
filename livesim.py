@@ -1601,7 +1601,8 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                                               step_min=15,
                                                               current_soc_pct=_running_soc,
                                                               today_state=_audit_today_state,
-                                                              rt_persistence_slots=4)
+                                                              rt_persistence_slots=4,
+                                                              soc_reserve_pct=_audit_reserve)
                                             _scale_i = float(_ax.get("scale_factor", 1.0))
                                             if _scale_i < 0.99:
                                                 _per_min_scale[_i] = _scale_i
