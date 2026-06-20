@@ -3324,10 +3324,14 @@ def _dentrh_form(msg=""):
                "grid_kw", "grid_kw_import", "grid_kw_export",
                "grid_fee", "cycle_cost", "min_spread",
                "max_export_kwh_day", "max_import_kwh_day",
-               "zco_bias_w")
+               "zco_bias_w", "vdt_engine", "vdt_pair_priority")
     for _k in _SHARED:
         if _k in _plan and _plan[_k] not in (None, ""):
             f[_k] = _plan[_k]
+    _vdt_eng = str(f.get("vdt_engine", "lp") or "lp").lower()
+    _vdt_prio = str(f.get("vdt_pair_priority", "closest") or "closest").lower()
+    def _sel(v, opt):
+        return " selected" if v == opt else ""
     # Distribučný poplatok — single source of truth (rovnaké ako form_page)
     _dist_avg = None
     _dist_enabled = False
@@ -3592,6 +3596,20 @@ Ak zvolíš <b>dnešný deň</b>, dole uvidíš aj odporúčanie pre aktuálny 1
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1F4E78;background:#eef5e0;padding:4px 8px;border-radius:6px" title="D-1 plán bude IBA nabíjať batériu. Vybíjanie cez RT odchýlku.">
 <span><b>Iba D-1 nabíjanie</b> (vybíjanie len cez RT)</span><input name="no_planned_discharge" type="checkbox" {"checked" if f.get("no_planned_discharge", False) else ""}></label>
 </div></fieldset>
+<fieldset><legend>VDT obchodný engine</legend><div class="cols">
+<label>Engine
+  <select name="vdt_engine">
+    <option value="lp"{_sel(_vdt_eng,"lp")}>LP optimizer (pôvodný)</option>
+    <option value="pairs"{_sel(_vdt_eng,"pairs")}>Párový matcher (nákup↔predaj cykly)</option>
+  </select></label>
+<label>Priorita párovania (len pairs)
+  <select name="vdt_pair_priority">
+    <option value="closest"{_sel(_vdt_prio,"closest")}>Najbližší pár (min držanie)</option>
+    <option value="profit"{_sel(_vdt_prio,"profit")}>Najziskovejší pár</option>
+    <option value="balanced"{_sel(_vdt_prio,"balanced")}>Vyvážený (marža/vzdialenosť)</option>
+  </select></label>
+</div>
+<p style="color:#666;font-size:13px;margin:6px 0 0"><b>Párový matcher</b>: VDT nákup sa uzavrie LEN spolu so ziskovým predajom (spread ≥ breakeven + min_spread, poplatok len na nabíjaní). Žiadne nepárové nákupy → koniec stratových večerných nákupov. Oba smery (nákup→predaj aj predaj→spätný nákup).</p></fieldset>
 <fieldset class="tpl-editor"><legend>× a RT šablóna (pre celý profil, 96 × 15-min)</legend>
 <p style="color:#666;font-size:13px;margin:0 0 6px">Hodnoty per 15-min slot sa uložia ako <b>globálna šablóna pre aktívny profil</b> pri každom submite. Šablóna platí pre VŠETKY dni rovnako.</p>
 {_build_template_editor_html_dentrh()}
@@ -3637,11 +3655,19 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
            max_export_kwh_day: float = Form(default=0.0),
            max_import_kwh_day: float = Form(default=0.0),
            zco_bias_w: float = Form(default=0.0),
+           vdt_engine: str = Form(default="lp"),
+           vdt_pair_priority: str = Form(default="closest"),
            mult_action: str = Form(default=""),
            mult_arr: list[float] = Form(default=[]),
            rt_arr: list[str] = Form(default=[]),
            save_only: str = Form(default="")):
     d = dt.date.fromisoformat(date)
+    _vdt_engine = str(vdt_engine or "lp").lower()
+    if _vdt_engine not in ("lp", "pairs"):
+        _vdt_engine = "lp"
+    _vdt_pair_priority = str(vdt_pair_priority or "closest").lower()
+    if _vdt_pair_priority not in ("closest", "profit", "balanced"):
+        _vdt_pair_priority = "closest"
     agc = bool(allow_grid_charge)
     acu = bool(allow_curtail)
     bni = bool(block_neg_import)
@@ -3684,7 +3710,8 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                             no_planned_discharge=npd,
                             max_export_kwh_day=float(max_export_kwh_day or 0),
                             max_import_kwh_day=float(max_import_kwh_day or 0),
-                            zco_bias_w=zbw))
+                            zco_bias_w=zbw,
+                            vdt_engine=_vdt_engine, vdt_pair_priority=_vdt_pair_priority))
     # SYNC: shared FTV/batt/sieť parametre tiež do ui_settings.plan — aby boli /plan a /dentrh
     # vždy konzistentné. Bez tohto sync-u by /dentrh forma pri reloade prepísala uloženú dentrh
     # hodnotu starou hodnotou z .plan (lebo _dentrh_form má .plan > .dentrh priority).
@@ -3697,7 +3724,8 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                           grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
                           max_export_kwh_day=float(max_export_kwh_day or 0),
                           max_import_kwh_day=float(max_import_kwh_day or 0),
-                          zco_bias_w=zbw)
+                          zco_bias_w=zbw,
+                          vdt_engine=_vdt_engine, vdt_pair_priority=_vdt_pair_priority)
     _plan_existing = _ui_load("plan", {}) or {}
     _plan_existing.update(_SHARED_SYNC)
     _ui_save("plan", _plan_existing)
