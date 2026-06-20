@@ -2219,6 +2219,10 @@ def _build_template_editor_html_plan():
 def form_page(msg=""):
     tomorrow = (dt.date.today() + dt.timedelta(days=1)).isoformat()
     f = _ui_load("plan", DEF)
+    _vdt_eng = str(f.get("vdt_engine", "lp") or "lp").lower()
+    _vdt_prio = str(f.get("vdt_pair_priority", "closest") or "closest").lower()
+    def _sel(v, opt):
+        return " selected" if v == opt else ""
     # Joint LP flags (per-profil) — defaults DEF + override z profilu aktívneho
     try:
         import joint_lp_integration as _jli
@@ -2560,6 +2564,20 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;color:#1B5E20;background:#e6f4ea;padding:4px 8px;border-radius:6px" title="RT zásah (MW signal + FTV balance) nesmie nikdy zhoršiť threshold odchýlku voči obchodnému plánu. Keď FTV nedoposlúchne plán (under-deliver, pre_dev<0), RT nesmie batériu nabíjať navyše; keď FTV preteká (over-deliver), RT nesmie ďalej vybíjať. Plán adherence má prednosť pred MW signal arbitrážou.">
 <span>🛡 <b>RT nesmie zhoršovať threshold odchýlku</b> (plán má prednosť pred arbitrážou)</span><input name="rt_no_worsen_dev" type="checkbox" {"checked" if f.get("rt_no_worsen_dev", True) else ""}></label>
 </div></fieldset>
+<fieldset><legend>VDT obchodný engine</legend><div class="cols">
+<label>Engine
+  <select name="vdt_engine">
+    <option value="lp"{_sel(_vdt_eng,"lp")}>LP optimizer (pôvodný)</option>
+    <option value="pairs"{_sel(_vdt_eng,"pairs")}>Párový matcher (nákup↔predaj cykly)</option>
+  </select></label>
+<label>Priorita párovania (len pairs)
+  <select name="vdt_pair_priority">
+    <option value="closest"{_sel(_vdt_prio,"closest")}>Najbližší pár (min držanie)</option>
+    <option value="profit"{_sel(_vdt_prio,"profit")}>Najziskovejší pár</option>
+    <option value="balanced"{_sel(_vdt_prio,"balanced")}>Vyvážený (marža/vzdialenosť)</option>
+  </select></label>
+</div>
+<p style="color:#666;font-size:13px;margin:6px 0 0"><b>Párový matcher</b>: VDT nákup sa uzavrie LEN spolu so ziskovým predajom (spread ≥ breakeven + min_spread, poplatok len na nabíjaní). Žiadne nepárové nákupy → koniec stratových večerných nákupov. Oba smery (nákup→predaj aj predaj→spätný nákup).</p></fieldset>
 <fieldset class="tpl-editor"><legend>× a RT šablóna (pre celý profil)</legend>
 <p style="color:#666;font-size:13px;margin:0 0 6px">Hodnoty per hodinu sa uložia ako <b>globálna šablóna pre aktívny profil</b> pri každom <b>Generuj plán D-1</b>. Šablóna platí pre VŠETKY dni — nie je rozdielna v rôznych dňoch.<br>
 <b>×</b> = násobiteľ návrhu optimizéra (1.00 = bez zmeny, 0 = zablokovať slot, 0.5 = polovičný výkon, 1.5 = posilniť 50 %). <b>RT</b> = ✓ povolí odchýlkovú regulácia v slote, ✗ ju zablokuje.</p>
@@ -15385,6 +15403,8 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          terminal_soc_mode: str = Form(default="fixed"),
          vdt_breakeven_auto: str = Form(default=""),
          vdt_capacity_reserve_kw: float = Form(default=0.0),
+         vdt_engine: str = Form(default="lp"),
+         vdt_pair_priority: str = Form(default="closest"),
          rt_engine: str = Form(default="v1"),
          rt2_margin_min_eur: float = Form(default=10.0),
          rt2_margin_full_eur: float = Form(default=60.0),
@@ -15414,6 +15434,13 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          vdt_closed_from: str = Form(default=""),
          vdt_closed_to: str = Form(default="")):
     d = dt.date.fromisoformat(date)
+    # VDT engine voľba (2026-06-20): lp / pairs + priorita párovania.
+    _vdt_engine_p = str(vdt_engine or "lp").lower()
+    if _vdt_engine_p not in ("lp", "pairs"):
+        _vdt_engine_p = "lp"
+    _vdt_pair_priority_p = str(vdt_pair_priority or "closest").lower()
+    if _vdt_pair_priority_p not in ("closest", "profit", "balanced"):
+        _vdt_pair_priority_p = "closest"
     # #27: rozsah dní pre VDT oceňovanie reálnymi uzavretými cenami (len história).
     _vdt_cl_from = str(vdt_closed_from or "")[:10]
     _vdt_cl_to = str(vdt_closed_to or "")[:10]
@@ -15517,6 +15544,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
                           terminal_soc_mode=tsm,
                           vdt_breakeven_auto=vba,
                           vdt_capacity_reserve_kw=vcr,
+                          vdt_engine=_vdt_engine_p, vdt_pair_priority=_vdt_pair_priority_p,
                           ftv_persistence_throttle=fpth,
                           rt_no_worsen_dev=rnwd, ftv_strict_plan=fsp,
                           ftv_strict_deadband_kw=fsdb,
