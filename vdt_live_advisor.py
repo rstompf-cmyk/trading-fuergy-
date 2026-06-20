@@ -571,7 +571,11 @@ def get_live_recommendation(*,
             print(f"[VDT-RESIDUAL-SELLOFF] cost_basis zlyhal: {_e_cb}")
             _residual_cb = None
 
-    # 4. LP optimize
+    # 4. optimize (engine z profilu: "lp" default / "pairs" párový matcher)
+    # vdt_engine="pairs" → greedy párové cykly (nákup↔predaj páry so spreadom, žiadne
+    # nepárové nákupy); vdt_pair_priority = closest/profit/balanced.
+    _vdt_engine = str(_pl.get("vdt_engine", "lp") or "lp").lower()
+    _vdt_pair_priority = str(_pl.get("vdt_pair_priority", "closest") or "closest").lower()
     try:
         result = _opt.optimize_vdt_day(
             snapshot,
@@ -588,6 +592,8 @@ def get_live_recommendation(*,
             future_only=True,
             dam_commitments=dam_commits,
             residual_cost_basis_eur=_residual_cb,
+            engine=_vdt_engine,
+            pair_priority=_vdt_pair_priority,
         )
     except Exception as e:
         return {"ok": False, "error": f"optimizer zlyhal: {e}",

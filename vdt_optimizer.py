@@ -45,6 +45,74 @@ import pandas as pd
 import numpy as np
 
 
+def _build_vdt_result(df, charges, discharges, *, n, soc_start_kwh, soc_start_pct,
+                      batt_kwh, eff_c, eff_d, buy_price_arr, sell_price_arr,
+                      grid_fee, cycle_cost, dam_dis, dam_chg, lp_status="pairs"):
+    """Postaví výsledok (trades + summary) z grid-side charges/discharges polí.
+    Zdieľané s pairs-engine. POPLATOK LEN NA NABÍJANIE (user 2026-06-20: distribučný
+    poplatok = import-only; zhodné s realizovanou ekonomikou effect_db)."""
+    trades = []
+    soc_trajectory = []
+    soc_kwh = soc_start_kwh
+    total_charged = total_discharged = 0.0
+    revenue = cost = fees = cycle_cost_total = 0.0
+    n_ch_slots = n_d_slots = 0
+    soc_min_observed = soc_max_observed = soc_kwh
+    for t in range(n):
+        c_kwh = float(charges[t]); d_kwh = float(discharges[t])
+        if c_kwh < 0.01: c_kwh = 0.0
+        if d_kwh < 0.01: d_kwh = 0.0
+        soc_kwh = soc_kwh + eff_c * c_kwh - d_kwh / eff_d
+        soc_trajectory.append(soc_kwh)
+        soc_min_observed = min(soc_min_observed, soc_kwh)
+        soc_max_observed = max(soc_max_observed, soc_kwh)
+        if c_kwh > 0 and d_kwh > 0:
+            action = "both"
+        elif c_kwh > 0:
+            action = "charge"; n_ch_slots += 1; total_charged += c_kwh
+            cost += buy_price_arr[t] * c_kwh / 1000.0
+            fees += grid_fee * c_kwh / 1000.0                 # poplatok LEN na nabíjaní
+            cycle_cost_total += cycle_cost * c_kwh / 1000.0 / 2.0
+        elif d_kwh > 0:
+            action = "discharge"; n_d_slots += 1; total_discharged += d_kwh
+            revenue += sell_price_arr[t] * d_kwh / 1000.0
+            # žiadny grid_fee na vybíjaní/exporte
+            cycle_cost_total += cycle_cost * d_kwh / 1000.0 / 2.0
+        else:
+            action = "idle"
+        row = df.iloc[t]
+        trades.append({
+            "slot_idx": t, "slot": row["period"], "start_local": row["start_local"],
+            "action": action, "charge_kwh": c_kwh, "discharge_kwh": d_kwh,
+            "buy_price_eur_mwh": float(buy_price_arr[t]) if c_kwh > 0 else None,
+            "sell_price_eur_mwh": float(sell_price_arr[t]) if d_kwh > 0 else None,
+            "soc_after_kwh": soc_kwh,
+            "soc_after_pct": soc_kwh / batt_kwh * 100.0 if batt_kwh > 0 else 0,
+        })
+    profit_eur = revenue - cost - fees - cycle_cost_total
+    cycles = total_discharged / batt_kwh if batt_kwh > 0 else 0.0
+    dam_dis_total = float(np.sum(dam_dis)); dam_chg_total = float(np.sum(dam_chg))
+    return {
+        "ok": True, "n_slots": n, "profit_eur": profit_eur, "trades": trades,
+        "soc_trajectory": soc_trajectory,
+        "dam_committed_export_kwh": dam_dis_total,
+        "dam_committed_import_kwh": dam_chg_total,
+        "vdt_extra_discharge_kwh": max(0.0, total_discharged - dam_dis_total),
+        "vdt_extra_charge_kwh": max(0.0, total_charged - dam_chg_total),
+        "summary": {
+            "total_charged_kwh": total_charged, "total_discharged_kwh": total_discharged,
+            "n_charge_slots": n_ch_slots, "n_discharge_slots": n_d_slots, "cycles": cycles,
+            "soc_min_kwh": soc_min_observed, "soc_max_kwh": soc_max_observed,
+            "soc_min_pct": soc_min_observed / batt_kwh * 100.0 if batt_kwh > 0 else 0,
+            "soc_max_pct": soc_max_observed / batt_kwh * 100.0 if batt_kwh > 0 else 0,
+            "soc_start_pct": soc_start_pct,
+            "soc_end_pct": soc_kwh / batt_kwh * 100.0 if batt_kwh > 0 else 0,
+            "revenue_eur": revenue, "cost_eur": cost, "fees_eur": fees,
+            "cycle_cost_eur": cycle_cost_total, "lp_status": lp_status,
+        },
+    }
+
+
 def optimize_vdt_day(snapshot: pd.DataFrame, *,
                        batt_kw: float = 500.0,
                        batt_kwh: float = 800.0,
@@ -64,7 +132,9 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
                        dam_commitments: Optional[list] = None,
                        soc_neutral: bool = True,
                        soc_neutral_tol_pct: float = 1.0,
-                       residual_cost_basis_eur: Optional[float] = None) -> Dict[str, Any]:
+                       residual_cost_basis_eur: Optional[float] = None,
+                       engine: str = "lp",
+                       pair_priority: str = "closest") -> Dict[str, Any]:
     """LP optimalizácia denného obchodovania.
 
     Args:
@@ -207,6 +277,37 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
     # (inak by koncový floor blokoval predaj nabitej energie vo večeri).
     if residual_cost_basis_eur is not None:
         soc_end_min_kwh = soc_min_kwh
+
+    # ── ENGINE: PÁROVÝ MATCHER (vdt.engine="pairs") ─────────────────────────
+    # Alternatíva k LP: greedy párové cykly (nákup↔predaj, spread, oba smery, priorita
+    # closest/profit/balanced). DAM = base (posvätný), per-slot stropy z orderbook likvidity,
+    # poplatok len na nabíjaní. Early-return → LP cesta (golden) ostáva NEDOTKNUTÁ.
+    if str(engine).lower() == "pairs":
+        try:
+            from vdt_pair_matcher import match_pairs as _mp
+        except Exception as _e_imp:
+            return {"ok": False, "error": f"pair matcher import zlyhal: {_e_imp}", "trades": []}
+        _base = [float(eff_c * dam_chg[t] - dam_dis[t] / eff_d) for t in range(n)]   # SOC-kWh
+        _cap_chg = [float(max_buy_kwh[t] * eff_c) for t in range(n)]                  # SOC-kWh
+        _cap_dis = [float(max_sell_kwh[t] / eff_d) for t in range(n)]                 # SOC-kWh
+        _mr = _mp(
+            [float(x) for x in buy_price_arr], [float(x) for x in sell_price_arr],
+            soc0_kwh=float(soc_start_kwh), soc_lo_kwh=float(soc_min_kwh), soc_hi_kwh=float(soc_max_kwh),
+            batt_kwh_per_slot=float(batt_kw) * dt_h,
+            eff_c=float(eff_c), eff_d=float(eff_d), cycle_cost=float(cycle_cost),
+            grid_fee=float(grid_fee), min_spread=float(min_spread), priority=str(pair_priority),
+            base_soc_delta=_base, cap_charge_soc=_cap_chg, cap_discharge_soc=_cap_dis,
+        )
+        _vdt = _mr["vdt_soc_delta"]
+        # grid-side = DAM + VDT (SOC→grid: nabíjanie /eff_c import, vybíjanie ×eff_d export)
+        charges = np.array([float(dam_chg[t]) + (max(_vdt[t], 0.0) / eff_c) for t in range(n)])
+        discharges = np.array([float(dam_dis[t]) + (max(-_vdt[t], 0.0) * eff_d) for t in range(n)])
+        return _build_vdt_result(
+            df, charges, discharges, n=n, soc_start_kwh=soc_start_kwh, soc_start_pct=soc_start_pct,
+            batt_kwh=batt_kwh, eff_c=eff_c, eff_d=eff_d,
+            buy_price_arr=buy_price_arr, sell_price_arr=sell_price_arr,
+            grid_fee=grid_fee, cycle_cost=cycle_cost, dam_dis=dam_dis, dam_chg=dam_chg,
+            lp_status=f"pairs:{pair_priority} ({len(_mr['cycles'])} cyklov)")
 
     # ──────────────────────────────────────────────────────────────────────
     # LP formulácia
