@@ -820,7 +820,10 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             load_kwh=load24,
             max_export_kwh_day=_mex if _mex > 0 else None,
             max_import_kwh_day=_mim if _mim > 0 else None)
-        params = {**fp, "date": date_iso}
+        # Bug SOC-DRIFT-CHECK (2026-06-20): ulož REÁLNE použitý štartovací SOC (carried),
+        # aby _find_stale_future_plans neporovnávalo carried voči schedule.soc_pct[0]
+        # (= SOC PO slote 0, nie štart dňa) → inak trvalý falošný drift → auto-regen loop.
+        params = {**fp, "date": date_iso, "soc_init_used": float(_soc_init_use)}
         sched_cols = ["batt_kw","grid_kwh","pv_kwh","price_eur","curtail_kwh","soc_pct","order_mwh",
                       "_charge_kw","_discharge_kw","_export_kwh","_import_kwh","soc_kwh","load_kwh"]
         sched = {c: sch[c].tolist() for c in sched_cols if c in sch.columns}
@@ -970,7 +973,9 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                                   load_kwh=load96,
                                   max_export_kwh_day=_mex15 if _mex15 > 0 else None,
                                   max_import_kwh_day=_mim15 if _mim15 > 0 else None)
-        params = {**fp, "date": date_iso}
+        # Bug SOC-DRIFT-CHECK (2026-06-20): ulož reálne použitý štartovací SOC (carried)
+        # — drift-check ho porovná namiesto schedule.soc_pct[0] (=SOC PO slote 0).
+        params = {**fp, "date": date_iso, "soc_init_used": float(_soc_init_use15)}
         sched_cols = ["batt_kw","grid_kwh","pv_kwh","price_eur","curtail_kwh","soc_pct","order_mwh",
                       "_charge_kw","_discharge_kw","_export_kwh","_import_kwh","soc_kwh","load_kwh"]
         sched = {c: sch[c].tolist() for c in sched_cols if c in sch.columns}
@@ -4307,10 +4312,25 @@ def _find_stale_future_plans(case: str = "plan_d1", port: str = None, max_days: 
         plan = ps.load_plan_safe(d_iso, step_min, kind=kind)
         if not plan:
             continue
-        soc_arr = (plan.get("schedule") or {}).get("soc_pct") or []
-        try:
-            soc0 = float(soc_arr[0])
-        except (IndexError, TypeError, ValueError):
+        # Bug SOC-DRIFT-CHECK (2026-06-20): porovnaj REÁLNE použitý štartovací SOC plánu
+        # (params.soc_init_used = carried v čase generovania), NIE schedule.soc_pct[0]
+        # (= SOC PO slote 0 — batéria sa v slote 0 nabije/vybije, takže soc_pct[0] sa
+        # legitímne líši od štartu → predtým trvalý falošný drift → SOC-CONT-V3 auto-regen
+        # loop → "prepočítava sa" banner pri každom prepnutí profilu).
+        # Fallback na soc_pct[0] len pre STARÉ plány bez soc_init_used (po 1 regene dostanú pole).
+        _siu = (plan.get("params") or {}).get("soc_init_used")
+        if _siu is not None:
+            try:
+                soc0 = float(_siu)
+            except (TypeError, ValueError):
+                soc0 = None
+        else:
+            soc_arr = (plan.get("schedule") or {}).get("soc_pct") or []
+            try:
+                soc0 = float(soc_arr[0])
+            except (IndexError, TypeError, ValueError):
+                soc0 = None
+        if soc0 is None:
             continue
         if abs(soc0 - carried_pct) > 1.0:
             stale.append((d_iso, soc0))
