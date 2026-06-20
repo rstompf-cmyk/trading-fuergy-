@@ -9,10 +9,12 @@ echo "=== branch (musi byt dev) ==="; cat .git/HEAD
 echo "=== HEAD dev pred ==="; git log --oneline -1
 # Kompletny balik poslednych zmien (15-min merge + cenovy model + auto-retrain + LP fixy +
 # DTPROF fix + cache-wipe-on-switch-2 + Excel + deploy skripty).
-git add app.py livesim.py optimizer.py vdt_state.py core/effect_db.py scheduler.py price_model_15m.py \
-        tools/export_livesim_xlsx.py tools/diag_trades.py scripts/upgrade_dev.ps1 scripts/upgrade_prod.ps1 deploy_prod.sh 2>/dev/null || true
+git add app.py livesim.py optimizer.py vdt_state.py vdt_optimizer.py vdt_live_advisor.py \
+        vdt_pair_matcher.py core/effect_db.py core/rt_audit.py scheduler.py price_model_15m.py \
+        tools/export_livesim_xlsx.py tools/diag_trades.py tests/test_vdt_pair_matcher.py \
+        scripts/upgrade_dev.ps1 scripts/upgrade_prod.ps1 deploy_prod.sh 2>/dev/null || true
 git add -f out/price_model_15m.joblib 2>/dev/null || true   # pribalit model (Windows nema historian na trening)
-git commit -m "PROD release: 15-min merge + cenovy model (auto-retrain) + LP load-peak/block-neg fix + DTPROF 4x + cache-wipe-on-switch-2 (rychle prepnutie profilu) + Excel hodinovy harok" || echo "(nic nove na commit)"
+git commit -m "PROD release: VDT parovy matcher (engine=pairs, opt-in, default lp = bez zmeny) + UI select /plan+/dentrh + SOC-CARRY-CASE + SOC-DRIFT-CHECK (koniec auto-regen loop/banner) + AUDIT-RESERVE-PARAM perf + effect_db vektorizacia + 15-min merge/cenovy model. golden 5/5 + matcher 8/8" || echo "(nic nove na commit)"
 git push origin dev
 echo "=== FF push dev -> refactor-v2 ==="
 git push origin dev:refactor-v2

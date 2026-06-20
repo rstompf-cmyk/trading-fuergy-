@@ -1663,10 +1663,15 @@ def profiles_apply(name: str = Form(...), redirect_to: str = Form(default="")):
     # (napr. /plan POST). Tým je prepnutie na už zohriaty profil cache-hit (okamžité).
     upd = ", ".join(summary.get("updated", []))
     livesim_case_changed = livesim_case_changed + auto_started_msg
-    # Bug Q1: redirect_to podporuje návrat na pôvodnú stránku (napr. /realio?tab=riadenie)
-    # po quick switcheri profilu. Validácia: musí začínať /, žiadne URL injekcie.
-    _target = "/profiles"
-    if redirect_to and redirect_to.startswith("/") and not redirect_to.startswith("//"):
+    # User 2026-06-20: po prepnutí profilu VŽDY prejsť na živú simuláciu (sim profil)
+    # alebo na reálne riadenie (real profil) — bez ohľadu na redirect_to. Real = /realio,
+    # sim = /livesim. (redirect_to ostáva len ako fallback ak by detekcia módu zlyhala.)
+    try:
+        _is_real = bool(pr.is_real(name))
+    except Exception:
+        _is_real = False
+    _target = "/realio" if _is_real else "/livesim"
+    if not _target and redirect_to and redirect_to.startswith("/") and not redirect_to.startswith("//"):
         _target = redirect_to
     # HTML escape pre meta refresh attribute (URL query string môže obsahovať & / =)
     _target_esc = _target.replace('"', "&quot;").replace("'", "&#39;")
