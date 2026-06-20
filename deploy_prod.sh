@@ -9,8 +9,8 @@ echo "=== branch (musi byt dev) ==="; cat .git/HEAD
 echo "=== HEAD dev pred ==="; git log --oneline -1
 # Kompletny balik poslednych zmien (15-min merge + cenovy model + auto-retrain + LP fixy +
 # DTPROF fix + cache-wipe-on-switch-2 + Excel + deploy skripty).
-git add app.py livesim.py optimizer.py scheduler.py price_model_15m.py \
-        tools/export_livesim_xlsx.py scripts/upgrade_dev.ps1 scripts/upgrade_prod.ps1 deploy_prod.sh 2>/dev/null || true
+git add app.py livesim.py optimizer.py vdt_state.py core/effect_db.py scheduler.py price_model_15m.py \
+        tools/export_livesim_xlsx.py tools/diag_trades.py scripts/upgrade_dev.ps1 scripts/upgrade_prod.ps1 deploy_prod.sh 2>/dev/null || true
 git add -f out/price_model_15m.joblib 2>/dev/null || true   # pribalit model (Windows nema historian na trening)
 git commit -m "PROD release: 15-min merge + cenovy model (auto-retrain) + LP load-peak/block-neg fix + DTPROF 4x + cache-wipe-on-switch-2 (rychle prepnutie profilu) + Excel hodinovy harok" || echo "(nic nove na commit)"
 git push origin dev

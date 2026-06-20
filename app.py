@@ -923,7 +923,14 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             _jb_prof15 = "default"
         _joint_flags_b15 = _gjlp_batch15(_jb_prof15 if _jb_prof15 != "default" else None)
         # Bug #622: SOC carryover pre 15-min dentrh
-        _soc_init_use15, _soc_init_src15 = _resolve_soc_init_carryover(date_iso, fp, case="dentrh")
+        # Bug SOC-CARRY-CASE (2026-06-20): carried_soc_for_date(case) hľadá livesim súbory
+        # pod MENOM CASE. 15-min livesim beží pod kľúčom "dt_15min" (MODES), NIE "dentrh"
+        # (to je len plan_store KIND). Predtým case="dentrh" → livesim_dentrh__profil.meta
+        # neexistoval → carried=None → manual fallback (soc_init=5%) → plán štartoval na 5%
+        # napriek carried SOC z predošlého dňa → trvalá SOC diskontinuita → SOC-CONT-V3
+        # auto-regen donekonečna (regen tiež použil zlý case → 5% sa nikdy neopravil) →
+        # banner "prepočítava sa" pri každom prepnutí. Fix: case="dt_15min" (livesim kľúč).
+        _soc_init_use15, _soc_init_src15 = _resolve_soc_init_carryover(date_iso, fp, case="dt_15min")
         print(f"[#622 _gen_one_plan 15min] {date_iso}: soc_init={_soc_init_use15:.1f}% "
               f"({_soc_init_src15})")
         # Bug LP-VDT-BOUNDS: uzavreté VDT obchody dňa = smerové stropy pre LP
@@ -3641,8 +3648,9 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
     # Override user-vstupu `soc_init` reálnym SOC po predošlom dni — D-1 plán
     # nesmie predpokladať ideálnu trajektóriu, lebo večerné nominácie potom
     # nedosiahne (= odchýlka voči trhu = pokuta).
+    # Bug SOC-CARRY-CASE (2026-06-20): "dt_15min" = livesim MODES kľúč (nie "dentrh" = plan kind).
     _soc_init_carry, _soc_init_src = _resolve_soc_init_carryover(
-        date, {"soc_init": soc_init, "soc_min": soc_min, "soc_max": soc_max}, case="dentrh")
+        date, {"soc_init": soc_init, "soc_min": soc_min, "soc_max": soc_max}, case="dt_15min")
     soc_init_user = soc_init   # zachovaj manual pre ui_settings/profile zápis
     if _soc_init_src == "carried":
         print(f"[#622 /dentrh POST] {date}: soc_init={soc_init:.1f}% → "
