@@ -1663,16 +1663,16 @@ def profiles_apply(name: str = Form(...), redirect_to: str = Form(default="")):
     # (napr. /plan POST). Tým je prepnutie na už zohriaty profil cache-hit (okamžité).
     upd = ", ".join(summary.get("updated", []))
     livesim_case_changed = livesim_case_changed + auto_started_msg
-    # User 2026-06-20: po prepnutí profilu VŽDY prejsť na živú simuláciu (sim profil)
-    # alebo na reálne riadenie (real profil) — bez ohľadu na redirect_to. Real = /realio,
-    # sim = /livesim. (redirect_to ostáva len ako fallback ak by detekcia módu zlyhala.)
-    try:
-        _is_real = bool(pr.is_real(name))
-    except Exception:
-        _is_real = False
-    _target = "/realio" if _is_real else "/livesim"
-    if not _target and redirect_to and redirect_to.startswith("/") and not redirect_to.startswith("//"):
+    # Cieľ po prepnutí: ak je daný redirect_to (napr. dashboard: graf → plán profilu),
+    # rešpektuj ho. Inak default = živá simulácia (sim) / reálne riadenie (real).
+    if redirect_to and redirect_to.startswith("/") and not redirect_to.startswith("//"):
         _target = redirect_to
+    else:
+        try:
+            _is_real = bool(pr.is_real(name))
+        except Exception:
+            _is_real = False
+        _target = "/realio" if _is_real else "/livesim"
     # HTML escape pre meta refresh attribute (URL query string môže obsahovať & / =)
     _target_esc = _target.replace('"', "&quot;").replace("'", "&#39;")
     return (f"<!doctype html><html><head><meta charset='utf-8'>"
@@ -2834,7 +2834,9 @@ function clr(v){return (+v||0)>=0?'pos':'neg';}
 function mwh(v){v=+v||0;return (Math.abs(v)>=1000?(v/1000).toFixed(1)+' MWh':v.toFixed(0)+' kWh');}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function box(lbl,val,sub,cls){return '<div class="box"><div class="lbl">'+lbl+'</div><div class="val '+(cls||'')+'">'+val+'</div><div class="sub">'+(sub||'')+'</div></div>';}
-function go(p){location.href='/dashboard?profile='+encodeURIComponent(p);}
+function fActivate(name,to){var f=document.createElement('form');f.method='POST';f.action='/profiles/apply';f.style.display='none';var i1=document.createElement('input');i1.name='name';i1.value=name;var i2=document.createElement('input');i2.name='redirect_to';i2.value=to;f.appendChild(i1);f.appendChild(i2);document.body.appendChild(f);f.submit();}
+function goLive(p){fActivate(p,'/livesim');}
+function goPlan(p){fActivate(p,'/dentrh');}
 async function fleetLoad(){
   try{
     const r=await fetch(fUrl(),{cache:'no-store'}); const d=await r.json();
@@ -2860,7 +2862,7 @@ function renderFleet(d){
   else{al.forEach(function(a){
     var cls=a.sev==='crit'?'a-crit':a.sev==='warn'?'a-warn':'a-info';
     var ic=a.sev==='crit'?'ti-alert-octagon':a.sev==='warn'?'ti-alert-triangle':'ti-info-circle';
-    ah+='<div class="alert '+cls+'"><i class="ti '+ic+'"></i> <span class="a-prof" onclick="go(\\''+esc(a.profile)+'\\')">'+esc(a.profile)+'</span> '+esc(a.msg)+'</div>';
+    ah+='<div class="alert '+cls+'"><i class="ti '+ic+'"></i> <span class="a-prof" onclick="goLive(\\''+esc(a.profile)+'\\')">'+esc(a.profile)+'</span> '+esc(a.msg)+'</div>';
   });}
   document.getElementById('f-alerts').innerHTML=ah;
   var ch='';
@@ -2876,7 +2878,7 @@ function renderFleet(d){
     var saldoBad=(+p.vdt_saldo_kwh||0)>100 && (+p.vdt_saldo_kwh||0)>0.15*(+p.vdt_buy_kwh||0);
     var vdtTxt=(p.vdt_buy_kwh||p.vdt_sell_kwh)?(saldoBad?'<span class=neg>nespárované</span>':'<span class=pos>spárované</span>'):'—';
     var cal='';(p.alerts||[]).forEach(function(a){cal+='<div class="cal">'+esc(a.msg)+'</div>';});
-    ch+='<div class="card" style="border-top-color:'+hcol+'" onclick="go(\\''+esc(p.name)+'\\')">'
+    ch+='<div class="card" style="border-top-color:'+hcol+'" onclick="goLive(\\''+esc(p.name)+'\\')" title="Otvoriť živú simuláciu profilu">'
       +'<div class="chead"><span class="cname">'+esc(p.name)+' →</span>'
       +'<span><span class="chip '+(real?'c-real':'c-sim')+'">'+(real?'real':'sim')+'</span> <b style="font-size:14px" class="'+clr(p.total_eur)+'">'+eur(p.total_eur)+'</b></span></div>'
       +'<div class="cbody">'
@@ -2891,7 +2893,7 @@ function renderFleet(d){
           +'<tr><td class="k">Plán dnes</td><td class="v">'+(p.has_plan?'<span class=pos>✓</span>':'<span class=neg>✗</span>')+'</td></tr>'
           +'</table>'
         +'</div>'
-        +'<div class="cright">'
+        +'<div class="cright" onclick="event.stopPropagation();goPlan(\\''+esc(p.name)+'\\')" style="cursor:pointer" title="Otvoriť plán profilu">'
           +'<div class="leg"><span><i style="background:#639922"></i> DT plán</span><span><i style="background:#BA7517"></i> VDT</span><span><i style="background:#888780;width:14px;height:2px;border-radius:0"></i> SOC</span></div>'
           +'<div class="mini"><canvas id="mc'+i+'"></canvas></div>'
         +'</div>'
