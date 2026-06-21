@@ -2755,6 +2755,12 @@ _FLEET_V2_HTML = """
 #fleetv2 .fhead{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:4px 0 14px}
 #fleetv2 h1{color:#1F4E78;margin:0;font-size:22px}
 #fleetv2 .upd{font-size:12px;color:#888}
+#fleetv2 .fnav{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 14px}
+#fleetv2 .fnav button{font-size:12px;padding:5px 10px;border:1px solid #d6dae0;background:#fff;border-radius:7px;cursor:pointer;color:#1F4E78}
+#fleetv2 .fnav button:hover{background:#f0f4f9}
+#fleetv2 .fnav button.f-today{background:#1F4E78;color:#fff;border-color:#1F4E78}
+#fleetv2 .fnav input[type=date]{font-size:12px;padding:4px 6px;border:1px solid #d6dae0;border-radius:7px}
+#fleetv2 .fnav .f-rng{font-size:11px;color:#888;margin-left:8px}
 #fleetv2 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#2E7D32;margin-right:5px;animation:fpulse 2s infinite}
 @keyframes fpulse{0%,100%{opacity:1}50%{opacity:.35}}
 #fleetv2 .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
@@ -2795,8 +2801,17 @@ _FLEET_V2_HTML = """
 </style>
 <div id="fleetv2">
   <div class="fhead">
-    <h1><i class="ti ti-broadcast"></i> Flotila — live</h1>
-    <div class="upd"><span class="dot"></span><span id="f-upd">načítavam…</span></div>
+    <h1><i class="ti ti-broadcast"></i> Flotila <span id="f-daylbl" style="font-size:13px;font-weight:400;color:#888"></span></h1>
+    <div class="upd"><span class="dot" id="f-dot"></span><span id="f-upd">načítavam…</span></div>
+  </div>
+  <div class="fnav">
+    <button onclick="fShiftM(-1)" title="O mesiac späť">« mesiac</button>
+    <button onclick="fShift(-1)" title="O deň späť">‹ deň</button>
+    <input type="date" id="f-date" onchange="fPick()">
+    <button onclick="fShift(1)" title="O deň vpred">deň ›</button>
+    <button onclick="fShiftM(1)" title="O mesiac vpred">mesiac »</button>
+    <button onclick="fToday()" class="f-today">dnes</button>
+    <span class="f-rng">rozsah do: <input type="date" id="f-dateto" onchange="fPick()"> (súčet €)</span>
   </div>
   <div class="kpi" id="f-kpi"></div>
   <div class="alerts" id="f-alerts"></div>
@@ -2805,6 +2820,15 @@ _FLEET_V2_HTML = """
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
 var _fcharts={};
+var fDay='', fTo='', fNowSlot=null;
+function fToISO(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function fUrl(){var q=[];if(fDay)q.push('date='+fDay);if(fTo)q.push('date_to='+fTo);return '/fleet/api'+(q.length?'?'+q.join('&'):'');}
+function fSync(){var t=fToISO(new Date());var di=document.getElementById('f-date');var dt=document.getElementById('f-dateto');if(di)di.value=fDay||t;if(dt)dt.value=fTo;}
+function fShift(n){var b=fDay||fToISO(new Date());var d=new Date(b+'T12:00');d.setDate(d.getDate()+n);fDay=fToISO(d);fTo='';fSync();fleetLoad();}
+function fShiftM(n){var b=fDay||fToISO(new Date());var d=new Date(b+'T12:00');d.setMonth(d.getMonth()+n);fDay=fToISO(d);fTo='';fSync();fleetLoad();}
+function fPick(){fDay=document.getElementById('f-date').value||'';fTo=document.getElementById('f-dateto').value||'';if(fTo&&fTo<fDay)fTo='';fleetLoad();}
+function fToday(){fDay='';fTo='';fSync();fleetLoad();}
+var fNowLine={id:'fnow',afterDraw:function(c){if(fNowSlot==null)return;try{var x=c.scales.x.getPixelForValue(fNowSlot);var a=c.chartArea;var ctx=c.ctx;ctx.save();ctx.strokeStyle='#C62828';ctx.lineWidth=1.5;ctx.setLineDash([3,2]);ctx.beginPath();ctx.moveTo(x,a.top);ctx.lineTo(x,a.bottom);ctx.stroke();ctx.fillStyle='#C62828';ctx.font='9px sans-serif';ctx.fillText('teraz',Math.min(x+3,a.right-26),a.top+9);ctx.restore();}catch(e){}}};
 function eur(v){v=+v||0;return (v>=0?'+':'')+v.toFixed(0)+' €';}
 function clr(v){return (+v||0)>=0?'pos':'neg';}
 function mwh(v){v=+v||0;return (Math.abs(v)>=1000?(v/1000).toFixed(1)+' MWh':v.toFixed(0)+' kWh');}
@@ -2813,7 +2837,7 @@ function box(lbl,val,sub,cls){return '<div class="box"><div class="lbl">'+lbl+'<
 function go(p){location.href='/dashboard?profile='+encodeURIComponent(p);}
 async function fleetLoad(){
   try{
-    const r=await fetch('/fleet/api',{cache:'no-store'}); const d=await r.json();
+    const r=await fetch(fUrl(),{cache:'no-store'}); const d=await r.json();
     if(d.error){document.getElementById('f-upd').textContent='chyba API';return;}
     renderFleet(d);
   }catch(e){document.getElementById('f-upd').textContent='offline (retry…)';}
@@ -2822,7 +2846,10 @@ function renderFleet(d){
   var f=d.fleet||{};
   var pwr=0, free=0;
   (d.profiles||[]).forEach(function(p){pwr+=Math.abs(+p.batt_kw_now||0); free+=(+p.free_kwh||0);});
-  document.getElementById('f-upd').textContent='aktualizované '+(d.ts||'').slice(11,19)+' · '+(f.n_running||0)+' profilov';
+  fNowSlot = (d.is_today && d.now_slot_idx!=null) ? d.now_slot_idx : null;
+  var dl=document.getElementById('f-daylbl'); if(dl) dl.textContent = d.is_today?'— live (dnes)':('— '+(d.day||'')+(d.is_range?(' … '+d.day_to+' · súčet €'):' · historický'));
+  var dot=document.getElementById('f-dot'); if(dot) dot.style.display = d.is_today?'inline-block':'none';
+  document.getElementById('f-upd').textContent=(d.is_today?'aktualizované '+(d.ts||'').slice(11,19):'deň '+(d.day||''))+' · '+(f.n_running||0)+' profilov';
   document.getElementById('f-kpi').innerHTML=
     box('Zisk dnes spolu', eur(f.total_eur), 'DT '+eur(f.dt_eur)+' · RT '+eur(f.rt_eur)+' · VDT '+eur(f.vdt_eur), clr(f.total_eur))
     +box('Výkon teraz', (pwr/1000).toFixed(1)+' MW', 'voľná '+mwh(free), '')
@@ -2876,7 +2903,7 @@ function renderFleet(d){
     (d.profiles||[]).forEach(function(p,i){
       var c=p.chart||{}; var el=document.getElementById('mc'+i); if(!el)return;
       if(_fcharts[i]){try{_fcharts[i].destroy();}catch(e){}}
-      _fcharts[i]=new Chart(el,{data:{labels:(c.labels||[]).map(function(_,k){return k;}),datasets:[
+      _fcharts[i]=new Chart(el,{plugins:[fNowLine],data:{labels:(c.labels||[]).map(function(_,k){return k;}),datasets:[
         {type:'bar',data:c.dt||[],backgroundColor:'rgba(99,153,34,.25)',borderColor:'#639922',borderWidth:1,yAxisID:'y',order:2},
         {type:'bar',data:c.vdt||[],backgroundColor:'rgba(186,117,23,.85)',borderColor:'#BA7517',borderWidth:0,yAxisID:'y',order:1},
         {type:'line',data:c.soc||[],borderColor:'#888780',borderDash:[4,3],borderWidth:1.4,pointRadius:0,yAxisID:'y1',tension:.3,order:0}
@@ -2887,20 +2914,29 @@ function renderFleet(d){
     });
   }
 }
-fleetLoad(); setInterval(fleetLoad, 10000);
+fSync(); fleetLoad(); setInterval(function(){ if(!fDay && !fTo) fleetLoad(); }, 10000);
 </script>
 """
 
 
-def _fleet_state() -> dict:
-    """Manager dashboard v2 — agregát ŽIVÉHO stavu všetkých bežiacich (bg-ON) profilov.
-    Read-only nad effect_db (€), _vdt_trade_stats (VDT pozícia), advisor cache (SOC/plán),
-    plan_store (plán dnes). Exceptions-first: zbiera alerty. Bez zásahu do enginu."""
+def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
+    """Manager dashboard v2 — agregát stavu všetkých bežiacich (bg-ON) profilov.
+    Read-only nad effect_db (€), _vdt_trade_stats (VDT pozícia), compute_current_state (dnes),
+    plan_store (DT plán). Exceptions-first: zbiera alerty. Bez zásahu do enginu.
+
+    date_iso: deň pre grafy + ekonomiku (default dnes). date_to: ak zadané, ekonomika v KPI
+    je SÚČET za rozsah [date_iso, date_to] (grafy ostávajú na date_iso)."""
     import datetime as _dt
     today_iso = _dt.date.today().isoformat()
+    day_iso = (str(date_iso)[:10] if date_iso else today_iso)
+    is_today = (day_iso == today_iso)
+    _rng_to = (str(date_to)[:10] if date_to else day_iso)
+    _is_range = (_rng_to != day_iso)
     _now = _dt.datetime.now()
-    _now_slot = f"{_now.hour:02d}:{(_now.minute // 15) * 15:02d}"
+    now_slot_idx = (_now.hour * 4 + _now.minute // 15) if is_today else None
     out = {"ts": _now.isoformat(timespec="seconds"), "today": today_iso,
+           "day": day_iso, "day_to": _rng_to, "is_today": is_today,
+           "is_range": _is_range, "now_slot_idx": now_slot_idx,
            "profiles": [], "alerts": [],
            "fleet": {"n_running": 0, "dt_eur": 0.0, "rt_eur": 0.0, "vdt_eur": 0.0,
                      "total_eur": 0.0, "vdt_buy_kwh": 0.0, "vdt_sell_kwh": 0.0,
@@ -2948,51 +2984,94 @@ def _fleet_state() -> dict:
         rec["soc_min"] = float(_pl.get("soc_min", 5.0) or 5.0)
         rec["soc_max"] = float(_pl.get("soc_max", 100.0) or 100.0)
 
-        # AKTUÁLNY STAV — autoritatívny zdroj = compute_current_state (engine trace, SOC-UNIFY).
-        # READ-ONLY: číta livesim trace + VDT + plán, NETRIGGERUJE advance/prepočet. Projektuje
-        # aktuálny SOC z posledného realizovaného SOC cez DAM+VDT po aktuálny slot. (advisor cache
-        # bola zastaraná → ukazovala nereálne 100 %.)
-        cs = None
-        try:
-            import vdt_state as _vs2
-            cs = _vs2.compute_current_state(name) or {}
-        except Exception as _e_cs:
-            print(f"[_fleet_state] compute_current_state {name}: {_e_cs}")
+        # STAV + GRAF. DNES = compute_current_state (live, engine trace, READ-ONLY, neprepočítava).
+        # MINULÝ DEŇ = DT plán + SOC z plan_store + VDT per-slot z paper_trades toho dňa.
+        _dt = []; _vdt = []; _soc = []; _lab = []
+        if is_today:
             cs = None
-        if cs and cs.get("ok") is not False:
-            rec["soc_pct"] = cs.get("current_soc_pct")
-            _si = int(cs.get("current_slot_idx", 0) or 0)
-            _dam = list(cs.get("dam_nomination_kwh") or [])
-            _vdtr = list(cs.get("vdt_realized_kwh") or [])
-            _socp = list(cs.get("soc_path_pct") or [])
-            _bk = float(cs.get("batt_kwh", 0.0) or 0.0)
-            # batt teraz (kW) = (DAM + VDT) na aktuálnom slote / 0.25 h. + = vybíja, − = nabíja.
             try:
-                _dn = (_dam[_si] if _si < len(_dam) else 0.0) + (_vdtr[_si] if _si < len(_vdtr) else 0.0)
-                rec["batt_kw_now"] = round(_dn / 0.25, 1)
-            except Exception:
-                pass
-            # voľná kapacita (nabíjací headroom z reálneho SOC)
+                import vdt_state as _vs2
+                cs = _vs2.compute_current_state(name) or {}
+            except Exception as _e_cs:
+                print(f"[_fleet_state] compute_current_state {name}: {_e_cs}")
+                cs = None
+            if cs and cs.get("ok") is not False:
+                rec["soc_pct"] = cs.get("current_soc_pct")
+                _si = int(cs.get("current_slot_idx", 0) or 0)
+                _dam = list(cs.get("dam_nomination_kwh") or [])
+                _vdtr = list(cs.get("vdt_realized_kwh") or [])
+                _socp = list(cs.get("soc_path_pct") or [])
+                _bk = float(cs.get("batt_kwh", 0.0) or 0.0)
+                try:
+                    _dn = (_dam[_si] if _si < len(_dam) else 0.0) + (_vdtr[_si] if _si < len(_vdtr) else 0.0)
+                    rec["batt_kw_now"] = round(_dn / 0.25, 1)
+                except Exception:
+                    pass
+                try:
+                    if rec["soc_pct"] is not None and _bk > 0:
+                        _smax = rec["soc_max"] - rec["soc_reserve_pct"]
+                        rec["free_kwh"] = max(0.0, (_smax - float(rec["soc_pct"])) / 100.0 * _bk)
+                except Exception:
+                    pass
+                _nslot = min(96, max(len(_dam), len(_vdtr)))
+                for i in range(_nslot):
+                    _lab.append(i)
+                    _dt.append(round((_dam[i] if i < len(_dam) else 0.0) / 0.25, 1))
+                    _vdt.append(round((_vdtr[i] if i < len(_vdtr) else 0.0) / 0.25, 1))
+                    _soc.append(round(_socp[i + 1] if i + 1 < len(_socp) else (_socp[-1] if _socp else 0.0), 1))
+        else:
             try:
-                if rec["soc_pct"] is not None and _bk > 0:
-                    _smax = rec["soc_max"] - rec["soc_reserve_pct"]
-                    rec["free_kwh"] = max(0.0, (_smax - float(rec["soc_pct"])) / 100.0 * _bk)
-            except Exception:
-                pass
-            # mini graf: DT plán (DAM, kW) + VDT (realized, kW) + SOC línia (soc_path)
-            _dt = []; _vdt = []; _soc = []; _lab = []
-            _nslot = min(96, max(len(_dam), len(_vdtr)))
-            for i in range(_nslot):
-                _lab.append(i)
-                _dt.append(round((_dam[i] if i < len(_dam) else 0.0) / 0.25, 1))
-                _vdt.append(round((_vdtr[i] if i < len(_vdtr) else 0.0) / 0.25, 1))
-                _soc.append(round(_socp[i + 1] if i + 1 < len(_socp) else (_socp[-1] if _socp else 0.0), 1))
-            rec["chart"] = {"labels": _lab, "dt": _dt, "vdt": _vdt, "soc": _soc}
+                _plan = None
+                if _ps:
+                    for _step, _kind in ((15, "dentrh"), (60, "plan")):
+                        try:
+                            _plan = _ps.load_plan_safe(day_iso, _step, kind=_kind, profile=name)
+                        except TypeError:
+                            _plan = _ps.load_plan_safe(day_iso, _step, _kind)
+                        if _plan:
+                            break
+                _sch = (_plan or {}).get("schedule") or {}
+                _bka = _sch.get("batt_kw") or []
+                _soca = _sch.get("soc_pct") or []
+                _vslot = {}
+                try:
+                    import vdt_live_advisor as _vla3, csv as _csv3
+                    _vp3 = _vla3.paper_trades_csv_path(name)
+                    if _vp3 and os.path.exists(_vp3):
+                        with open(_vp3, encoding="utf-8", newline="") as _f3:
+                            for _r3 in _csv3.DictReader(_f3):
+                                if str(_r3.get("profile") or "") != name:
+                                    continue
+                                if str(_r3.get("ts", ""))[:10] != day_iso:
+                                    continue
+                                _slk = str(_r3.get("slot", ""))[:5]
+                                _ac3 = str(_r3.get("action", "")).upper()
+                                try:
+                                    _kw3 = abs(float(_r3.get("kwh") or 0)) / 0.25
+                                except (TypeError, ValueError):
+                                    continue
+                                if _ac3 in ("BUY", "CHARGE"):
+                                    _vslot[_slk] = _vslot.get(_slk, 0.0) - _kw3
+                                elif _ac3 in ("SELL", "DISCHARGE"):
+                                    _vslot[_slk] = _vslot.get(_slk, 0.0) + _kw3
+                except Exception:
+                    pass
+                for i in range(len(_bka)):
+                    _lab.append(i)
+                    _dt.append(round(float(_bka[i] or 0.0), 1))
+                    _soc.append(round(float(_soca[i] if i < len(_soca) else 0.0) or 0.0, 1))
+                    _hh = f"{i // 4:02d}:{(i % 4) * 15:02d}"
+                    _vdt.append(round(_vslot.get(_hh, 0.0), 1))
+                if _soc:
+                    rec["soc_pct"] = _soc[-1]   # koncový SOC dňa (historicky)
+            except Exception as _e_hist:
+                print(f"[_fleet_state hist] {name}/{day_iso}: {_e_hist}")
+        rec["chart"] = {"labels": _lab, "dt": _dt, "vdt": _vdt, "soc": _soc}
 
-        # Ekonomika dnes (effect_db)
+        # Ekonomika za deň (alebo SÚČET za rozsah ak date_to) — effect_db
         if _edb:
             try:
-                eff = _edb.get_period_effect(name, today_iso, today_iso) or {}
+                eff = _edb.get_period_effect(name, day_iso, _rng_to) or {}
                 rec["dt_eur"] = float(eff.get("dt_eur", 0.0) or 0.0)
                 rec["rt_eur"] = float(eff.get("rt_eur", 0.0) or 0.0)
                 rec["vdt_eur"] = float(eff.get("vdt_arb_eur", 0.0) or 0.0)
@@ -3000,9 +3079,9 @@ def _fleet_state() -> dict:
             except Exception:
                 pass
 
-        # VDT pozícia dnes
+        # VDT pozícia (vybraný deň)
         try:
-            vs = _vdt_trade_stats(name, today_iso) or {}
+            vs = _vdt_trade_stats(name, day_iso) or {}
             rec["vdt_buy_kwh"] = float(vs.get("buy_kwh", 0.0) or 0.0)
             rec["vdt_sell_kwh"] = float(vs.get("sell_kwh", 0.0) or 0.0)
             rec["vdt_buy_avg"] = float(vs.get("buy_avg", 0.0) or 0.0)
@@ -3011,23 +3090,23 @@ def _fleet_state() -> dict:
         except Exception:
             pass
 
-        # Plán dnes?
+        # Plán pre vybraný deň?
         if _ps:
             try:
                 for step, kind in ((15, "dentrh"), (60, "plan")):
-                    if _ps.has_plan(today_iso, step, kind, profile=name):
+                    if _ps.has_plan(day_iso, step, kind, profile=name):
                         rec["has_plan"] = True
                         break
             except Exception:
                 pass
 
-        # === Alerty (exceptions-first) ===
+        # === Alerty (exceptions-first) === (len pre DNES — historický deň alerty nemá zmysel)
         _al = rec["alerts"]
-        if not rec["has_plan"]:
+        if is_today and not rec["has_plan"]:
             _al.append({"sev": "warn", "msg": "Chýba plán pre dnes"})
             out["fleet"]["n_no_plan"] += 1
         _soc = rec["soc_pct"]
-        if _soc is not None:
+        if is_today and _soc is not None:
             _lo = rec["soc_min"] + rec["soc_reserve_pct"]
             _hi = rec["soc_max"] - rec["soc_reserve_pct"]
             if _soc < _lo - 0.5:
@@ -3035,7 +3114,7 @@ def _fleet_state() -> dict:
             elif _soc > _hi + 0.5:
                 _al.append({"sev": "warn", "msg": f"SOC {_soc:.0f}% nad pásmom ({_hi:.0f}%)"})
         # VDT nepárová pozícia (nákup >> predaj = nespárované nákupy)
-        if rec["vdt_buy_kwh"] > 1.0 and rec["vdt_saldo_kwh"] > 0.15 * rec["vdt_buy_kwh"] \
+        if is_today and rec["vdt_buy_kwh"] > 1.0 and rec["vdt_saldo_kwh"] > 0.15 * rec["vdt_buy_kwh"] \
                 and rec["vdt_saldo_kwh"] > 100.0:
             _al.append({"sev": "warn",
                         "msg": f"VDT nespárované +{rec['vdt_saldo_kwh']:.0f} kWh "
@@ -3065,22 +3144,25 @@ def _fleet_state() -> dict:
     return out
 
 
-_FLEET_API_CACHE = {"ts": 0.0, "data": None}
+_FLEET_API_CACHE = {}
 
 
 @app.get("/fleet/api")
-def fleet_api():
+def fleet_api(date: str = None, date_to: str = None):
     """JSON pre live polling manager dashboardu v2. READ-ONLY (compute_current_state
-    netriggeruje advance/prepočet). Krátky TTL cache (6 s) — viac otvorených tabov / rýchle
-    polly nespustia agregát opakovane (číta CSV+VDT+DB per profil)."""
+    netriggeruje advance/prepočet). date = deň pre grafy+ekonomiku (default dnes),
+    date_to = súčet ekonomiky za rozsah. Krátky TTL cache (6 s) per (date,date_to)."""
     import time as _t
     try:
+        _key = (str(date or ""), str(date_to or ""))
         _now = _t.time()
-        if _FLEET_API_CACHE["data"] is not None and (_now - _FLEET_API_CACHE["ts"]) < 6.0:
-            return _FLEET_API_CACHE["data"]
-        d = _fleet_state()
-        _FLEET_API_CACHE["ts"] = _now
-        _FLEET_API_CACHE["data"] = d
+        _c = _FLEET_API_CACHE.get(_key)
+        if _c is not None and (_now - _c[0]) < 6.0:
+            return _c[1]
+        d = _fleet_state(date, date_to)
+        _FLEET_API_CACHE[_key] = (_now, d)
+        if len(_FLEET_API_CACHE) > 40:
+            _FLEET_API_CACHE.clear()
         return d
     except Exception as ex:
         import traceback as _tb
