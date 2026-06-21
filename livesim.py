@@ -2078,6 +2078,16 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                 _hi_f = _gke_kwh_fut if _gke_kwh_fut is not None else float("inf")
                                 _lo_f = -_gki_kwh_fut if _gki_kwh_fut is not None else float("-inf")
                                 _fut_plan_grid = [max(_lo_f, min(_hi_f, x)) for x in _fut_plan_grid]
+                            # ZISK-ZA-DEN-FULL (2026-06-21, user: "Zisk za deň = očakávaný efekt
+                            # za CELÝ deň, nie k aktuálnemu momentu"): dopočítaj DT efekt aj pre
+                            # BUDÚCE periódy (projekcia D-1 plánu) z dtprof. Hraničnú (čiastočne
+                            # realizovanú) periódu vynecháme — tú už PLNE počíta tr (dtprof/cnt cez
+                            # realizované minúty). RT budúce ostáva 0 (nedá sa projektovať), VDT je
+                            # celodenné (committed trades). Týka sa LEN projekcie zobrazenia (fut),
+                            # NIE realizovaných €/obchodov/golden.
+                            _bnd_pj = pj[0] if pj else -1
+                            _fut_dt_rev = [0.0 if _p == _bnd_pj else float(dtprof[_p]) / max(int(step), 1)
+                                           for _p in pj]
                             fut = pd.DataFrame({
                                 "time": fut_idx, "ts15": fut_idx.floor("15min"),
                                 "plan_batt_dam_kw": _fut_dam,
@@ -2090,7 +2100,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                 "dt_eur": [float(price[i]) for i in pj],
                                 "ftv_kw": [float(pvper[i]) for i in pj],
                                 "soc_pct": socs, "soc_kwh": socs_kwh,
-                                "rt_dir": 0.0, "rt_power_pct": 0.0, "rt_rev_min": 0.0, "dt_rev_min": 0.0,
+                                "rt_dir": 0.0, "rt_power_pct": 0.0, "rt_rev_min": 0.0, "dt_rev_min": _fut_dt_rev,
                                 "rt_reason": "plán", "date": d.isoformat(),
                                 "cum_dt": last_cum_dt, "cum_rt": last_cum_rt,
                                 "cum_total": last_cum_dt + last_cum_rt,
