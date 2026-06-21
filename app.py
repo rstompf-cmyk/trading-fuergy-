@@ -2846,14 +2846,14 @@ async function fleetLoad(){
 }
 function renderFleet(d){
   var f=d.fleet||{};
-  var pwr=0, free=0;
-  (d.profiles||[]).forEach(function(p){pwr+=Math.abs(+p.batt_kw_now||0); free+=(+p.free_kwh||0);});
+  var pwr=0, free=0, expSum=0;
+  (d.profiles||[]).forEach(function(p){pwr+=Math.abs(+p.batt_kw_now||0); free+=(+p.free_kwh||0); expSum+=(p.expected_eur!=null?+p.expected_eur:(+p.total_eur||0));});
   fNowSlot = (d.is_today && d.now_slot_idx!=null) ? d.now_slot_idx : null;
   var dl=document.getElementById('f-daylbl'); if(dl) dl.textContent = d.is_today?'— live (dnes)':('— '+(d.day||'')+(d.is_range?(' … '+d.day_to+' · súčet €'):' · historický'));
   var dot=document.getElementById('f-dot'); if(dot) dot.style.display = d.is_today?'inline-block':'none';
   document.getElementById('f-upd').textContent=(d.is_today?'aktualizované '+(d.ts||'').slice(11,19):'deň '+(d.day||''))+' · '+(f.n_running||0)+' profilov';
   document.getElementById('f-kpi').innerHTML=
-    box('Zisk dnes spolu', eur(f.total_eur), 'DT '+eur(f.dt_eur)+' · RT '+eur(f.rt_eur)+' · VDT '+eur(f.vdt_eur), clr(f.total_eur))
+    box('Zisk teraz / očak. deň', eur(f.total_eur)+' / '+eur(expSum), 'DT '+eur(f.dt_eur)+' · RT '+eur(f.rt_eur)+' · VDT '+eur(f.vdt_eur), clr(f.total_eur))
     +box('Výkon teraz', (pwr/1000).toFixed(1)+' MW', 'voľná '+mwh(free), '')
     +box('VDT pozícia', Math.round(f.vdt_buy_kwh||0)+'/'+Math.round(f.vdt_sell_kwh||0)+' kWh', 'nákup / predaj', '')
     +box('Alerty', (f.n_alerts||0), (f.n_no_plan||0)+' bez plánu', (f.n_alerts>0?'neg':'pos'));
@@ -2880,7 +2880,10 @@ function renderFleet(d){
     var cal='';(p.alerts||[]).forEach(function(a){cal+='<div class="cal">'+esc(a.msg)+'</div>';});
     ch+='<div class="card" style="border-top-color:'+hcol+'" onclick="goLive(\\''+esc(p.name)+'\\')" title="Otvoriť živú simuláciu profilu">'
       +'<div class="chead"><span class="cname">'+esc(p.name)+' →</span>'
-      +'<span><span class="chip '+(real?'c-real':'c-sim')+'">'+(real?'real':'sim')+'</span> <b style="font-size:14px" class="'+clr(p.total_eur)+'">'+eur(p.total_eur)+'</b></span></div>'
+      +'<span><span class="chip '+(real?'c-real':'c-sim')+'">'+(real?'real':'sim')+'</span> '
+      +'<b style="font-size:14px" class="'+clr(p.total_eur)+'" title="aktuálny efekt (realizovaný k teraz)">'+eur(p.total_eur)+'</b>'
+      +((p.expected_eur!=null)?' <span style="font-size:11px;color:#888" title="očakávaný efekt za celý deň">· deň '+eur(p.expected_eur)+'</span>':'')
+      +'</span></div>'
       +'<div class="cbody">'
         +'<div class="cleft">'
           +'<div class="socbig" style="color:'+socCol+'">'+(soc==null?'—':soc.toFixed(0)+'%')+' <span style="font-size:11px;color:#999;font-weight:400">SOC</span></div>'
@@ -2971,7 +2974,7 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
 
     for name in running:
         rec = {"name": name, "mode": "simulation", "soc_pct": None, "batt_kw_now": None,
-               "dt_eur": 0.0, "rt_eur": 0.0, "vdt_eur": 0.0, "total_eur": 0.0,
+               "dt_eur": 0.0, "rt_eur": 0.0, "vdt_eur": 0.0, "total_eur": 0.0, "expected_eur": None,
                "vdt_buy_kwh": 0.0, "vdt_sell_kwh": 0.0, "vdt_buy_avg": 0.0,
                "vdt_sell_avg": 0.0, "vdt_saldo_kwh": 0.0, "has_plan": False,
                "soc_reserve_pct": 0.0, "soc_min": 5.0, "soc_max": 100.0,
@@ -3097,6 +3100,26 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
             rec["vdt_saldo_kwh"] = rec["vdt_buy_kwh"] - rec["vdt_sell_kwh"]
         except Exception:
             pass
+
+        # OČAKÁVANÝ celodenný efekt (DNES): rovnaký zdroj ako /livesim "Zisk za deň" =
+        # today_trace (realizované tr + projekcia fut) sčítané cez compute_effect_totals.
+        # Čítam bg-vypočítaný today_trace z render-cache → žiadny extra prepočet. Pre minulý
+        # deň ostáva None → frontend zobrazí len aktuálny (= celodenný, rovnaké).
+        if is_today:
+            try:
+                from core.effect import compute_effect_totals as _eff_f
+                _r = None
+                with _LIVESIM_R_CACHE_LOCK:
+                    for _k in list(_LIVESIM_R_CACHE.keys()):
+                        if _k[2] == name and isinstance(_LIVESIM_R_CACHE.get(_k, (0, None))[1], dict):
+                            _r = _LIVESIM_R_CACHE[_k][1]
+                            break
+                _tt = (_r or {}).get("today_trace")
+                if _tt is not None and len(_tt):
+                    _et = _eff_f(_tt, profile=name, day=day_iso)
+                    rec["expected_eur"] = round(float(_et.get("total_eur", 0.0)), 1)
+            except Exception as _e_exp:
+                print(f"[_fleet_state expected] {name}: {_e_exp}")
 
         # Plán pre vybraný deň?
         if _ps:
@@ -3608,6 +3631,34 @@ def dashboard(profile: str = ""):
     vdt_eur = float(state.get("vdt_realized_eur", 0.0))
     data_ok = bool(state.get("data_completeness", False))
 
+    # Efekt dnes: AKTUÁLNY (effect_db realizovaný k teraz) + OČAKÁVANÝ (celodenný = today_trace
+    # tr+fut, rovnaký zdroj ako /livesim "Zisk za deň" a fleet karty). today_trace z bg-cache.
+    import datetime as _dt_db
+    _today_iso = _dt_db.date.today().isoformat()
+    _eff_now = 0.0; _eff_exp = None
+    try:
+        import core.effect_db as _edb_d
+        _e_now = _edb_d.get_period_effect(prof, _today_iso, _today_iso) or {}
+        _eff_now = float(_e_now.get("total_eur", 0.0) or 0.0)
+    except Exception:
+        pass
+    try:
+        from core.effect import compute_effect_totals as _eff_f_d
+        _r_d = None
+        with _LIVESIM_R_CACHE_LOCK:
+            for _k in list(_LIVESIM_R_CACHE.keys()):
+                if _k[2] == prof and isinstance(_LIVESIM_R_CACHE.get(_k, (0, None))[1], dict):
+                    _r_d = _LIVESIM_R_CACHE[_k][1]
+                    break
+        _tt_d = (_r_d or {}).get("today_trace")
+        if _tt_d is not None and len(_tt_d):
+            _eff_exp = round(float((_eff_f_d(_tt_d, profile=prof, day=_today_iso) or {}).get("total_eur", 0.0)), 1)
+    except Exception as _e_exp_d:
+        print(f"[dashboard expected] {prof}: {_e_exp_d}")
+    if _eff_exp is None:
+        _eff_exp = round(_eff_now, 1)
+    _eff_col = "#2E7D32" if _eff_now >= 0 else "#C62828"
+
     # Mode color
     if prof_mode == "real":
         chip_bg = "#C62828"
@@ -3667,6 +3718,12 @@ def dashboard(profile: str = ""):
         f'<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px">VDT zisk dnes</div>'
         f'<div style="font-size:28px;font-weight:700;color:{profit_color};margin:4px 0">{vdt_eur:+.2f} €</div>'
         f'<div style="font-size:11px;color:#999">{vdt_n} paper trades</div>'
+        f'</div>'
+        f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid {_eff_col}">'
+        f'<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px">Efekt dnes (teraz / očak.)</div>'
+        f'<div style="font-size:24px;font-weight:700;color:{_eff_col};margin:4px 0">{_eff_now:+.1f} € '
+        f'<span style="font-size:14px;color:#888">/ {_eff_exp:+.1f} €</span></div>'
+        f'<div style="font-size:11px;color:#999">realizovaný teraz / očakávaný za celý deň</div>'
         f'</div>'
         f'<div style="background:#fff;border-radius:10px;padding:14px;border-left:4px solid #1F4E78">'
         f'<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px">Batéria</div>'
