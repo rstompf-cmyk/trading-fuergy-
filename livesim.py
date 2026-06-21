@@ -2270,14 +2270,15 @@ def available_days(case: str, port: str = "8000", profile=None):
         return []
 
 
-def load_series(case: str, port: str = "8000", day=None, max_points: int = 2000):
+def load_series(case: str, port: str = "8000", day=None, max_points: int = 2000, profile=None):
     """Načíta rady z CSV pre grafy. day=None → celé (decimované); inak len daný deň (jemné).
+    profile=None → aktívny profil; inak konkrétny profil (per-profil súbory, LIVESIM-PER-PROFILE).
 
     Dedup: ak CSV obsahuje viacero riadkov pre tú istú minútu (= rôzne advance() behy
     pre rovnaké nastavenia, znak že settings_sig reset zlyhal), ponecháme **POSLEDNÝ**
     výskyt (= najnovší výpočet). Tým sa grafy nezdvojnásobia.
     """
-    df = _read_csv(case, port)
+    df = _read_csv(case, port, profile)
     # Bug AVAILABLE-DAYS-NO-TIME: df môže prísť bez stĺpca 'time' (rozpísaný CSV
     # počas backfillu) → nepadni, vráť None (volajúci to zvládne / ukáže progress).
     if df is None or df.empty or "time" not in getattr(df, "columns", []):

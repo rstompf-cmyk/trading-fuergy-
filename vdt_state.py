@@ -181,7 +181,7 @@ def _get_current_soc_from_livesim_today(profile: str, today: dt.date,
     try:
         def _meta_mtime(_c):
             try:
-                _, _mp = _ls.paths(_c, port)
+                _, _mp = _ls.paths(_c, port, profile)
                 return os.path.getmtime(_mp)
             except OSError:
                 return 0.0
@@ -190,7 +190,7 @@ def _get_current_soc_from_livesim_today(profile: str, today: dt.date,
         pass
     for case in _cases:
         try:
-            df = _ls.load_series(case, port=port, day=day_iso, max_points=10**9)
+            df = _ls.load_series(case, port=port, day=day_iso, max_points=10**9, profile=profile)
         except Exception:
             continue
         if (df is None or df.empty or "soc_pct" not in df.columns
@@ -217,7 +217,7 @@ def _get_current_soc_from_livesim_today(profile: str, today: dt.date,
     # graf na /livesim (vrátane RT), nie vlastnú integráciu bez RT.
     for case in _cases:
         try:
-            _, _mp = _ls.paths(case, port)
+            _, _mp = _ls.paths(case, port, profile)
             _meta = _ls._load_meta(_mp) or {}
         except Exception:
             continue
