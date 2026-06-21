@@ -1251,7 +1251,7 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
                 print(f"[plan_batch #631] purge_history_range zlyhal: {_e_purge}")
         yield ("<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
                 f"<title>Batch ({from_date}→{to_date})</title>"
-                "<style>body{font-family:-apple-system,Segoe UI,Arial;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}"
+                "<style>body{font-family:-apple-system,Segoe UI,Arial;max-width:100%;margin:24px auto;padding:0 16px;color:#222}"
                 "h1,h2{color:#1F4E78} table{border-collapse:collapse;width:100%;font-size:14px}"
                 "th,td{border:1px solid #e3e3e3;padding:6px 10px;text-align:left} th{background:#1F4E78;color:#fff}"
                 ".prog{background:#eef1f5;border-radius:6px;height:10px;overflow:hidden;margin:8px 0}"
@@ -2286,7 +2286,7 @@ def form_page(msg=""):
 <title>{_APP_NAME} — Plán D-1</title><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1680px;margin:24px auto;padding:0 16px;color:#222}}
+<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:100%;margin:24px auto;padding:0 16px;color:#222}}
 h1{{color:#1F4E78}} fieldset{{border:1px solid #e0e0e0;border-radius:10px;margin:12px 0;padding:12px 16px}}
 legend{{color:#2E75B6;font-weight:600}} .cols{{display:grid;grid-template-columns:1fr 1fr;gap:0 24px}}
 .cols3{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 20px}}
@@ -3641,7 +3641,7 @@ def dashboard(profile: str = ""):
         for href, lab in pages)
 
     body = (
-        f'<div style="max-width:1280px;margin:18px auto;padding:0 16px">'
+        f'<div style="max-width:100%;margin:18px auto;padding:0 16px">'
         f'<h1 style="margin:0 0 14px;display:flex;align-items:center;gap:12px;color:#1F4E78">'
         f'<span style="background:{chip_bg};color:#fff;padding:6px 18px;border-radius:10px;font-size:20px">'
         f'{chip_icon} {_html.escape(prof)}</span>'
@@ -3820,7 +3820,7 @@ def _dentrh_form(msg=""):
 <title>Denný trh 15-min</title><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1680px;margin:24px auto;padding:0 16px;color:#222}}
+<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:100%;margin:24px auto;padding:0 16px;color:#222}}
 h1{{color:#1F4E78}} fieldset{{border:1px solid #e0e0e0;border-radius:10px;margin:12px 0;padding:12px 16px}}
 legend{{color:#2E75B6;font-weight:600}} .cols{{display:grid;grid-template-columns:1fr 1fr;gap:0 24px}}
 button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-size:15px;cursor:pointer}}
@@ -6606,7 +6606,7 @@ def livesim_get(case: str = None, start: str = None, view: str = None, curtail: 
                         pass
         head = ("""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Živá simulácia</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{font-family:-apple-system,Segoe UI,Arial;max-width:1680px;margin:24px auto;padding:0 16px;color:#222}
+<style>body{font-family:-apple-system,Segoe UI,Arial;max-width:100%;margin:24px auto;padding:0 16px;color:#222}
 h1,h2{color:#1F4E78} .card{background:#f3f6fb;border-radius:10px;padding:10px 14px;min-width:150px}
 .card .l{font-size:12px;color:#666} .card .v{font-size:22px;font-weight:700}
 label{font-size:14px} input,select{padding:5px 8px;border:1px solid #ccc;border-radius:7px}
@@ -7502,7 +7502,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         tb = traceback.format_exc()
         return ("<!doctype html><html lang='sk'><head><meta charset='utf-8'>"
                 "<title>Živá simulácia – chyba</title></head>"
-                "<body style='font-family:-apple-system,Segoe UI,Arial;max-width:1680px;margin:24px auto;padding:0 16px'>"
+                "<body style='font-family:-apple-system,Segoe UI,Arial;max-width:100%;margin:24px auto;padding:0 16px'>"
                 "<h2 style='color:#C00000'>Živá simulácia – chyba</h2>"
                 f"<p><b>{type(ex).__name__}: {ex}</b></p>"
                 "<pre style='white-space:pre-wrap;background:#fff5f5;border:1px solid #f3c2c2;border-radius:8px;"
@@ -9750,7 +9750,7 @@ body {{
     radial-gradient(ellipse 800px 400px at 0% 100%,rgba(96,165,250,.05),transparent 70%);
   background-attachment:fixed;
 }}
-.page {{ padding:24px 28px 64px; max-width:1640px; margin:0 auto; }}
+.page {{ padding:24px 28px 64px; max-width:100%; margin:0 auto; }}
 h1 {{ font-size:28px; font-weight:600; letter-spacing:-.02em; }}
 a {{ color:var(--accent-2); text-decoration:none; }}
 a:hover {{ color:var(--accent); }}
@@ -10552,7 +10552,7 @@ def _realio_nastavenie_page(msg: str = "", msg_kind: str = "info", cust: str = "
 
     return f"""<!doctype html><html lang="sk"><head><meta charset="utf-8">
 <title>Reálne meranie + riadenie</title><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}}
+<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:100%;margin:24px auto;padding:0 16px;color:#222}}
 h1{{color:#1F4E78}} h2{{color:#2E75B6;margin:18px 0 8px}}
 h3{{color:#1F4E78;font-size:15px;margin:12px 0 4px}}
 fieldset{{border:1px solid #e0e0e0;border-radius:10px;margin:12px 0;padding:12px 16px}}
@@ -10987,7 +10987,7 @@ def vdt_live_advisor_page(
     nav = _nav("/vdt")
     body = (
         f"{nav}"
-        f"<div style='max-width:1500px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78;margin-bottom:4px'>🎯 Odporúčanie TERAZ — Live MPC advisor</h1>"
         f"{_vdt_subnav('/vdt/live_advisor')}"
@@ -12003,7 +12003,7 @@ def vdt_d1_page(date: str = "", profile: str = ""):
     nav = _nav("/vdt")
     body = (
         f"{nav}"
-        f"<div style='max-width:1500px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78;margin-bottom:4px'>📅 D-1 plán — {market_label}</h1>"
         f"{_vdt_subnav('/vdt/d1')}"
@@ -12316,7 +12316,7 @@ def vdt_backtest_page(
     nav = _nav("/vdt")
     body = (
         f"{nav}"
-        f"<div style='max-width:1500px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78;margin-bottom:4px'>📜 VDT Backtest</h1>"
         f"{_vdt_subnav('/vdt/backtest')}"
@@ -12623,7 +12623,7 @@ def vdt_simulator_page(
     nav = _nav("/vdt")
     body = (
         f"{nav}"
-        f"<div style='max-width:1500px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78;margin-bottom:4px'>🎯 VDT Simulátor</h1>"
         f"{_vdt_subnav('/vdt/simulator')}"
@@ -13289,7 +13289,7 @@ def vdt_board_page(
 
     body = (
         f"{nav}"
-        f"<div style='max-width:1400px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78;margin-bottom:6px'>⚡ VDT Arbitrage cockpit — {date_obj.isoformat()}</h1>"
         f"{_vdt_subnav('/vdt/board')}"
@@ -13552,7 +13552,7 @@ def vdt_wsdl_page():
 
     res = _vdt.fetch_wsdl()
     nav = _nav("/vdt")
-    body = f"{nav}<div style='max-width:1400px;margin:14px auto;padding:0 16px;font-family:-apple-system,Segoe UI,Arial'>"
+    body = f"{nav}<div style='max-width:100%;margin:14px auto;padding:0 16px;font-family:-apple-system,Segoe UI,Arial'>"
     body += f"<h1 style='color:#1F4E78'>📋 OKTE IdmOrderBook WSDL</h1>"
     body += _vdt_subnav("/vdt/test_orderbook")
     body += f"<p><b>URL:</b> <code>{_html.escape(str(res.get('url','?')))}</code> · "
@@ -13632,7 +13632,7 @@ def vdt_zco_backtest_page(date_from: str = "", date_to: str = "",
     nav = _nav("/vdt")
     body = (
         f"{nav}"
-        f"<div style='max-width:1500px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78;margin-bottom:4px'>💡 ZCO Backtest — keby som obchodoval cez ZCO</h1>"
         f"{_vdt_subnav('/vdt/zco_backtest')}"
@@ -13864,7 +13864,7 @@ def auto_control_page():
     nav = _nav("/auto_control")
     body = (
         f"{nav}"
-        f"<div style='max-width:1500px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78;margin-bottom:4px'>🤖 Paper trading (Fáza A.5 simulation)</h1>"
         f"<p style='color:#666;margin:0 0 12px;font-size:13px'>"
@@ -14463,7 +14463,7 @@ def vdt_test_orderbook_page(duration: int = 0):
     nav = _nav("/vdt")
     body = (
         f"{nav}"
-        f"<div style='max-width:1600px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78'>🔧 SOAP IdmOrderBook — debug</h1>"
         f"{_vdt_subnav('/vdt/test_orderbook')}"
@@ -14516,7 +14516,7 @@ def vdt_page(request: Request):
         import okte_vdt as _vdt
     except ImportError:
         return ("<!doctype html><html><head><meta charset='utf-8'><title>OKTE VDT</title></head>"
-                "<body style='font-family:-apple-system,Segoe UI,Arial;max-width:1100px;margin:24px auto;padding:0 16px'>"
+                "<body style='font-family:-apple-system,Segoe UI,Arial;max-width:100%;margin:24px auto;padding:0 16px'>"
                 "<h1>💹 OKTE VDT</h1>"
                 "<p style='background:#ffeaea;padding:12px;border-radius:8px;color:#C0392B'>"
                 "⚠ Modul <code>okte_vdt.py</code> nie je dostupný. Skontroluj inštaláciu.</p>"
@@ -14661,7 +14661,7 @@ def vdt_page(request: Request):
         f"</div>")
     body = (
         f"{nav}"
-        f"<div style='max-width:1200px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78'>💹 OKTE ISOT VDT (intraday)</h1>"
         f"{_vdt_subnav('/vdt')}"
@@ -14754,7 +14754,7 @@ def vdt_backfill_range_endpoint(
     nav = _nav("/vdt")
     body = (
         f"{nav}"
-        f"<div style='max-width:1100px;margin:14px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:14px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1>📥 VDT Backfill — výsledok</h1>"
         f"<p><b>Rozsah:</b> {_html.escape(date_from)} → {_html.escape(date_to)} · "
@@ -14781,7 +14781,7 @@ def vdt_inspect_cert_endpoint():
     nav = _nav("/vdt")
     body = (
         f"{nav}"
-        f"<div style='max-width:1100px;margin:20px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:20px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1>🪪 OKTE VDT — Diagnostika certifikátu</h1>"
         f"<pre style='background:#fff;padding:14px;border-radius:8px;border:1px solid #ddd;"
@@ -14854,7 +14854,7 @@ def vdt_discover_endpoint():
 
     body = (
         f"{nav}"
-        f"<div style='max-width:1200px;margin:20px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:20px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1>🔍 OKTE VDT — Discovery</h1>"
         f"<p style='color:#666'>Skúšam ~50 URL variantov pre 5 endpointov. "
@@ -14889,7 +14889,7 @@ def vdt_probe_endpoint():
     nav = _nav("/vdt")
     body = (
         f"{nav}"
-        f"<div style='max-width:1100px;margin:20px auto;padding:0 16px;"
+        f"<div style='max-width:100%;margin:20px auto;padding:0 16px;"
         f"font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1>🔍 OKTE VDT — výsledok probe</h1>"
         f"<p>{'✓ OK' if res.get('ok') else '⚠ Niečo zlyhalo'} — "
@@ -15417,7 +15417,7 @@ def realio_batt_plan_export_preview(day: str = "", profile: str = ""):
 
     body = (
         f"{nav}"
-        f"<div style='max-width:1100px;margin:20px auto;padding:0 16px;font-family:-apple-system,Segoe UI,Arial'>"
+        f"<div style='max-width:100%;margin:20px auto;padding:0 16px;font-family:-apple-system,Segoe UI,Arial'>"
         f"<h1 style='color:#1F4E78'>📤 Export riadenia batérie 15-min</h1>"
         f"<div style='background:#fff3cd;border-left:6px solid #C49000;padding:12px 16px;border-radius:8px;margin:12px 0'>"
         f"<b>⚠ POZOR:</b> Po potvrdení sa <b>96 setpointov</b> zapíše priamo na Bender server "
