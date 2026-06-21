@@ -2751,7 +2751,7 @@ def _mpc_section_for_profile(profile: str, plan_params: dict) -> str:
 
 _FLEET_V2_HTML = """
 <style>
-#fleetv2{font-family:-apple-system,Segoe UI,Arial;max-width:1500px;margin:0 auto;color:#1a2330}
+#fleetv2{font-family:-apple-system,Segoe UI,Arial;width:100%;color:#1a2330}
 #fleetv2 .fhead{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:4px 0 14px}
 #fleetv2 h1{color:#1F4E78;margin:0;font-size:22px}
 #fleetv2 .upd{font-size:12px;color:#888}
@@ -2769,7 +2769,7 @@ _FLEET_V2_HTML = """
 #fleetv2 .a-info{background:#eef3fb;border-left:4px solid #1F88E5;color:#2a5580}
 #fleetv2 .a-prof{font-weight:600;cursor:pointer;text-decoration:underline}
 #fleetv2 .noalert{background:#e8f5e9;border-left:4px solid #2E7D32;color:#1B5E20;padding:8px 12px;border-radius:8px;font-size:13px}
-#fleetv2 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:12px}
+#fleetv2 .cards{display:grid;grid-template-columns:1fr;gap:12px}
 #fleetv2 .card{background:#fff;border-radius:12px;padding:13px 15px;box-shadow:0 2px 6px rgba(0,0,0,.08);cursor:pointer;transition:box-shadow .15s;border-top:3px solid #2E7D32}
 #fleetv2 .card:hover{box-shadow:0 4px 14px rgba(0,0,0,.14)}
 #fleetv2 .chead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:8px}
@@ -2788,7 +2788,7 @@ _FLEET_V2_HTML = """
 #fleetv2 .stat .k{color:#888}#fleetv2 .stat .v{text-align:right;font-weight:600}
 #fleetv2 .leg{display:flex;gap:11px;font-size:10px;color:#888;margin:0 0 4px}
 #fleetv2 .leg i{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:0}
-#fleetv2 .mini{position:relative;width:100%;height:140px}
+#fleetv2 .mini{position:relative;width:100%;height:170px}
 #fleetv2 .pos{color:#2E7D32}#fleetv2 .neg{color:#C62828}
 #fleetv2 .cal{font-size:11px;color:#C62828;margin-top:6px}
 @media(max-width:700px){#fleetv2 .cards{grid-template-columns:1fr}#fleetv2 .cleft{flex:1 1 100%}#fleetv2 .mini{height:120px}}

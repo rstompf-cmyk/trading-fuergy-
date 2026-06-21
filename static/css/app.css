@@ -38,10 +38,12 @@ a:hover { text-decoration: underline; }
 
 /* Layout */
 .container {
-  max-width: 1680px;
+  max-width: 100%;
   margin: 24px auto;
-  padding: 0 16px;
+  padding: 0 24px;
 }
+/* Formuláre a úzke stránky ostávajú obmedzené (čitateľnosť); dátové/dashboard stránky
+   idú na celú šírku obrazovky (responzívne). */
 .container-narrow { max-width: 980px; }
 .container-form { max-width: 680px; }
 
