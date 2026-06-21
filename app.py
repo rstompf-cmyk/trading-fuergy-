@@ -2924,7 +2924,7 @@ def _fleet_state() -> dict:
                "vdt_buy_kwh": 0.0, "vdt_sell_kwh": 0.0, "vdt_buy_avg": 0.0,
                "vdt_sell_avg": 0.0, "vdt_saldo_kwh": 0.0, "has_plan": False,
                "soc_reserve_pct": 0.0, "soc_min": 5.0, "soc_max": 100.0,
-               "adv_ts": "", "alerts": []}
+               "free_kwh": None, "chart": {}, "adv_ts": "", "alerts": []}
         try:
             pdata = _pr.load_profile(name) or {}
         except Exception:
@@ -2935,27 +2935,46 @@ def _fleet_state() -> dict:
         rec["soc_min"] = float(_pl.get("soc_min", 5.0) or 5.0)
         rec["soc_max"] = float(_pl.get("soc_max", 100.0) or 100.0)
 
-        # SOC + plán teraz z advisor cache
-        full_plan = []
-        if _adv:
+        # AKTUÁLNY STAV — autoritatívny zdroj = compute_current_state (engine trace, SOC-UNIFY).
+        # READ-ONLY: číta livesim trace + VDT + plán, NETRIGGERUJE advance/prepočet. Projektuje
+        # aktuálny SOC z posledného realizovaného SOC cez DAM+VDT po aktuálny slot. (advisor cache
+        # bola zastaraná → ukazovala nereálne 100 %.)
+        cs = None
+        try:
+            import vdt_state as _vs2
+            cs = _vs2.compute_current_state(name) or {}
+        except Exception as _e_cs:
+            print(f"[_fleet_state] compute_current_state {name}: {_e_cs}")
+            cs = None
+        if cs and cs.get("ok") is not False:
+            rec["soc_pct"] = cs.get("current_soc_pct")
+            _si = int(cs.get("current_slot_idx", 0) or 0)
+            _dam = list(cs.get("dam_nomination_kwh") or [])
+            _vdtr = list(cs.get("vdt_realized_kwh") or [])
+            _socp = list(cs.get("soc_path_pct") or [])
+            _bk = float(cs.get("batt_kwh", 0.0) or 0.0)
+            # batt teraz (kW) = (DAM + VDT) na aktuálnom slote / 0.25 h. + = vybíja, − = nabíja.
             try:
-                cache = _adv.load_cache(profile=name) or {}
-                state = cache.get("state") or {}
-                rec["soc_pct"] = state.get("current_soc_pct")
-                rec["adv_ts"] = str(cache.get("ts", ""))[:16]
-                full_plan = cache.get("full_plan") or []
+                _dn = (_dam[_si] if _si < len(_dam) else 0.0) + (_vdtr[_si] if _si < len(_vdtr) else 0.0)
+                rec["batt_kw_now"] = round(_dn / 0.25, 1)
             except Exception:
                 pass
-        for ps_slot in (full_plan or []):
-            if str(ps_slot.get("slot", ""))[:5] == _now_slot:
-                try:
-                    _kw = float(ps_slot.get("kwh", 0) or 0) / 0.25
-                    _act = str(ps_slot.get("action", "idle"))
-                    rec["batt_kw_now"] = (-_kw if _act == "charge"
-                                          else _kw if _act == "discharge" else 0.0)
-                except Exception:
-                    pass
-                break
+            # voľná kapacita (nabíjací headroom z reálneho SOC)
+            try:
+                if rec["soc_pct"] is not None and _bk > 0:
+                    _smax = rec["soc_max"] - rec["soc_reserve_pct"]
+                    rec["free_kwh"] = max(0.0, (_smax - float(rec["soc_pct"])) / 100.0 * _bk)
+            except Exception:
+                pass
+            # mini graf: DT plán (DAM, kW) + VDT (realized, kW) + SOC línia (soc_path)
+            _dt = []; _vdt = []; _soc = []; _lab = []
+            _nslot = min(96, max(len(_dam), len(_vdtr)))
+            for i in range(_nslot):
+                _lab.append(i)
+                _dt.append(round((_dam[i] if i < len(_dam) else 0.0) / 0.25, 1))
+                _vdt.append(round((_vdtr[i] if i < len(_vdtr) else 0.0) / 0.25, 1))
+                _soc.append(round(_socp[i + 1] if i + 1 < len(_socp) else (_socp[-1] if _socp else 0.0), 1))
+            rec["chart"] = {"labels": _lab, "dt": _dt, "vdt": _vdt, "soc": _soc}
 
         # Ekonomika dnes (effect_db)
         if _edb:
@@ -2978,55 +2997,6 @@ def _fleet_state() -> dict:
             rec["vdt_saldo_kwh"] = rec["vdt_buy_kwh"] - rec["vdt_sell_kwh"]
         except Exception:
             pass
-
-        # Voľná kapacita (nabíjací headroom z SOC) + dáta pre mini graf (DT/VDT/SOC)
-        rec["free_kwh"] = None
-        try:
-            _bk = float(_pl.get("batt_kwh", 0.0) or 0.0)
-            if rec["soc_pct"] is not None and _bk > 0:
-                _smax = rec["soc_max"] - rec["soc_reserve_pct"]
-                rec["free_kwh"] = max(0.0, (_smax - float(rec["soc_pct"])) / 100.0 * _bk)
-        except Exception:
-            pass
-        # per-slot VDT kW z paper trades (nabíjanie −, vybíjanie +)
-        _vdt_slot = {}
-        try:
-            import vdt_live_advisor as _vla2, csv as _csv2
-            _vp = _vla2.paper_trades_csv_path(name)
-            if _vp and os.path.exists(_vp):
-                with open(_vp, encoding="utf-8", newline="") as _f:
-                    for _r in _csv2.DictReader(_f):
-                        if str(_r.get("profile") or "") != name:
-                            continue
-                        if str(_r.get("ts", ""))[:10] != today_iso:
-                            continue
-                        _sl = str(_r.get("slot", ""))[:5]
-                        _act = str(_r.get("action", "")).upper()
-                        try:
-                            _kw = abs(float(_r.get("kwh") or 0)) / 0.25
-                        except (TypeError, ValueError):
-                            continue
-                        if _act in ("BUY", "CHARGE"):
-                            _vdt_slot[_sl] = _vdt_slot.get(_sl, 0.0) - _kw
-                        elif _act in ("SELL", "DISCHARGE"):
-                            _vdt_slot[_sl] = _vdt_slot.get(_sl, 0.0) + _kw
-        except Exception:
-            pass
-        _lab = []; _dt = []; _vdt = []; _soc = []
-        for _sp in (full_plan[:96] if full_plan else []):
-            _hhmm = str(_sp.get("slot", ""))[:5]
-            _lab.append(_hhmm)
-            try:
-                _kwh = float(_sp.get("kwh", 0) or 0); _a = str(_sp.get("action", "idle"))
-                _dt.append(round(-_kwh / 0.25 if _a == "charge" else _kwh / 0.25 if _a == "discharge" else 0.0, 1))
-            except Exception:
-                _dt.append(0.0)
-            try:
-                _soc.append(round(float(_sp.get("soc_after_pct", 0) or 0), 1))
-            except Exception:
-                _soc.append(0.0)
-            _vdt.append(round(_vdt_slot.get(_hhmm, 0.0), 1))
-        rec["chart"] = {"labels": _lab, "dt": _dt, "vdt": _vdt, "soc": _soc}
 
         # Plán dnes?
         if _ps:
@@ -3082,11 +3052,23 @@ def _fleet_state() -> dict:
     return out
 
 
+_FLEET_API_CACHE = {"ts": 0.0, "data": None}
+
+
 @app.get("/fleet/api")
 def fleet_api():
-    """JSON pre live polling manager dashboardu v2."""
+    """JSON pre live polling manager dashboardu v2. READ-ONLY (compute_current_state
+    netriggeruje advance/prepočet). Krátky TTL cache (6 s) — viac otvorených tabov / rýchle
+    polly nespustia agregát opakovane (číta CSV+VDT+DB per profil)."""
+    import time as _t
     try:
-        return _fleet_state()
+        _now = _t.time()
+        if _FLEET_API_CACHE["data"] is not None and (_now - _FLEET_API_CACHE["ts"]) < 6.0:
+            return _FLEET_API_CACHE["data"]
+        d = _fleet_state()
+        _FLEET_API_CACHE["ts"] = _now
+        _FLEET_API_CACHE["data"] = d
+        return d
     except Exception as ex:
         import traceback as _tb
         return {"error": str(ex), "trace": _tb.format_exc()[:1500],

@@ -11,6 +11,7 @@ echo "=== HEAD dev pred ==="; git log --oneline -1
 # DTPROF fix + cache-wipe-on-switch-2 + Excel + deploy skripty).
 git add app.py livesim.py optimizer.py vdt_state.py vdt_optimizer.py vdt_live_advisor.py \
         vdt_pair_matcher.py core/effect_db.py core/rt_audit.py scheduler.py price_model_15m.py \
+        docker-compose.yml \
         tools/export_livesim_xlsx.py tools/diag_trades.py tests/test_vdt_pair_matcher.py \
         scripts/upgrade_dev.ps1 scripts/upgrade_prod.ps1 deploy_prod.sh 2>/dev/null || true
 git add -f out/price_model_15m.joblib 2>/dev/null || true   # pribalit model (Windows nema historian na trening)
