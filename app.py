@@ -2769,25 +2769,29 @@ _FLEET_V2_HTML = """
 #fleetv2 .a-info{background:#eef3fb;border-left:4px solid #1F88E5;color:#2a5580}
 #fleetv2 .a-prof{font-weight:600;cursor:pointer;text-decoration:underline}
 #fleetv2 .noalert{background:#e8f5e9;border-left:4px solid #2E7D32;color:#1B5E20;padding:8px 12px;border-radius:8px;font-size:13px}
-#fleetv2 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
+#fleetv2 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:12px}
 #fleetv2 .card{background:#fff;border-radius:12px;padding:13px 15px;box-shadow:0 2px 6px rgba(0,0,0,.08);cursor:pointer;transition:box-shadow .15s;border-top:3px solid #2E7D32}
 #fleetv2 .card:hover{box-shadow:0 4px 14px rgba(0,0,0,.14)}
-#fleetv2 .chead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px}
+#fleetv2 .chead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:8px}
 #fleetv2 .cname{font-size:15px;font-weight:600;color:#1F4E78}
 #fleetv2 .chip{font-size:10px;font-weight:600;padding:1px 7px;border-radius:5px;color:#fff}
 #fleetv2 .c-sim{background:#2E7D32}#fleetv2 .c-real{background:#C62828}
-#fleetv2 .socbar{position:relative;height:10px;background:#eceff3;border-radius:6px;overflow:hidden;margin:6px 0 4px}
+#fleetv2 .cbody{display:flex;gap:16px;flex-wrap:wrap}
+#fleetv2 .cleft{flex:0 0 198px;min-width:180px}
+#fleetv2 .cright{flex:1;min-width:230px}
+#fleetv2 .socbig{font-size:24px;font-weight:600;line-height:1}
+#fleetv2 .socbar{position:relative;height:8px;background:#eceff3;border-radius:6px;overflow:hidden;margin:6px 0 10px}
 #fleetv2 .socfill{height:100%}
-#fleetv2 .socmark{position:absolute;top:-2px;width:2px;height:14px;background:#444;opacity:.45}
-#fleetv2 .statrow{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px 10px;font-size:12px;color:#666}
-#fleetv2 .statrow b{font-weight:600}
-#fleetv2 .dtvdt{display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:7px;border-top:.5px solid #eee;padding-top:6px}
-#fleetv2 .leg{display:flex;gap:11px;font-size:10px;color:#888;margin:8px 0 2px}
+#fleetv2 .socmark{position:absolute;top:-2px;width:2px;height:12px;background:#444;opacity:.45}
+#fleetv2 .stat{width:100%;font-size:12.5px;border-collapse:collapse}
+#fleetv2 .stat td{padding:2.5px 0}
+#fleetv2 .stat .k{color:#888}#fleetv2 .stat .v{text-align:right;font-weight:600}
+#fleetv2 .leg{display:flex;gap:11px;font-size:10px;color:#888;margin:0 0 4px}
 #fleetv2 .leg i{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:0}
-#fleetv2 .mini{position:relative;width:100%;height:84px}
+#fleetv2 .mini{position:relative;width:100%;height:140px}
 #fleetv2 .pos{color:#2E7D32}#fleetv2 .neg{color:#C62828}
-#fleetv2 .cal{font-size:11px;color:#C62828;margin-top:5px}
-@media(max-width:700px){#fleetv2 .cards{grid-template-columns:1fr}#fleetv2 .mini,#fleetv2 .leg{display:none}}
+#fleetv2 .cal{font-size:11px;color:#C62828;margin-top:6px}
+@media(max-width:700px){#fleetv2 .cards{grid-template-columns:1fr}#fleetv2 .cleft{flex:1 1 100%}#fleetv2 .mini{height:120px}}
 </style>
 <div id="fleetv2">
   <div class="fhead">
@@ -2847,19 +2851,28 @@ function renderFleet(d){
     var cal='';(p.alerts||[]).forEach(function(a){cal+='<div class="cal">'+esc(a.msg)+'</div>';});
     ch+='<div class="card" style="border-top-color:'+hcol+'" onclick="go(\\''+esc(p.name)+'\\')">'
       +'<div class="chead"><span class="cname">'+esc(p.name)+' →</span>'
-      +'<span><span class="chip '+(real?'c-real':'c-sim')+'">'+(real?'real':'sim')+'</span> <b style="font-size:13px" class="'+clr(p.total_eur)+'">'+eur(p.total_eur)+'</b></span></div>'
-      +'<div class="socbar"><div class="socfill" style="width:'+socW+'%;background:'+socCol+'"></div>'
-      +'<div class="socmark" style="left:'+lo+'%"></div><div class="socmark" style="left:'+hi+'%"></div></div>'
-      +'<div class="statrow"><span>SOC <b style="color:'+socCol+'">'+(soc==null?'—':soc.toFixed(0)+'%')+'</b></span>'
-      +'<span>'+battTxt+'</span><span>voľná '+mwh(p.free_kwh)+'</span></div>'
-      +'<div class="leg"><span><i style="background:#639922"></i> DT plán</span><span><i style="background:#BA7517"></i> VDT</span><span><i style="background:#888780;width:14px;height:2px;border-radius:0"></i> SOC</span></div>'
-      +'<div class="mini"><canvas id="mc'+i+'"></canvas></div>'
-      +'<div class="dtvdt"><span>DT <b class="'+clr(p.dt_eur)+'">'+eur(p.dt_eur)+'</b></span>'
-      +'<span>VDT '+vdtTxt+'</span><span>plán '+(p.has_plan?'<span class=pos>✓</span>':'<span class=neg>✗</span>')+'</span></div>'
+      +'<span><span class="chip '+(real?'c-real':'c-sim')+'">'+(real?'real':'sim')+'</span> <b style="font-size:14px" class="'+clr(p.total_eur)+'">'+eur(p.total_eur)+'</b></span></div>'
+      +'<div class="cbody">'
+        +'<div class="cleft">'
+          +'<div class="socbig" style="color:'+socCol+'">'+(soc==null?'—':soc.toFixed(0)+'%')+' <span style="font-size:11px;color:#999;font-weight:400">SOC</span></div>'
+          +'<div class="socbar"><div class="socfill" style="width:'+socW+'%;background:'+socCol+'"></div><div class="socmark" style="left:'+lo+'%"></div><div class="socmark" style="left:'+hi+'%"></div></div>'
+          +'<table class="stat">'
+          +'<tr><td class="k">Výkon teraz</td><td class="v">'+battTxt+'</td></tr>'
+          +'<tr><td class="k">Voľná kapacita</td><td class="v">'+mwh(p.free_kwh)+'</td></tr>'
+          +'<tr><td class="k">DT plán</td><td class="v '+clr(p.dt_eur)+'">'+eur(p.dt_eur)+'</td></tr>'
+          +'<tr><td class="k">VDT</td><td class="v">'+vdtTxt+'</td></tr>'
+          +'<tr><td class="k">Plán dnes</td><td class="v">'+(p.has_plan?'<span class=pos>✓</span>':'<span class=neg>✗</span>')+'</td></tr>'
+          +'</table>'
+        +'</div>'
+        +'<div class="cright">'
+          +'<div class="leg"><span><i style="background:#639922"></i> DT plán</span><span><i style="background:#BA7517"></i> VDT</span><span><i style="background:#888780;width:14px;height:2px;border-radius:0"></i> SOC</span></div>'
+          +'<div class="mini"><canvas id="mc'+i+'"></canvas></div>'
+        +'</div>'
+      +'</div>'
       +cal+'</div>';
   });
   document.getElementById('f-cards').innerHTML=ch||'<p style="color:#888">Žiadne bežiace profily (bg-ON).</p>';
-  if(window.Chart && window.innerWidth>700){
+  if(window.Chart){
     (d.profiles||[]).forEach(function(p,i){
       var c=p.chart||{}; var el=document.getElementById('mc'+i); if(!el)return;
       if(_fcharts[i]){try{_fcharts[i].destroy();}catch(e){}}
