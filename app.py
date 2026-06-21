@@ -2998,12 +2998,24 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
                 print(f"[_fleet_state] compute_current_state {name}: {_e_cs}")
                 cs = None
             if cs and cs.get("ok") is not False:
-                rec["soc_pct"] = cs.get("current_soc_pct")
                 _si = int(cs.get("current_slot_idx", 0) or 0)
                 _dam = list(cs.get("dam_nomination_kwh") or [])
                 _vdtr = list(cs.get("vdt_realized_kwh") or [])
                 _socp = list(cs.get("soc_path_pct") or [])
                 _bk = float(cs.get("batt_kwh", 0.0) or 0.0)
+                _nslot = min(96, max(len(_dam), len(_vdtr)))
+                for i in range(_nslot):
+                    _lab.append(i)
+                    _dt.append(round((_dam[i] if i < len(_dam) else 0.0) / 0.25, 1))
+                    _vdt.append(round((_vdtr[i] if i < len(_vdtr) else 0.0) / 0.25, 1))
+                    _soc.append(round(_socp[i + 1] if i + 1 < len(_socp) else (_socp[-1] if _socp else 0.0), 1))
+                # SOC karty = PRESNE hodnota SOC línie grafu na "teraz" markeri (rovnaký zdroj
+                # = soc_path). Deterministické → karta SEDÍ s grafom (žiadny mtime-flip ako pri
+                # realized override _get_current_soc_from_livesim_today, ktorý sa "náhodne" menil).
+                if _soc:
+                    rec["soc_pct"] = _soc[min(_si, len(_soc) - 1)]
+                else:
+                    rec["soc_pct"] = cs.get("current_soc_pct")
                 try:
                     _dn = (_dam[_si] if _si < len(_dam) else 0.0) + (_vdtr[_si] if _si < len(_vdtr) else 0.0)
                     rec["batt_kw_now"] = round(_dn / 0.25, 1)
@@ -3015,12 +3027,6 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
                         rec["free_kwh"] = max(0.0, (_smax - float(rec["soc_pct"])) / 100.0 * _bk)
                 except Exception:
                     pass
-                _nslot = min(96, max(len(_dam), len(_vdtr)))
-                for i in range(_nslot):
-                    _lab.append(i)
-                    _dt.append(round((_dam[i] if i < len(_dam) else 0.0) / 0.25, 1))
-                    _vdt.append(round((_vdtr[i] if i < len(_vdtr) else 0.0) / 0.25, 1))
-                    _soc.append(round(_socp[i + 1] if i + 1 < len(_socp) else (_socp[-1] if _socp else 0.0), 1))
         else:
             try:
                 _plan = None
