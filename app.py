@@ -2749,8 +2749,365 @@ def _mpc_section_for_profile(profile: str, plan_params: dict) -> str:
     )
 
 
+_FLEET_V2_HTML = """
+<style>
+#fleetv2{font-family:-apple-system,Segoe UI,Arial;max-width:1500px;margin:0 auto;color:#1a2330}
+#fleetv2 .fhead{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:4px 0 14px}
+#fleetv2 h1{color:#1F4E78;margin:0;font-size:22px}
+#fleetv2 .upd{font-size:12px;color:#888}
+#fleetv2 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#2E7D32;margin-right:5px;animation:fpulse 2s infinite}
+@keyframes fpulse{0%,100%{opacity:1}50%{opacity:.35}}
+#fleetv2 .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+#fleetv2 .kpi .box{background:#fff;border-radius:10px;padding:12px 14px;box-shadow:0 1px 4px rgba(0,0,0,.07)}
+#fleetv2 .kpi .lbl{font-size:11px;color:#777;text-transform:uppercase;letter-spacing:.4px}
+#fleetv2 .kpi .val{font-size:22px;font-weight:600;margin-top:2px}
+#fleetv2 .kpi .sub{font-size:11px;color:#888;margin-top:2px}
+#fleetv2 .alerts{margin-bottom:16px}
+#fleetv2 .alert{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;margin:5px 0;font-size:13px}
+#fleetv2 .a-crit{background:#fdecea;border-left:4px solid #C62828;color:#922}
+#fleetv2 .a-warn{background:#fff4e5;border-left:4px solid #F57F17;color:#8a5a00}
+#fleetv2 .a-info{background:#eef3fb;border-left:4px solid #1F88E5;color:#2a5580}
+#fleetv2 .a-prof{font-weight:600;cursor:pointer;text-decoration:underline}
+#fleetv2 .noalert{background:#e8f5e9;border-left:4px solid #2E7D32;color:#1B5E20;padding:8px 12px;border-radius:8px;font-size:13px}
+#fleetv2 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
+#fleetv2 .card{background:#fff;border-radius:12px;padding:13px 15px;box-shadow:0 2px 6px rgba(0,0,0,.08);cursor:pointer;transition:box-shadow .15s;border-top:3px solid #2E7D32}
+#fleetv2 .card:hover{box-shadow:0 4px 14px rgba(0,0,0,.14)}
+#fleetv2 .chead{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px}
+#fleetv2 .cname{font-size:15px;font-weight:600;color:#1F4E78}
+#fleetv2 .chip{font-size:10px;font-weight:600;padding:1px 7px;border-radius:5px;color:#fff}
+#fleetv2 .c-sim{background:#2E7D32}#fleetv2 .c-real{background:#C62828}
+#fleetv2 .socbar{position:relative;height:10px;background:#eceff3;border-radius:6px;overflow:hidden;margin:6px 0 4px}
+#fleetv2 .socfill{height:100%}
+#fleetv2 .socmark{position:absolute;top:-2px;width:2px;height:14px;background:#444;opacity:.45}
+#fleetv2 .statrow{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px 10px;font-size:12px;color:#666}
+#fleetv2 .statrow b{font-weight:600}
+#fleetv2 .dtvdt{display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:7px;border-top:.5px solid #eee;padding-top:6px}
+#fleetv2 .leg{display:flex;gap:11px;font-size:10px;color:#888;margin:8px 0 2px}
+#fleetv2 .leg i{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:0}
+#fleetv2 .mini{position:relative;width:100%;height:84px}
+#fleetv2 .pos{color:#2E7D32}#fleetv2 .neg{color:#C62828}
+#fleetv2 .cal{font-size:11px;color:#C62828;margin-top:5px}
+@media(max-width:700px){#fleetv2 .cards{grid-template-columns:1fr}#fleetv2 .mini,#fleetv2 .leg{display:none}}
+</style>
+<div id="fleetv2">
+  <div class="fhead">
+    <h1><i class="ti ti-broadcast"></i> Flotila — live</h1>
+    <div class="upd"><span class="dot"></span><span id="f-upd">načítavam…</span></div>
+  </div>
+  <div class="kpi" id="f-kpi"></div>
+  <div class="alerts" id="f-alerts"></div>
+  <div class="cards" id="f-cards"></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+var _fcharts={};
+function eur(v){v=+v||0;return (v>=0?'+':'')+v.toFixed(0)+' €';}
+function clr(v){return (+v||0)>=0?'pos':'neg';}
+function mwh(v){v=+v||0;return (Math.abs(v)>=1000?(v/1000).toFixed(1)+' MWh':v.toFixed(0)+' kWh');}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function box(lbl,val,sub,cls){return '<div class="box"><div class="lbl">'+lbl+'</div><div class="val '+(cls||'')+'">'+val+'</div><div class="sub">'+(sub||'')+'</div></div>';}
+function go(p){location.href='/dashboard?profile='+encodeURIComponent(p);}
+async function fleetLoad(){
+  try{
+    const r=await fetch('/fleet/api',{cache:'no-store'}); const d=await r.json();
+    if(d.error){document.getElementById('f-upd').textContent='chyba API';return;}
+    renderFleet(d);
+  }catch(e){document.getElementById('f-upd').textContent='offline (retry…)';}
+}
+function renderFleet(d){
+  var f=d.fleet||{};
+  var pwr=0, free=0;
+  (d.profiles||[]).forEach(function(p){pwr+=Math.abs(+p.batt_kw_now||0); free+=(+p.free_kwh||0);});
+  document.getElementById('f-upd').textContent='aktualizované '+(d.ts||'').slice(11,19)+' · '+(f.n_running||0)+' profilov';
+  document.getElementById('f-kpi').innerHTML=
+    box('Zisk dnes spolu', eur(f.total_eur), 'DT '+eur(f.dt_eur)+' · RT '+eur(f.rt_eur)+' · VDT '+eur(f.vdt_eur), clr(f.total_eur))
+    +box('Výkon teraz', (pwr/1000).toFixed(1)+' MW', 'voľná '+mwh(free), '')
+    +box('VDT pozícia', Math.round(f.vdt_buy_kwh||0)+'/'+Math.round(f.vdt_sell_kwh||0)+' kWh', 'nákup / predaj', '')
+    +box('Alerty', (f.n_alerts||0), (f.n_no_plan||0)+' bez plánu', (f.n_alerts>0?'neg':'pos'));
+  var al=d.alerts||[], ah='';
+  if(!al.length){ah='<div class="noalert"><i class="ti ti-check"></i> Žiadne alerty — všetko v poriadku.</div>';}
+  else{al.forEach(function(a){
+    var cls=a.sev==='crit'?'a-crit':a.sev==='warn'?'a-warn':'a-info';
+    var ic=a.sev==='crit'?'ti-alert-octagon':a.sev==='warn'?'ti-alert-triangle':'ti-info-circle';
+    ah+='<div class="alert '+cls+'"><i class="ti '+ic+'"></i> <span class="a-prof" onclick="go(\\''+esc(a.profile)+'\\')">'+esc(a.profile)+'</span> '+esc(a.msg)+'</div>';
+  });}
+  document.getElementById('f-alerts').innerHTML=ah;
+  var ch='';
+  (d.profiles||[]).forEach(function(p,i){
+    var real=p.mode==='real';
+    var soc=p.soc_pct==null?null:+p.soc_pct;
+    var lo=(p.soc_min+p.soc_reserve_pct), hi=(p.soc_max-p.soc_reserve_pct);
+    var socCol=soc==null?'#bbb':(soc<=lo?'#C62828':soc>=hi?'#F57F17':'#2E7D32');
+    var socW=soc==null?0:Math.max(0,Math.min(100,soc));
+    var batt=p.batt_kw_now;
+    var battTxt=batt==null?'—':(batt>0?'▲ vybíja ':batt<0?'▼ nabíja ':'• ')+Math.abs(batt).toFixed(0)+' kW';
+    var hcol=(p.alerts||[]).some(function(a){return a.sev==='crit';})?'#C62828':(p.alerts||[]).length?'#F57F17':'#2E7D32';
+    var saldoBad=(+p.vdt_saldo_kwh||0)>100 && (+p.vdt_saldo_kwh||0)>0.15*(+p.vdt_buy_kwh||0);
+    var vdtTxt=(p.vdt_buy_kwh||p.vdt_sell_kwh)?(saldoBad?'<span class=neg>nespárované</span>':'<span class=pos>spárované</span>'):'—';
+    var cal='';(p.alerts||[]).forEach(function(a){cal+='<div class="cal">'+esc(a.msg)+'</div>';});
+    ch+='<div class="card" style="border-top-color:'+hcol+'" onclick="go(\\''+esc(p.name)+'\\')">'
+      +'<div class="chead"><span class="cname">'+esc(p.name)+' →</span>'
+      +'<span><span class="chip '+(real?'c-real':'c-sim')+'">'+(real?'real':'sim')+'</span> <b style="font-size:13px" class="'+clr(p.total_eur)+'">'+eur(p.total_eur)+'</b></span></div>'
+      +'<div class="socbar"><div class="socfill" style="width:'+socW+'%;background:'+socCol+'"></div>'
+      +'<div class="socmark" style="left:'+lo+'%"></div><div class="socmark" style="left:'+hi+'%"></div></div>'
+      +'<div class="statrow"><span>SOC <b style="color:'+socCol+'">'+(soc==null?'—':soc.toFixed(0)+'%')+'</b></span>'
+      +'<span>'+battTxt+'</span><span>voľná '+mwh(p.free_kwh)+'</span></div>'
+      +'<div class="leg"><span><i style="background:#639922"></i> DT plán</span><span><i style="background:#BA7517"></i> VDT</span><span><i style="background:#888780;width:14px;height:2px;border-radius:0"></i> SOC</span></div>'
+      +'<div class="mini"><canvas id="mc'+i+'"></canvas></div>'
+      +'<div class="dtvdt"><span>DT <b class="'+clr(p.dt_eur)+'">'+eur(p.dt_eur)+'</b></span>'
+      +'<span>VDT '+vdtTxt+'</span><span>plán '+(p.has_plan?'<span class=pos>✓</span>':'<span class=neg>✗</span>')+'</span></div>'
+      +cal+'</div>';
+  });
+  document.getElementById('f-cards').innerHTML=ch||'<p style="color:#888">Žiadne bežiace profily (bg-ON).</p>';
+  if(window.Chart && window.innerWidth>700){
+    (d.profiles||[]).forEach(function(p,i){
+      var c=p.chart||{}; var el=document.getElementById('mc'+i); if(!el)return;
+      if(_fcharts[i]){try{_fcharts[i].destroy();}catch(e){}}
+      _fcharts[i]=new Chart(el,{data:{labels:(c.labels||[]).map(function(_,k){return k;}),datasets:[
+        {type:'bar',data:c.dt||[],backgroundColor:'rgba(99,153,34,.25)',borderColor:'#639922',borderWidth:1,yAxisID:'y',order:2},
+        {type:'bar',data:c.vdt||[],backgroundColor:'rgba(186,117,23,.85)',borderColor:'#BA7517',borderWidth:0,yAxisID:'y',order:1},
+        {type:'line',data:c.soc||[],borderColor:'#888780',borderDash:[4,3],borderWidth:1.4,pointRadius:0,yAxisID:'y1',tension:.3,order:0}
+      ]},options:{responsive:true,maintainAspectRatio:false,animation:false,
+        plugins:{legend:{display:false},tooltip:{enabled:false}},
+        scales:{x:{display:false},y:{position:'left',grid:{color:'rgba(128,128,128,.12)'},ticks:{font:{size:8},callback:function(v){return v/1000+'M';}}},
+                y1:{position:'right',min:0,max:100,grid:{display:false},ticks:{font:{size:8},callback:function(v){return v+'%';}}}}}});
+    });
+  }
+}
+fleetLoad(); setInterval(fleetLoad, 10000);
+</script>
+"""
+
+
+def _fleet_state() -> dict:
+    """Manager dashboard v2 — agregát ŽIVÉHO stavu všetkých bežiacich (bg-ON) profilov.
+    Read-only nad effect_db (€), _vdt_trade_stats (VDT pozícia), advisor cache (SOC/plán),
+    plan_store (plán dnes). Exceptions-first: zbiera alerty. Bez zásahu do enginu."""
+    import datetime as _dt
+    today_iso = _dt.date.today().isoformat()
+    _now = _dt.datetime.now()
+    _now_slot = f"{_now.hour:02d}:{(_now.minute // 15) * 15:02d}"
+    out = {"ts": _now.isoformat(timespec="seconds"), "today": today_iso,
+           "profiles": [], "alerts": [],
+           "fleet": {"n_running": 0, "dt_eur": 0.0, "rt_eur": 0.0, "vdt_eur": 0.0,
+                     "total_eur": 0.0, "vdt_buy_kwh": 0.0, "vdt_sell_kwh": 0.0,
+                     "n_alerts": 0, "n_no_plan": 0}}
+    try:
+        import profiles as _pr
+        all_profs = _pr.list_profiles() or []
+    except Exception:
+        return out
+    try:
+        import auto_control as _ac
+        bg_enabled = _ac.get_enabled_profiles() or set()
+    except Exception:
+        bg_enabled = set()
+    try:
+        import vdt_live_advisor as _adv
+    except Exception:
+        _adv = None
+    try:
+        import plan_store as _ps
+    except Exception:
+        _ps = None
+    try:
+        import core.effect_db as _edb
+    except Exception:
+        _edb = None
+
+    running = sorted(n for n in all_profs if n in bg_enabled)
+    out["fleet"]["n_running"] = len(running)
+
+    for name in running:
+        rec = {"name": name, "mode": "simulation", "soc_pct": None, "batt_kw_now": None,
+               "dt_eur": 0.0, "rt_eur": 0.0, "vdt_eur": 0.0, "total_eur": 0.0,
+               "vdt_buy_kwh": 0.0, "vdt_sell_kwh": 0.0, "vdt_buy_avg": 0.0,
+               "vdt_sell_avg": 0.0, "vdt_saldo_kwh": 0.0, "has_plan": False,
+               "soc_reserve_pct": 0.0, "soc_min": 5.0, "soc_max": 100.0,
+               "adv_ts": "", "alerts": []}
+        try:
+            pdata = _pr.load_profile(name) or {}
+        except Exception:
+            pdata = {}
+        rec["mode"] = str(pdata.get("mode") or "simulation").lower()
+        _pl = pdata.get("plan") or {}
+        rec["soc_reserve_pct"] = float(_pl.get("soc_reserve_pct", 0.0) or 0.0)
+        rec["soc_min"] = float(_pl.get("soc_min", 5.0) or 5.0)
+        rec["soc_max"] = float(_pl.get("soc_max", 100.0) or 100.0)
+
+        # SOC + plán teraz z advisor cache
+        full_plan = []
+        if _adv:
+            try:
+                cache = _adv.load_cache(profile=name) or {}
+                state = cache.get("state") or {}
+                rec["soc_pct"] = state.get("current_soc_pct")
+                rec["adv_ts"] = str(cache.get("ts", ""))[:16]
+                full_plan = cache.get("full_plan") or []
+            except Exception:
+                pass
+        for ps_slot in (full_plan or []):
+            if str(ps_slot.get("slot", ""))[:5] == _now_slot:
+                try:
+                    _kw = float(ps_slot.get("kwh", 0) or 0) / 0.25
+                    _act = str(ps_slot.get("action", "idle"))
+                    rec["batt_kw_now"] = (-_kw if _act == "charge"
+                                          else _kw if _act == "discharge" else 0.0)
+                except Exception:
+                    pass
+                break
+
+        # Ekonomika dnes (effect_db)
+        if _edb:
+            try:
+                eff = _edb.get_period_effect(name, today_iso, today_iso) or {}
+                rec["dt_eur"] = float(eff.get("dt_eur", 0.0) or 0.0)
+                rec["rt_eur"] = float(eff.get("rt_eur", 0.0) or 0.0)
+                rec["vdt_eur"] = float(eff.get("vdt_arb_eur", 0.0) or 0.0)
+                rec["total_eur"] = float(eff.get("total_eur", 0.0) or 0.0)
+            except Exception:
+                pass
+
+        # VDT pozícia dnes
+        try:
+            vs = _vdt_trade_stats(name, today_iso) or {}
+            rec["vdt_buy_kwh"] = float(vs.get("buy_kwh", 0.0) or 0.0)
+            rec["vdt_sell_kwh"] = float(vs.get("sell_kwh", 0.0) or 0.0)
+            rec["vdt_buy_avg"] = float(vs.get("buy_avg", 0.0) or 0.0)
+            rec["vdt_sell_avg"] = float(vs.get("sell_avg", 0.0) or 0.0)
+            rec["vdt_saldo_kwh"] = rec["vdt_buy_kwh"] - rec["vdt_sell_kwh"]
+        except Exception:
+            pass
+
+        # Voľná kapacita (nabíjací headroom z SOC) + dáta pre mini graf (DT/VDT/SOC)
+        rec["free_kwh"] = None
+        try:
+            _bk = float(_pl.get("batt_kwh", 0.0) or 0.0)
+            if rec["soc_pct"] is not None and _bk > 0:
+                _smax = rec["soc_max"] - rec["soc_reserve_pct"]
+                rec["free_kwh"] = max(0.0, (_smax - float(rec["soc_pct"])) / 100.0 * _bk)
+        except Exception:
+            pass
+        # per-slot VDT kW z paper trades (nabíjanie −, vybíjanie +)
+        _vdt_slot = {}
+        try:
+            import vdt_live_advisor as _vla2, csv as _csv2
+            _vp = _vla2.paper_trades_csv_path(name)
+            if _vp and os.path.exists(_vp):
+                with open(_vp, encoding="utf-8", newline="") as _f:
+                    for _r in _csv2.DictReader(_f):
+                        if str(_r.get("profile") or "") != name:
+                            continue
+                        if str(_r.get("ts", ""))[:10] != today_iso:
+                            continue
+                        _sl = str(_r.get("slot", ""))[:5]
+                        _act = str(_r.get("action", "")).upper()
+                        try:
+                            _kw = abs(float(_r.get("kwh") or 0)) / 0.25
+                        except (TypeError, ValueError):
+                            continue
+                        if _act in ("BUY", "CHARGE"):
+                            _vdt_slot[_sl] = _vdt_slot.get(_sl, 0.0) - _kw
+                        elif _act in ("SELL", "DISCHARGE"):
+                            _vdt_slot[_sl] = _vdt_slot.get(_sl, 0.0) + _kw
+        except Exception:
+            pass
+        _lab = []; _dt = []; _vdt = []; _soc = []
+        for _sp in (full_plan[:96] if full_plan else []):
+            _hhmm = str(_sp.get("slot", ""))[:5]
+            _lab.append(_hhmm)
+            try:
+                _kwh = float(_sp.get("kwh", 0) or 0); _a = str(_sp.get("action", "idle"))
+                _dt.append(round(-_kwh / 0.25 if _a == "charge" else _kwh / 0.25 if _a == "discharge" else 0.0, 1))
+            except Exception:
+                _dt.append(0.0)
+            try:
+                _soc.append(round(float(_sp.get("soc_after_pct", 0) or 0), 1))
+            except Exception:
+                _soc.append(0.0)
+            _vdt.append(round(_vdt_slot.get(_hhmm, 0.0), 1))
+        rec["chart"] = {"labels": _lab, "dt": _dt, "vdt": _vdt, "soc": _soc}
+
+        # Plán dnes?
+        if _ps:
+            try:
+                for step, kind in ((15, "dentrh"), (60, "plan")):
+                    if _ps.has_plan(today_iso, step, kind, profile=name):
+                        rec["has_plan"] = True
+                        break
+            except Exception:
+                pass
+
+        # === Alerty (exceptions-first) ===
+        _al = rec["alerts"]
+        if not rec["has_plan"]:
+            _al.append({"sev": "warn", "msg": "Chýba plán pre dnes"})
+            out["fleet"]["n_no_plan"] += 1
+        _soc = rec["soc_pct"]
+        if _soc is not None:
+            _lo = rec["soc_min"] + rec["soc_reserve_pct"]
+            _hi = rec["soc_max"] - rec["soc_reserve_pct"]
+            if _soc < _lo - 0.5:
+                _al.append({"sev": "crit", "msg": f"SOC {_soc:.0f}% pod rezervou ({_lo:.0f}%)"})
+            elif _soc > _hi + 0.5:
+                _al.append({"sev": "warn", "msg": f"SOC {_soc:.0f}% nad pásmom ({_hi:.0f}%)"})
+        # VDT nepárová pozícia (nákup >> predaj = nespárované nákupy)
+        if rec["vdt_buy_kwh"] > 1.0 and rec["vdt_saldo_kwh"] > 0.15 * rec["vdt_buy_kwh"] \
+                and rec["vdt_saldo_kwh"] > 100.0:
+            _al.append({"sev": "warn",
+                        "msg": f"VDT nespárované +{rec['vdt_saldo_kwh']:.0f} kWh "
+                               f"(nákup {rec['vdt_buy_avg']:.0f} > predaj {rec['vdt_sell_avg']:.0f})"})
+        # Stale advisor cache (> 20 min)
+        try:
+            if rec["adv_ts"]:
+                _age = (_now - _dt.datetime.fromisoformat(rec["adv_ts"])).total_seconds() / 60.0
+                if _age > 20:
+                    _al.append({"sev": "info", "msg": f"Advisor dáta staré {_age:.0f} min"})
+        except Exception:
+            pass
+        for a in _al:
+            out["alerts"].append({**a, "profile": name})
+
+        # fleet agregát
+        fl = out["fleet"]
+        fl["dt_eur"] += rec["dt_eur"]; fl["rt_eur"] += rec["rt_eur"]
+        fl["vdt_eur"] += rec["vdt_eur"]; fl["total_eur"] += rec["total_eur"]
+        fl["vdt_buy_kwh"] += rec["vdt_buy_kwh"]; fl["vdt_sell_kwh"] += rec["vdt_sell_kwh"]
+        out["profiles"].append(rec)
+
+    # zoradenie alertov: crit > warn > info
+    _sev_rank = {"crit": 0, "warn": 1, "info": 2}
+    out["alerts"].sort(key=lambda a: _sev_rank.get(a.get("sev"), 9))
+    out["fleet"]["n_alerts"] = len(out["alerts"])
+    return out
+
+
+@app.get("/fleet/api")
+def fleet_api():
+    """JSON pre live polling manager dashboardu v2."""
+    try:
+        return _fleet_state()
+    except Exception as ex:
+        import traceback as _tb
+        return {"error": str(ex), "trace": _tb.format_exc()[:1500],
+                "profiles": [], "alerts": [], "fleet": {}}
+
+
+@app.get("/fleet", response_class=HTMLResponse)
+def fleet_dashboard():
+    """Manager dashboard v2 — live flotilový prehľad (auto-poll /fleet/api každých 10 s)."""
+    return render_legacy_body(None, "Flotila — live", _FLEET_V2_HTML)
+
+
 @app.get("/manager", response_class=HTMLResponse)
 def manager_dashboard():
+    # Manager dashboard v2 (2026-06-20): nahradený live flotilovým prehľadom (/fleet).
+    # Starý _manager_dashboard_impl ostáva dostupný na /manager/legacy.
+    return render_legacy_body(None, "Flotila — live", _FLEET_V2_HTML)
+
+
+@app.get("/manager/legacy", response_class=HTMLResponse)
+def manager_dashboard_legacy():
     try:
         return _manager_dashboard_impl()
     except Exception as ex:
