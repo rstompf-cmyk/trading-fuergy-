@@ -46,16 +46,23 @@
 
   <hr>
   <fieldset>
-    <legend>➕ Nová / upraviť batériu (CDC)</legend>
+    <legend>{% if edit_batt %}✏ Upraviť batériu — {{ edit_batt.name }}{% else %}➕ Nová batéria (CDC){% endif %}</legend>
     <form method="post" action="/customers/battery">
-      <label>Názov batérie: <input type="text" name="name" required placeholder="VW-BA"></label>
-      <label>CDC prefix: <input type="text" name="cdc_prefix" required placeholder="VW-BA"></label>
+      <label>Názov batérie:
+        <input type="text" name="name" required placeholder="VW-BA"
+               value="{{ edit_batt.name if edit_batt else '' }}"
+               {% if edit_batt %}readonly title="Názov je kľúč — pre premenovanie vytvor novú"{% endif %}>
+      </label>
+      <label>CDC prefix:
+        <input type="text" name="cdc_prefix" required placeholder="VW-BA"
+               value="{{ edit_batt.cdc_prefix if edit_batt else '' }}">
+      </label>
       <br>
       <label>Zákazník:
         <select name="customer_id">
           <option value="">— žiadny —</option>
           {% for c in customers %}
-          <option value="{{ c.id }}">{{ c.name }}</option>
+          <option value="{{ c.id }}" {% if edit_batt and edit_batt.customer_id == c.id %}selected{% endif %}>{{ c.name }}</option>
           {% endfor %}
         </select>
       </label>
@@ -63,33 +70,34 @@
         <select name="profile_name">
           <option value="">— žiadny —</option>
           {% for p in profiles_list %}
-          <option value="{{ p }}">{{ p }}</option>
+          <option value="{{ p }}" {% if edit_batt and edit_batt.profile_name == p %}selected{% endif %}>{{ p }}</option>
           {% endfor %}
         </select>
       </label>
       <br>
-      <label>Výkon kW: <input type="number" step="any" name="batt_kw" value="0" style="width:100px"></label>
-      <label>Kapacita kWh: <input type="number" step="any" name="batt_kwh" value="0" style="width:100px"></label>
-      <label><input type="checkbox" name="enabled"> spustiť ako inštanciu</label>
+      <label>Výkon kW: <input type="number" step="any" name="batt_kw" value="{{ edit_batt.batt_kw if edit_batt else 0 }}" style="width:100px"></label>
+      <label>Kapacita kWh: <input type="number" step="any" name="batt_kwh" value="{{ edit_batt.batt_kwh if edit_batt else 0 }}" style="width:100px"></label>
+      <label><input type="checkbox" name="enabled" {% if edit_batt and edit_batt.enabled %}checked{% endif %}> spustiť ako inštanciu</label>
       <p class="muted" style="font-size:12px">
         backend = <b>cdc</b>, mód = <b>real</b>, krajina = <b>{{ market | upper }}</b> (nastavené automaticky).
-        UPSERT podľa názvu — rovnaký názov prepíše existujúcu batériu.
+        Uloženie prepíše batériu podľa názvu.
       </p>
-      <button type="submit" class="btn green">Uložiť batériu</button>
+      <button type="submit" class="btn green">{% if edit_batt %}💾 Uložiť zmeny{% else %}Uložiť batériu{% endif %}</button>
+      {% if edit_batt %}<a href="/customers" class="btn sec sm">Zrušiť úpravu</a>{% endif %}
     </form>
   </fieldset>
 
   <h2>Batérie ({{ market | upper }})</h2>
   {% if batteries %}
     <table class="tbl-compact">
-      <tr><th>Názov</th><th>backend</th><th>prefix</th><th>zákazník</th><th>profil</th><th>kW / kWh</th><th>inštancia</th></tr>
+      <tr><th>Názov</th><th>backend</th><th>prefix</th><th>zákazník</th><th>profil</th><th>kW / kWh</th><th>inštancia</th><th></th></tr>
       {% for b in batteries %}
       <tr>
         <td><b>{{ b.name }}</b></td>
         <td><code>{{ b.backend }}</code></td>
         <td>{% if b.cdc_prefix %}<code>{{ b.cdc_prefix }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{{ b.customer_name or '' }}</td>
-        <td>{{ b.profile_id or '' }}</td>
+        <td>{% if b.profile_name %}{{ b.profile_name }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{{ b.batt_kw }} / {{ b.batt_kwh }}</td>
         <td>
           <form method="post" action="/customers/battery/enable" style="display:inline">
@@ -100,6 +108,7 @@
             </button>
           </form>
         </td>
+        <td><a href="/customers?edit={{ b.id }}" class="btn sec sm">✏ Upraviť</a></td>
       </tr>
       {% endfor %}
     </table>

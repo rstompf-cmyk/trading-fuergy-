@@ -17010,7 +17010,21 @@ async def cdc_test(request: Request):
     return _cdc_page(request, test_prefix=prefix, test_result=res or {}, test_tags=tags)
 
 
-def _customers_page(request, msg="", msg_kind="success"):
+def _profile_id_name_map():
+    """Mapovanie {profile_id: name} z DB (best-effort)."""
+    out = {}
+    try:
+        from db import get_session
+        from db.models import Profile as _DbP
+        with get_session() as s:
+            for p in s.query(_DbP).all():
+                out[p.id] = p.name
+    except Exception:
+        pass
+    return out
+
+
+def _customers_page(request, msg="", msg_kind="success", edit_id=None):
     import market as _mk
     import fleet
     from ui.templates import render
@@ -17018,8 +17032,10 @@ def _customers_page(request, msg="", msg_kind="success"):
     custs = fleet.list_customers(country=mkt)
     bats = [b for b in fleet.list_batteries() if b.get("country") == mkt]
     cname = {c["id"]: c["name"] for c in custs}
+    pmap = _profile_id_name_map()
     for b in bats:
         b["customer_name"] = cname.get(b.get("customer_id"))
+        b["profile_name"] = pmap.get(b.get("profile_id"))
     for c in custs:
         c["batteries"] = [b for b in bats if b.get("customer_id") == c["id"]]
     try:
@@ -17027,13 +17043,20 @@ def _customers_page(request, msg="", msg_kind="success"):
         profs = _pr.list_profiles()
     except Exception:
         profs = []
+    edit_batt = None
+    if edit_id is not None:
+        for b in bats:
+            if b.get("id") == edit_id:
+                edit_batt = b
+                break
     return render(request, "pages/customers.html", market=mkt, customers=custs,
-                  batteries=bats, profiles_list=profs, msg=msg, msg_kind=msg_kind)
+                  batteries=bats, profiles_list=profs, msg=msg, msg_kind=msg_kind,
+                  edit_batt=edit_batt)
 
 
 @app.get("/customers", response_class=HTMLResponse)
-def customers_get(request: Request):
-    return _customers_page(request)
+def customers_get(request: Request, edit: int = None):
+    return _customers_page(request, edit_id=edit)
 
 
 @app.post("/customers/create", response_class=HTMLResponse)
