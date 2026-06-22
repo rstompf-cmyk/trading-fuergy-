@@ -33,7 +33,9 @@ def test_tag_resolution_prefix():
     import cdc
     cfg = _sample_cfg()
     rt = cdc.resolve_read_tags("VW-BA", cfg)
-    assert rt["load_power_kw"] == "VW-BA_I_EL1_Power_1h"
+    assert rt["load_power_kw"] == "VW-BA_I_EL1_Power_1m"
+    assert rt["load_power_kw_1h"] == "VW-BA_I_EL1_Power_1h"
+    assert rt["batt_power_kw"] == "VW-BA_C_BAT_StoragePower_1m"
     assert rt["batt_soc_pct"] == "VW-BA_I_BMS_SOC_1m"
     wt = cdc.resolve_write_tags("VW-BA", cfg)
     assert wt["cons_plan_kw"] == "VW-BA_U_REG_ConsumptionPlan_Manual_1h"

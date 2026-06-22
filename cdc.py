@@ -75,9 +75,11 @@ def _config_path(market: Optional[str] = None) -> str:
 # ─── Default systémový config (jeden na krajinu/systém) ──────────────────────
 # Logické meno → SUFFIX tagu (prefix sa dolepí per batéria).
 DEFAULT_TAGS_READ = {
-    "load_power_kw":     "_I_EL1_Power_1h",
+    "load_power_kw":     "_I_EL1_Power_1m",   # spotreba/elektromer 1-min (live)
+    "load_power_kw_1h":  "_I_EL1_Power_1h",   # spotreba 1h priemer
     "ftv_power_kw":      "_I_SOL_Power_1h",
-    "batt_power_kw":     "_C_BAT_StoragePower_15m",
+    "batt_power_kw":     "_C_BAT_StoragePower_1m",   # výkon batérie 1-min (live)
+    "batt_power_kw_15m": "_C_BAT_StoragePower_15m",  # výkon batérie 15-min
     "threshold_kw":      "_C_POW_ThresholdPowerWithoutInv_Actual_1h",
     "batt_soc_pct":      "_I_BMS_SOC_1m",    # SOC instant/real (1-min, %)
     "batt_soc_pct_15m":  "_I_BMS_SOC_15m",   # SOC 15-min (%)
@@ -92,8 +94,10 @@ DEFAULT_TAGS_WRITE = {
 # Logické meno → multiplier (hodnota_servera × scale = kW alebo %).
 DEFAULT_SCALE_READ = {
     "load_power_kw":     0.001,   # W → kW
+    "load_power_kw_1h":  0.001,
     "ftv_power_kw":      0.001,
     "batt_power_kw":     0.001,
+    "batt_power_kw_15m": 0.001,
     "threshold_kw":      0.001,
     "batt_soc_pct":      1.0,     # %
     "batt_soc_pct_15m":  1.0,     # %

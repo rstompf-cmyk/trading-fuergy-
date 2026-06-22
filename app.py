@@ -16989,6 +16989,23 @@ async def cdc_save(request: Request):
                 cfg["scale_write"][k] = float(form.get("wscale__" + k))
             except ValueError:
                 pass
+    # pridanie nového koreňa (read / write)
+    nrk = (form.get("new_rkey") or "").strip()
+    nrs = (form.get("new_rsuf") or "").strip()
+    if nrk and nrs:
+        cfg.setdefault("tags_read", {})[nrk] = nrs
+        try:
+            cfg.setdefault("scale_read", {})[nrk] = float(form.get("new_rscale") or 0.001)
+        except ValueError:
+            cfg["scale_read"][nrk] = 0.001
+    nwk = (form.get("new_wkey") or "").strip()
+    nws = (form.get("new_wsuf") or "").strip()
+    if nwk and nws:
+        cfg.setdefault("tags_write", {})[nwk] = nws
+        try:
+            cfg.setdefault("scale_write", {})[nwk] = float(form.get("new_wscale") or 1000.0)
+        except ValueError:
+            cfg["scale_write"][nwk] = 1000.0
     cdc.save_system_config(cfg, mkt)
     return _cdc_page(request, msg="Konfigurácia uložená.")
 

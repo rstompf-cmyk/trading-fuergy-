@@ -51,7 +51,13 @@
           <td><input type="text" name="rscale__{{ key }}" value="{{ cfg.scale_read.get(key, 1.0) }}" style="width:90px"></td>
         </tr>
         {% endfor %}
+        <tr style="background:#f6f9ff">
+          <td><input type="text" name="new_rkey" placeholder="nový kľúč" size="16"></td>
+          <td><input type="text" name="new_rsuf" placeholder="_X_Nieco_1m" size="40"></td>
+          <td><input type="text" name="new_rscale" placeholder="0.001" style="width:90px"></td>
+        </tr>
       </table>
+      <p class="muted" style="font-size:12px">Posledný (zvýraznený) riadok = pridať nový READ koreň (vyplň kľúč + suffix).</p>
     </fieldset>
 
     <fieldset>
@@ -65,7 +71,13 @@
           <td><input type="text" name="wscale__{{ key }}" value="{{ cfg.scale_write.get(key, 1000.0) }}" style="width:90px"></td>
         </tr>
         {% endfor %}
+        <tr style="background:#f6f9ff">
+          <td><input type="text" name="new_wkey" placeholder="nový kľúč" size="16"></td>
+          <td><input type="text" name="new_wsuf" placeholder="_U_Nieco" size="40"></td>
+          <td><input type="text" name="new_wscale" placeholder="1000" style="width:90px"></td>
+        </tr>
       </table>
+      <p class="muted" style="font-size:12px">Posledný (zvýraznený) riadok = pridať nový WRITE koreň.</p>
     </fieldset>
 
     <button type="submit" class="btn green lg">💾 Uložiť konfiguráciu</button>
