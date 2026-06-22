@@ -63,6 +63,9 @@ services:
       # aktívny → ich livesim trace ostáva priebežne aktuálny → manager dashboard ukazuje reálny
       # stav a otvorenie/prepnutie profilu nerobí veľký on-open backfill ("od znova" po nečinnosti).
       LIVESIM_BG_ALL: "1"
+      # TRACE-DB (2026-06-22): livesim trace pre grafy/compute_current_state z effect_minute (DB),
+      # nie z 27 MB CSV. Overené na deve → promote na prod. CSV fallback ak deň v DB chýba.
+      LIVESIM_TRACE_DB: "1"
       # VypnĂşĹĄ background Ăşlohy pri prvom spustenĂ­ (kĂ˝m neoverĂ­Ĺˇ Ĺľe appka beĹľĂ­)
       # Po prvom ĂşspeĹˇnom Ĺˇtarte odkomentuj na produkÄŤnĂ© fungovanie:
       # NO_BACKFILL: "1"

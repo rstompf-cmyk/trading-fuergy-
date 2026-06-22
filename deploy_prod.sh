@@ -15,7 +15,7 @@ git add app.py livesim.py optimizer.py vdt_state.py vdt_optimizer.py vdt_live_ad
         tools/export_livesim_xlsx.py tools/diag_trades.py tests/test_vdt_pair_matcher.py \
         scripts/upgrade_dev.ps1 scripts/upgrade_prod.ps1 deploy_prod.sh 2>/dev/null || true
 git add -f out/price_model_15m.joblib 2>/dev/null || true   # pribalit model (Windows nema historian na trening)
-git commit -m "PROD release: Manager dashboard v2 (/manager+/fleet live, full-width, 1 profil/riadok, cisla+graf DT/VDT/SOC, TERAZ marker, navigacia casu den/mesiac/rozsah, aktualny+ocakavany efekt) + SOC-leak fix (load_series/paths per-profil) + Zisk za den = ocakavany celodenny (fut DT) + klik nazov->livesim graf->dentrh + full-width .container vsade + LIVESIM_BG_ALL na prode + VDT parovy matcher (opt-in) + SOC-CARRY/DRIFT + AUDIT-RESERVE-PARAM perf. golden 5/5 + matcher 8/8" || echo "(nic nove na commit)"
+git commit -m "PROD release: Manager dashboard v2 (/manager+/fleet live, full-width, 1 profil/riadok, cisla+graf DT/VDT/SOC, TERAZ marker, navigacia casu, aktualny+ocakavany efekt) + SOC-leak fix (load_series/paths per-profil) + Zisk za den=ocakavany celodenny + klik nazov->livesim graf->dentrh + full-width vsade + COLD-START-BG (bg persist trace na disk + dashboard cita z disku po restarte) + SKIP-PLAN-VISIBLE (dni bez planu trackovane v meta+varovanie, koniec falosneho 'hotovo') + VDT parovy matcher (opt-in) + SOC-CARRY/DRIFT + perf. golden 5/5 + matcher 8/8" || echo "(nic nove na commit)"
 git push origin dev
 echo "=== FF push dev -> refactor-v2 ==="
 git push origin dev:refactor-v2
