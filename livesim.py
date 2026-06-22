@@ -1073,6 +1073,9 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
     last_err = None
     skipped_no_data = []                # #600: zoznam dní bez minute dát
     skipped_no_sys_mw = []              # #600: zoznam dní bez sys_MW (historian gap)
+    skipped_no_plan = []               # SKIP-PLAN-VISIBLE (2026-06-21): dni bez D-1 plánu
+                                       # (PlanMissingError) — predtým NEtrackované → meta
+                                       # hlásila "hotovo" hoci dni chýbali (falošný done_through).
     # Progress reporting (BG-PROGRESS, 2026-06-13, user: "chýba info koľko sa má
     # ešte prepočítať, ideálne progress bar"). Spočítaj celkový počet dní backfillu
     # a hlás postup cez progress_cb(done_days, total_days, day_iso).
@@ -1119,6 +1122,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     cfg, d, mn_day_full, soc_init_pct=soc/bkwh*100, plan_params=plan_params)
             except ps.PlanMissingError as _pe:
                 last_err = f"deň {d}: {_pe}"
+                skipped_no_plan.append(str(d))   # SKIP-PLAN-VISIBLE: track → meta + varovanie
                 day += pd.Timedelta(days=1); continue
             # ── REAL-PRICE SETTLEMENT pre dokončené dni (zhoda so /simulacia) ──
             # _day_plan vráti dtprof na PREDIKOVANÝCH cenách. Pre historické dni s reálnymi
@@ -1942,7 +1946,8 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             last_min=(last_min.strftime("%Y-%m-%d %H:%M:%S")
                                       if last_min is not None else None),
                             skipped_no_sys_mw=skipped_no_sys_mw,
-                            skipped_no_data=skipped_no_data, settings_sig=sig_s)
+                            skipped_no_data=skipped_no_data,
+                            skipped_no_plan=skipped_no_plan, settings_sig=sig_s)
                         _save_meta_atomic(meta_path, meta)
                     except Exception as _e_meta_inc:
                         print(f"[livesim meta-inc] {_e_meta_inc}")
@@ -2158,15 +2163,18 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
         raise RuntimeError(last_err)                         # nič sa nepodarilo → ukáž skutočnú chybu
 
     # #600: zaznamenaj zoznam skipnutých dní pre user-facing warning
-    if skipped_no_sys_mw or skipped_no_data:
+    if skipped_no_sys_mw or skipped_no_data or skipped_no_plan:
         gap_msg = []
         if skipped_no_sys_mw:
             gap_msg.append(f"{len(skipped_no_sys_mw)} dní bez sys_MW (historian gap)")
         if skipped_no_data:
             gap_msg.append(f"{len(skipped_no_data)} dní bez minute dát")
-        print(f"[livesim.advance] ⚠ HISTORIAN GAP: {' + '.join(gap_msg)}. "
-              f"Spusti `python -m historian_backfill --tag <tag> --from {start_date.date()} "
-              f"--to {today.date()}` pre kompletný backfill.")
+        if skipped_no_plan:
+            gap_msg.append(f"{len(skipped_no_plan)} dní bez D-1 plánu (treba /plan_batch)")
+        print(f"[livesim.advance] ⚠ GAP: {' + '.join(gap_msg)}. "
+              f"Profil NIE JE kompletný hoci done_through={done_through}.")
+        if skipped_no_plan[:5]:
+            print(f"  Prvé dni bez plánu: {skipped_no_plan[:5]}")
         if skipped_no_sys_mw[:5]:
             print(f"  Prvé skipnuté dni (sys_MW): {skipped_no_sys_mw[:5]}")
 
@@ -2191,6 +2199,7 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 last_min=last_min.strftime("%Y-%m-%d %H:%M:%S") if last_min is not None else None,
                 skipped_no_sys_mw=skipped_no_sys_mw,        # #600: pre UI banner
                 skipped_no_data=skipped_no_data,
+                skipped_no_plan=skipped_no_plan,            # SKIP-PLAN-VISIBLE: dni bez D-1 plánu
                 today_soc_kwh=round(soc_disp, 3),           # SOC-UNIFY-TODAY: engine dnešný SOC (RT+DT+VDT)
                 today_soc_pct=round(soc_disp / bkwh * 100, 2) if bkwh else None,
                 today_soc_ts=today_soc_ts,
@@ -2280,14 +2289,64 @@ def available_days(case: str, port: str = "8000", profile=None):
         return []
 
 
+def _trace_from_db(profile, day):
+    """TRACE-DB (2026-06-21): per-minútový trace pre daný deň z effect_minute (DB) namiesto
+    CSV. Vracia DataFrame so stĺpcami zhodnými s CSV trace (mapované) alebo None ak DB prázdne.
+    Trace UŽ je v effect_minute (soc_pct, batt_kw_real, plan_batt_kw, ftv/load, € zložky) —
+    toto len premapuje názvy na to, čo /livesim graf + compute_current_state očakávajú."""
+    if profile is None or day is None:
+        return None
+    try:
+        import core.effect_db as _edb
+        _df = _edb.get_minute_series(str(profile), str(day)[:10])
+    except Exception:
+        return None
+    if _df is None or _df.empty or "soc_pct" not in _df.columns:
+        return None
+    try:
+        _df = _df.copy()
+        _df["date"] = pd.to_datetime(_df["time"]).dt.strftime("%Y-%m-%d")
+        # € a kW stĺpce → názvy ktoré očakávajú konzumenti (compute_effect_totals, graf)
+        _df["dt_rev_min"] = _df.get("dt", 0.0)
+        _df["rt_rev_realistic_min"] = _df.get("rt", 0.0)
+        _df["rt_rev_min"] = _df.get("rt", 0.0)
+        _df["vdt_arb_min"] = _df.get("vdt_arb", 0.0)
+        _df["baseline_per_min_eur"] = _df.get("baseline", 0.0)
+        # kW pre graf (batt plán/realita, FTV, load)
+        if "ftv_kw" not in _df.columns:
+            _df["ftv_kw"] = _df.get("ftv_kw_real", 0.0)
+        if "ftv_min_real_kw" not in _df.columns:
+            _df["ftv_min_real_kw"] = _df.get("ftv_kw_real")
+        if "load_min_real_kw" not in _df.columns:
+            _df["load_min_real_kw"] = _df.get("load_kw_real")
+        return _df
+    except Exception:
+        return None
+
+
 def load_series(case: str, port: str = "8000", day=None, max_points: int = 2000, profile=None):
-    """Načíta rady z CSV pre grafy. day=None → celé (decimované); inak len daný deň (jemné).
+    """Načíta rady pre grafy. day=None → celé (decimované); inak len daný deň (jemné).
     profile=None → aktívny profil; inak konkrétny profil (per-profil súbory, LIVESIM-PER-PROFILE).
 
-    Dedup: ak CSV obsahuje viacero riadkov pre tú istú minútu (= rôzne advance() behy
-    pre rovnaké nastavenia, znak že settings_sig reset zlyhal), ponecháme **POSLEDNÝ**
-    výskyt (= najnovší výpočet). Tým sa grafy nezdvojnásobia.
+    TRACE-DB (2026-06-21): keď LIVESIM_TRACE_DB=1 a je daný deň → trace z effect_minute (DB,
+    rýchle indexed query), nie z 27 MB CSV. Default OFF (CSV) — nulové riziko pre prod; na dev
+    zapnuté na test. CSV fallback ak DB pre deň prázdne.
+
+    Dedup: ak CSV obsahuje viacero riadkov pre tú istú minútu, ponecháme POSLEDNÝ výskyt.
     """
+    if os.environ.get("LIVESIM_TRACE_DB") == "1" and day is not None:
+        try:
+            _prof_db = profile
+            if _prof_db is None:
+                from core.profile_resolver import get_active as _ga_ls
+                _prof_db = _ga_ls()
+            _dbdf = _trace_from_db(_prof_db, day)
+            if _dbdf is not None and not _dbdf.empty:
+                if len(_dbdf) > max_points:
+                    _dbdf = _dbdf.iloc[:: max(1, len(_dbdf) // max_points)]
+                return _dbdf
+        except Exception as _e_tdb:
+            print(f"[load_series TRACE-DB] {profile}/{day}: {_e_tdb} → fallback CSV")
     df = _read_csv(case, port, profile)
     # Bug AVAILABLE-DAYS-NO-TIME: df môže prísť bez stĺpca 'time' (rozpísaný CSV
     # počas backfillu) → nepadni, vráť None (volajúci to zvládne / ukáže progress).

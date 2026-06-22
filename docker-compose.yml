@@ -142,6 +142,9 @@ services:
       # (ziadny sig-churn loop) + AUDIT-STATE-REUSE (lacny per-den compute). Spolu so SWITCH-INSTANT
       # (servir stale cache hned, bez 2s grace) = ziadne cakanie pri prepnuti.
       LIVESIM_BG_ALL: "1"
+      # TRACE-DB (2026-06-21): livesim trace pre grafy/compute_current_state z effect_minute (DB),
+      # nie z 27 MB CSV. LEN DEV na test (prod bez flagu = CSV, nulové riziko). CSV fallback.
+      LIVESIM_TRACE_DB: "1"
 
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/me"]
