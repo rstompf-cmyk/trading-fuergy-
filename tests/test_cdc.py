@@ -90,3 +90,28 @@ def test_customer_crud_and_battery_link():
     # default backend = realio
     b3 = fleet.register_battery("Trakany", "sk", mode="real")
     assert fleet.get_battery(b3)["backend"] == "realio"
+
+
+def test_plan_source_no_profile_returns_none():
+    _setup_db()
+    import fleet
+    from control.plan_source import planned_setpoint_kw, profile_name_for
+    bid = fleet.register_battery("SIMX", "sk", mode="simulation",
+                                 batt_kw=100, batt_kwh=200, enabled=True)
+    b = fleet.get_battery(bid)
+    assert profile_name_for(b) is None
+    assert planned_setpoint_kw(b) is None   # bez profilu → žiadny plán
+
+
+def test_run_single_sim_writes_status():
+    """run_single (proces-per-batéria) odtiká SIM batériu bez pádu a zapíše status."""
+    _setup_db()
+    import fleet
+    from workers import control_loop
+    bid = fleet.register_battery("SIMRUN", "sk", mode="simulation",
+                                 batt_kw=100, batt_kwh=200, eff=0.95, enabled=True)
+    # 2 ticky, žiadny spánok, veľký dt_h len pre test
+    control_loop.run_single(bid, tick_sec=0, max_ticks=2, dt_h=0.25)
+    st = fleet.get_status(bid)
+    assert st is not None
+    assert st.get("health") in ("ok", "degraded")

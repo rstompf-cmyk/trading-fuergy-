@@ -112,6 +112,7 @@ def run_single(battery_id: int, tick_sec: Optional[float] = None,
     supervisor ho už znova nespustí. Chyba ticku NEzhodí proces (fail-safe)."""
     from control.executor import build_executor
     from control.loop import tick
+    from control.plan_source import planned_setpoint_kw
     import fleet
 
     if tick_sec is None:
@@ -138,9 +139,14 @@ def run_single(battery_id: int, tick_sec: Optional[float] = None,
             if not cur or not cur.get("enabled", False):
                 print(f"[instance {battery_id}] batéria vypnutá/zmizla → graceful stop", flush=True)
                 break
-            res = tick(battery_id, ex, current_setpoint_kw=held, dt_h=dt_h)
-            held = float(res.get("target_kw", 0.0))
+            # plánovaný setpoint z profilu batérie (DB príkaz ho v tick prepíše);
+            # ak plán chýba, drž predošlú hodnotu (plynulé riadenie, nie skok)
+            planned = planned_setpoint_kw(cur)
+            sp_in = float(planned) if planned is not None else held
+            res = tick(battery_id, ex, current_setpoint_kw=sp_in, dt_h=dt_h)
+            held = float(res.get("target_kw", sp_in))
             print(f"[instance {battery_id}] {_ts()} tick {n}: {res.get('health')} "
+                  f"plan={'-' if planned is None else format(planned, '+.1f')} "
                   f"sp={held:+.1f}kW soc={res.get('soc_pct')}", flush=True)
         except Exception as e:
             print(f"[instance {battery_id}] {_ts()} tick {n} zlyhal (pokračujem): {e}", flush=True)

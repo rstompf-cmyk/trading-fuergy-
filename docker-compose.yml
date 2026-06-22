@@ -170,8 +170,10 @@ services:
       - dev
 
   # ===========================================================================
-  # control-loop-dev (VPP) - samostatny real-time tick flotily, vedla web dev.
-  # Zdiela dev DB (./data-dev/db) -> pise instance_status, web ho cita na /fleet.
+  # control-loop-dev (VPP) - supervisor: 1 PROCES NA BATERIU, vedla web dev.
+  # Zdiela dev DB (./data-dev/db) -> kazda instancia pise instance_status, web
+  # ho cita na /fleet. Supervisor spusti `workers.control_loop --battery <id>`
+  # pre kazdu enabled bateriu, monitoruje a restartuje (proces per baterii).
   # Spustenie: docker compose --profile dev up -d control-loop-dev
   # FLEET_REAL_WRITE nechaj zakomentovane kym nie je realna bateria odskusana!
   # ---------------------------------------------------------------------------
@@ -181,7 +183,7 @@ services:
     restart: unless-stopped
     depends_on:
       - trading-fuergy-dev
-    command: ["python", "-m", "workers.control_loop"]
+    command: ["python", "-m", "workers.fleet_supervisor"]
     volumes:
       - ./data-dev/db:/app/db/data
       - ./data-dev/out:/app/out
