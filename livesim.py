@@ -2305,22 +2305,65 @@ def _trace_from_db(profile, day):
         return None
     try:
         _df = _df.copy()
-        _df["date"] = pd.to_datetime(_df["time"]).dt.strftime("%Y-%m-%d")
-        # € a kW stĺpce → názvy ktoré očakávajú konzumenti (compute_effect_totals, graf)
-        _df["dt_rev_min"] = _df.get("dt", 0.0)
-        _df["rt_rev_realistic_min"] = _df.get("rt", 0.0)
-        _df["rt_rev_min"] = _df.get("rt", 0.0)
-        _df["vdt_arb_min"] = _df.get("vdt_arb", 0.0)
-        _df["baseline_per_min_eur"] = _df.get("baseline", 0.0)
-        # kW pre graf (batt plán/realita, FTV, load)
-        if "ftv_kw" not in _df.columns:
-            _df["ftv_kw"] = _df.get("ftv_kw_real", 0.0)
-        if "ftv_min_real_kw" not in _df.columns:
-            _df["ftv_min_real_kw"] = _df.get("ftv_kw_real")
-        if "load_min_real_kw" not in _df.columns:
-            _df["load_min_real_kw"] = _df.get("load_kw_real")
+        _t = pd.to_datetime(_df["time"], errors="coerce")
+        _df["time"] = _t
+        _df["date"] = _t.dt.strftime("%Y-%m-%d")
+        _df["ts15"] = _t.dt.floor("15min")
+
+        def _col(name, default=0.0):
+            """Numerický stĺpec z DB ak existuje, inak skalárny default (broadcast)."""
+            return pd.to_numeric(_df[name], errors="coerce") if name in _df.columns else default
+
+        # ── ekonomické € (per-min) — názvy ktoré očakávajú konzumenti (graf, totals) ──
+        _df["dt_rev_min"] = _col("dt")
+        _df["rt_rev_min"] = _col("rt")
+        _df["rt_rev_realistic_min"] = _col("rt")
+        _df["vdt_arb_min"] = _col("vdt_arb")
+        _df["baseline_per_min_eur"] = _col("baseline")
+        _df["dt_eur"] = _col("dt_eur_mwh")
+        _df["dt_real_eur"] = _col("dt_eur_mwh")
+        _df["zco_eur"] = _col("zco_eur")
+        _df["vdt_eur"] = 0.0           # cena VDT v DB nie je (vdt_arb je € efekt, nie cena)
+        _df["sys_MW"] = 0.0            # SEPS sys_MW nie je v effect_minute
+
+        # ── kW krivky (batéria plán/realita, FTV, load) ──
+        _df["ftv_kw"] = _col("ftv_kw_real")
+        _df["ftv_min_real_kw"] = _col("ftv_kw_real")
+        _df["ftv_hour_plan_kw"] = _col("ftv_kw_real")
+        _df["ftv_min_curtailed_kw"] = 0.0
+        _df["load_min_real_kw"] = _col("load_kw_real")
+        _df["load_plan_kw"] = _col("load_kw_real")
+        _df["plan_batt_kw"] = _col("plan_batt_kw")
+        _df["batt_kw_realistic"] = _col("batt_kw_real")
+        _df["plan_batt_dam_kw"] = _col("plan_batt_kw")
+        _df["plan_batt_vdt_kw"] = 0.0
+        _df["plan_grid_kwh"] = 0.0
+        _df["plan_grid_dam_kwh"] = 0.0
+        _df["plan_grid_vdt_kwh"] = 0.0
+        _df["plan_curtail_kwh"] = 0.0
+        _df["soc_pct"] = _col("soc_pct")
+        _df["soc_kwh"] = 0.0
+        _df["budget_left_kwh"] = 0.0
+
+        # ── RT signál: effect_minute nemá rt_dir/rt_power_pct → krivka RT signálu plochá (0).
+        # Reálny RT je už zahrnutý v batt_kw_realistic (=batt_kw_real PO RT zásahu), takže
+        # batériová krivka aj SOC ostávajú verné; chýba len samostatná RT-signál čiara. Žiadny pád.
+        _df["rt_dir"] = 0.0
+        _df["rt_power_pct"] = 0.0
+        _df["rt_reason"] = ""
+        _df["mw_sig"] = 0.0
+        _df["avg_react"] = 0.0
+        _df["band_dis"] = 0.0
+        _df["band_chg"] = 0.0
+
+        # ── kumulatívy z € (cum_* krivky grafu) ──
+        _df["cum_dt"] = _df["dt_rev_min"].fillna(0).cumsum()
+        _df["cum_rt"] = _df["rt_rev_min"].fillna(0).cumsum()
+        _df["cum_total"] = (_df["dt_rev_min"].fillna(0) + _df["rt_rev_min"].fillna(0)
+                            + _df["vdt_arb_min"].fillna(0)).cumsum()
         return _df
-    except Exception:
+    except Exception as _e_tdb2:
+        print(f"[_trace_from_db] map zlyhalo {profile}/{day}: {_e_tdb2} → fallback CSV")
         return None
 
 
