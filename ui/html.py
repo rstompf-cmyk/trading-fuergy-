@@ -199,6 +199,8 @@ def _nav(active: str = "") -> str:
         ("/manager", "🛰 Manager"),
         ("/rt", "🔴 RT poradca"),
         ("/profiles", "⚙ Profily"),
+        ("/customers", "🏭 Zákazníci"),
+        ("/cdc", "🛰 Konfigurácia CDC"),
         ("/kalibracia", "📈 Kalibrácia"),
         ("/data", "💾 Dáta"),
     ]

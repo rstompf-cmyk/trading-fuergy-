@@ -16932,6 +16932,170 @@ na mesačnú/hodinovú kalibráciu namiesto jedného čísla.</p>"""
     return kalibracia_form("Kalibrácia hotová.", extra, request=request)
 
 
+# ─── CDC konfigurácia (per krajina) + Zákazníci ─────────────────────────────
+def _cdc_page(request, msg="", msg_kind="success", test_prefix=None,
+              test_result=None, test_tags=None):
+    import cdc
+    import market as _mk
+    from ui.templates import render
+    mkt = _mk.get_active_market() or "sk"
+    cfg = cdc.load_system_config(mkt)
+    return render(request, "pages/cdc.html", market=mkt, cfg=cfg,
+                  msg=msg, msg_kind=msg_kind, test_prefix=test_prefix,
+                  test_result=test_result, test_tags=test_tags or {})
+
+
+@app.get("/cdc", response_class=HTMLResponse)
+def cdc_get(request: Request):
+    return _cdc_page(request)
+
+
+@app.post("/cdc/save", response_class=HTMLResponse)
+async def cdc_save(request: Request):
+    import cdc
+    import market as _mk
+    mkt = _mk.get_active_market() or "sk"
+    form = await request.form()
+    cfg = cdc.load_system_config(mkt)
+    cfg["host"] = (form.get("host") or "").strip()
+    cfg["endpoint_read"] = (form.get("endpoint_read") or "/api/excel/data/read").strip()
+    cfg["endpoint_write"] = (form.get("endpoint_write") or "/api/excel/data/write").strip()
+    cfg["username"] = (form.get("username") or "").strip()
+    cfg["password"] = (form.get("password") or "").strip()
+    try:
+        cfg["step_read_s"] = int(form.get("step_read_s") or 900)
+    except ValueError:
+        pass
+    try:
+        cfg["timeout_s"] = int(form.get("timeout_s") or 15)
+    except ValueError:
+        pass
+    cfg["verify_ssl"] = bool(form.get("verify_ssl"))
+    cfg["enabled"] = bool(form.get("enabled"))
+    cfg["control_enabled"] = bool(form.get("control_enabled"))
+    for k in list((cfg.get("tags_read") or {}).keys()):
+        if ("rsuf__" + k) in form:
+            cfg["tags_read"][k] = (form.get("rsuf__" + k) or "").strip()
+        if ("rscale__" + k) in form:
+            try:
+                cfg["scale_read"][k] = float(form.get("rscale__" + k))
+            except ValueError:
+                pass
+    for k in list((cfg.get("tags_write") or {}).keys()):
+        if ("wsuf__" + k) in form:
+            cfg["tags_write"][k] = (form.get("wsuf__" + k) or "").strip()
+        if ("wscale__" + k) in form:
+            try:
+                cfg["scale_write"][k] = float(form.get("wscale__" + k))
+            except ValueError:
+                pass
+    cdc.save_system_config(cfg, mkt)
+    return _cdc_page(request, msg="Konfigurácia uložená.")
+
+
+@app.post("/cdc/test", response_class=HTMLResponse)
+async def cdc_test(request: Request):
+    import cdc
+    import market as _mk
+    mkt = _mk.get_active_market() or "sk"
+    form = await request.form()
+    prefix = (form.get("prefix") or "").strip()
+    cfg = cdc.load_system_config(mkt)
+    cfg["enabled"] = True   # vynútiť čítanie pre test
+    tags = cdc.resolve_read_tags(prefix, cfg)
+    try:
+        res = cdc.fetch_latest(prefix, cfg=cfg)
+    except Exception as e:
+        res = {"_error": str(e)}
+    return _cdc_page(request, test_prefix=prefix, test_result=res or {}, test_tags=tags)
+
+
+def _customers_page(request, msg="", msg_kind="success"):
+    import market as _mk
+    import fleet
+    from ui.templates import render
+    mkt = _mk.get_active_market() or "sk"
+    custs = fleet.list_customers(country=mkt)
+    bats = [b for b in fleet.list_batteries() if b.get("country") == mkt]
+    cname = {c["id"]: c["name"] for c in custs}
+    for b in bats:
+        b["customer_name"] = cname.get(b.get("customer_id"))
+    for c in custs:
+        c["batteries"] = [b for b in bats if b.get("customer_id") == c["id"]]
+    try:
+        import profiles as _pr
+        profs = _pr.list_profiles()
+    except Exception:
+        profs = []
+    return render(request, "pages/customers.html", market=mkt, customers=custs,
+                  batteries=bats, profiles_list=profs, msg=msg, msg_kind=msg_kind)
+
+
+@app.get("/customers", response_class=HTMLResponse)
+def customers_get(request: Request):
+    return _customers_page(request)
+
+
+@app.post("/customers/create", response_class=HTMLResponse)
+async def customers_create(request: Request):
+    import market as _mk
+    import fleet
+    mkt = _mk.get_active_market() or "sk"
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    note = (form.get("note") or "").strip() or None
+    if not name:
+        return _customers_page(request, msg="Názov je povinný.", msg_kind="error")
+    fleet.create_customer(name, mkt, note=note)
+    return _customers_page(request, msg=f"Zákazník {name} uložený.")
+
+
+@app.post("/customers/battery", response_class=HTMLResponse)
+async def customers_battery(request: Request):
+    import market as _mk
+    import fleet
+    mkt = _mk.get_active_market() or "sk"
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    prefix = (form.get("cdc_prefix") or "").strip()
+    if not name or not prefix:
+        return _customers_page(request, msg="Názov aj CDC prefix sú povinné.", msg_kind="error")
+    cid = form.get("customer_id") or ""
+    cid = int(cid) if cid else None
+    pid = None
+    pname = (form.get("profile_name") or "").strip()
+    if pname:
+        try:
+            from db import get_session
+            from db.models import Profile as _DbP
+            with get_session() as s:
+                row = s.query(_DbP).filter_by(name=pname).one_or_none()
+                pid = row.id if row else None
+        except Exception:
+            pid = None
+    try:
+        bkw = float(form.get("batt_kw") or 0)
+        bkwh = float(form.get("batt_kwh") or 0)
+    except ValueError:
+        bkw, bkwh = 0.0, 0.0
+    fleet.register_battery(name, mkt, mode="real", backend="cdc", cdc_prefix=prefix,
+                           customer_id=cid, profile_id=pid, batt_kw=bkw, batt_kwh=bkwh,
+                           enabled=bool(form.get("enabled")))
+    return _customers_page(request, msg=f"Batéria {name} uložená.")
+
+
+@app.post("/customers/battery/enable", response_class=HTMLResponse)
+async def customers_battery_enable(request: Request):
+    import fleet
+    form = await request.form()
+    try:
+        bid = int(form.get("battery_id"))
+    except (TypeError, ValueError):
+        return _customers_page(request, msg="Neplatné battery_id.", msg_kind="error")
+    fleet.set_enabled(bid, form.get("enabled") == "1")
+    return _customers_page(request, msg="Stav inštancie zmenený.")
+
+
 @app.get("/rt", response_class=HTMLResponse)
 def rt_get(soc: float = None, margin: float = None, budget: float = None,
            mode: str = None, bchg: float = None, kdis: float = None, kchg: float = None,

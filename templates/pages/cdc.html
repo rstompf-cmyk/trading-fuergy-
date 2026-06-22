@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Konfigurácia CDC — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <h1>🛰 Konfigurácia CDC — {{ market | upper }}</h1>
+  <p class="muted">
+    Centrálny CDC server pre <b>{{ market | upper }}</b>. Jedno miesto pre celú krajinu —
+    všetky batérie tohto systému zdieľajú server, prihlásenie aj <b>korene tagov</b> (suffixy);
+    líšia sa len <b>prefixom</b> (nastavený pri batérii v <a href="/customers">Zákazníci</a>).
+    Reálny tag = <code>prefix + suffix</code>.
+  </p>
+
+  {% if msg %}<div class="banner {{ msg_kind or 'success' }}">{{ msg }}</div>{% endif %}
+
+  <form method="post" action="/cdc/save">
+    <fieldset>
+      <legend>Server + prihlásenie</legend>
+      <label>Host:
+        <input type="text" name="host" value="{{ cfg.host }}" size="40"
+               placeholder="http://192.168.31.30:8088">
+      </label>
+      <label>Endpoint read: <input type="text" name="endpoint_read" value="{{ cfg.endpoint_read }}"></label>
+      <label>Endpoint write: <input type="text" name="endpoint_write" value="{{ cfg.endpoint_write }}"></label>
+      <br>
+      <label>Užívateľ: <input type="text" name="username" value="{{ cfg.username }}"></label>
+      <label>Heslo: <input type="password" name="password" value="{{ cfg.password }}"></label>
+      <br>
+      <label>Krok čítania [s]:
+        <input type="number" name="step_read_s" value="{{ cfg.step_read_s }}" style="width:90px">
+        <span class="muted" style="font-size:12px">900 = 15-min, 3600 = 1h</span>
+      </label>
+      <label>Timeout [s]: <input type="number" name="timeout_s" value="{{ cfg.timeout_s }}" style="width:80px"></label>
+      <br>
+      <label><input type="checkbox" name="verify_ssl" {% if cfg.verify_ssl %}checked{% endif %}> verify SSL</label>
+      <label><input type="checkbox" name="enabled" {% if cfg.enabled %}checked{% endif %}> <b>enabled</b> (povoliť čítanie)</label>
+      <label><input type="checkbox" name="control_enabled" {% if cfg.control_enabled %}checked{% endif %}> <b>control_enabled</b> (povoliť zápis)</label>
+      <p class="muted" style="font-size:12px">
+        Reálny zápis na HW prebehne len ak je <code>control_enabled</code> + <code>enabled</code>
+        a zároveň env <code>FLEET_REAL_WRITE=1</code>. Inak DRY-RUN.
+      </p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Korene tagov — READ (suffix sa lepí za prefix batérie)</legend>
+      <table class="tbl-compact">
+        <tr><th>logický kľúč</th><th>suffix</th><th>scale</th></tr>
+        {% for key, suf in cfg.tags_read.items() %}
+        <tr>
+          <td><code>{{ key }}</code></td>
+          <td><input type="text" name="rsuf__{{ key }}" value="{{ suf }}" size="40"></td>
+          <td><input type="text" name="rscale__{{ key }}" value="{{ cfg.scale_read.get(key, 1.0) }}" style="width:90px"></td>
+        </tr>
+        {% endfor %}
+      </table>
+    </fieldset>
+
+    <fieldset>
+      <legend>Korene tagov — WRITE (riadenie)</legend>
+      <table class="tbl-compact">
+        <tr><th>logický kľúč</th><th>suffix</th><th>scale (kW→server)</th></tr>
+        {% for key, suf in cfg.tags_write.items() %}
+        <tr>
+          <td><code>{{ key }}</code></td>
+          <td><input type="text" name="wsuf__{{ key }}" value="{{ suf }}" size="40"></td>
+          <td><input type="text" name="wscale__{{ key }}" value="{{ cfg.scale_write.get(key, 1000.0) }}" style="width:90px"></td>
+        </tr>
+        {% endfor %}
+      </table>
+    </fieldset>
+
+    <button type="submit" class="btn green lg">💾 Uložiť konfiguráciu</button>
+  </form>
+
+  <hr>
+  <h2>🔎 Test čítania</h2>
+  <p class="muted">Zadaj prefix batérie (napr. <code>VW-BA</code>) a stiahnu sa posledné hodnoty zo servera.</p>
+  <form method="post" action="/cdc/test">
+    <label>Prefix: <input type="text" name="prefix" value="{{ test_prefix or 'VW-BA' }}"></label>
+    <button type="submit" class="btn sec">Test read</button>
+  </form>
+
+  {% if test_result is not none %}
+    <h3>Výsledok pre <code>{{ test_prefix }}</code></h3>
+    {% if test_result._error %}
+      <div class="banner error">Chyba: {{ test_result._error }}</div>
+    {% else %}
+      <table class="tbl-compact">
+        <tr><th>logický kľúč</th><th>reálny tag</th><th>hodnota</th></tr>
+        {% for key, tag in test_tags.items() %}
+        <tr>
+          <td><code>{{ key }}</code></td>
+          <td><code>{{ tag }}</code></td>
+          <td>{% if test_result.get(key) is none %}<span class="muted">—</span>{% else %}{{ test_result.get(key) }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      <p class="muted" style="font-size:12px">_ts: {{ test_result._ts }}</p>
+    {% endif %}
+  {% endif %}
+{% endblock %}

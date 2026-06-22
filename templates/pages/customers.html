@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Zákazníci — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <h1>🏭 Zákazníci — {{ market | upper }}</h1>
+  <p class="muted">
+    Zákazník = zoskupenie batérií (napr. <b>Muller</b> = Muller-SE + Muller2-SE).
+    Každá batéria má vlastný <b>prefix</b> (CDC tagy) a môže byť napojená na profil (plány).
+    Server/korene tagov sa nastavujú raz na krajinu v <a href="/cdc">Konfigurácia CDC</a>.
+  </p>
+
+  {% if msg %}<div class="banner {{ msg_kind or 'success' }}">{{ msg }}</div>{% endif %}
+
+  <fieldset>
+    <legend>➕ Nový zákazník</legend>
+    <form method="post" action="/customers/create">
+      <label>Názov: <input type="text" name="name" required placeholder="Muller"></label>
+      <label>Poznámka: <input type="text" name="note" size="30"></label>
+      <button type="submit" class="btn green">Vytvoriť</button>
+    </form>
+  </fieldset>
+
+  <h2>Zákazníci ({{ market | upper }})</h2>
+  {% if customers %}
+    <table class="tbl-compact">
+      <tr><th>Zákazník</th><th>Batérie</th><th>Poznámka</th></tr>
+      {% for c in customers %}
+      <tr>
+        <td><b>{{ c.name }}</b></td>
+        <td>
+          {% for b in c.batteries %}
+            <span class="chip {{ 'real' if b.mode=='real' else '' }}" title="{{ b.backend }}{% if b.cdc_prefix %} · {{ b.cdc_prefix }}{% endif %}">
+              {{ b.name }}{% if b.enabled %} 🟢{% endif %}
+            </span>
+          {% else %}
+            <span class="muted">— žiadne —</span>
+          {% endfor %}
+        </td>
+        <td class="muted">{{ c.note or '' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="banner info">Zatiaľ žiadni zákazníci pre {{ market | upper }}.</div>
+  {% endif %}
+
+  <hr>
+  <fieldset>
+    <legend>➕ Nová / upraviť batériu (CDC)</legend>
+    <form method="post" action="/customers/battery">
+      <label>Názov batérie: <input type="text" name="name" required placeholder="VW-BA"></label>
+      <label>CDC prefix: <input type="text" name="cdc_prefix" required placeholder="VW-BA"></label>
+      <br>
+      <label>Zákazník:
+        <select name="customer_id">
+          <option value="">— žiadny —</option>
+          {% for c in customers %}
+          <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Profil (plány):
+        <select name="profile_name">
+          <option value="">— žiadny —</option>
+          {% for p in profiles_list %}
+          <option value="{{ p }}">{{ p }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <br>
+      <label>Výkon kW: <input type="number" step="any" name="batt_kw" value="0" style="width:100px"></label>
+      <label>Kapacita kWh: <input type="number" step="any" name="batt_kwh" value="0" style="width:100px"></label>
+      <label><input type="checkbox" name="enabled"> spustiť ako inštanciu</label>
+      <p class="muted" style="font-size:12px">
+        backend = <b>cdc</b>, mód = <b>real</b>, krajina = <b>{{ market | upper }}</b> (nastavené automaticky).
+        UPSERT podľa názvu — rovnaký názov prepíše existujúcu batériu.
+      </p>
+      <button type="submit" class="btn green">Uložiť batériu</button>
+    </form>
+  </fieldset>
+
+  <h2>Batérie ({{ market | upper }})</h2>
+  {% if batteries %}
+    <table class="tbl-compact">
+      <tr><th>Názov</th><th>backend</th><th>prefix</th><th>zákazník</th><th>profil</th><th>kW / kWh</th><th>inštancia</th></tr>
+      {% for b in batteries %}
+      <tr>
+        <td><b>{{ b.name }}</b></td>
+        <td><code>{{ b.backend }}</code></td>
+        <td>{% if b.cdc_prefix %}<code>{{ b.cdc_prefix }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{{ b.customer_name or '' }}</td>
+        <td>{{ b.profile_id or '' }}</td>
+        <td>{{ b.batt_kw }} / {{ b.batt_kwh }}</td>
+        <td>
+          <form method="post" action="/customers/battery/enable" style="display:inline">
+            <input type="hidden" name="battery_id" value="{{ b.id }}">
+            <input type="hidden" name="enabled" value="{{ '0' if b.enabled else '1' }}">
+            <button type="submit" class="btn {{ 'sec' if b.enabled else 'green' }} sm">
+              {{ '🟢 beží — vypnúť' if b.enabled else '▶ spustiť' }}
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <div class="banner info">Zatiaľ žiadne batérie pre {{ market | upper }}.</div>
+  {% endif %}
+{% endblock %}
