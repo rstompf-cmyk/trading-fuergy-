@@ -2924,6 +2924,31 @@ fSync(); fleetLoad(); setInterval(function(){ if(!fDay && !fTo) fleetLoad(); }, 
 """
 
 
+def _get_cached_today_trace(profile: str):
+    """today_trace pre profil: in-memory render-cache → fallback disk rcache (.rcache.pkl).
+    Disk fallback zaručí, že dashboard/fleet má dáta HNEĎ po reštarte (bg ich persistuje),
+    bez nutnosti otvárať profil v prehliadači. Vracia DataFrame alebo None."""
+    try:
+        with _LIVESIM_R_CACHE_LOCK:
+            for _k in list(_LIVESIM_R_CACHE.keys()):
+                if _k[2] == profile and isinstance(_LIVESIM_R_CACHE.get(_k, (0, None))[1], dict):
+                    _tt = _LIVESIM_R_CACHE[_k][1].get("today_trace")
+                    if _tt is not None and len(_tt):
+                        return _tt
+    except Exception:
+        pass
+    for _case in ("dt_15min", "plan_d1"):
+        try:
+            _disk = _livesim_rcache_load(_case, _PORT, profile)
+            if _disk and isinstance(_disk[1], dict):
+                _tt = _disk[1].get("today_trace")
+                if _tt is not None and len(_tt):
+                    return _tt
+        except Exception:
+            pass
+    return None
+
+
 def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
     """Manager dashboard v2 — agregát stavu všetkých bežiacich (bg-ON) profilov.
     Read-only nad effect_db (€), _vdt_trade_stats (VDT pozícia), compute_current_state (dnes),
@@ -3108,13 +3133,7 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
         if is_today:
             try:
                 from core.effect import compute_effect_totals as _eff_f
-                _r = None
-                with _LIVESIM_R_CACHE_LOCK:
-                    for _k in list(_LIVESIM_R_CACHE.keys()):
-                        if _k[2] == name and isinstance(_LIVESIM_R_CACHE.get(_k, (0, None))[1], dict):
-                            _r = _LIVESIM_R_CACHE[_k][1]
-                            break
-                _tt = (_r or {}).get("today_trace")
+                _tt = _get_cached_today_trace(name)
                 if _tt is not None and len(_tt):
                     _et = _eff_f(_tt, profile=name, day=day_iso)
                     rec["expected_eur"] = round(float(_et.get("total_eur", 0.0)), 1)
@@ -3644,13 +3663,7 @@ def dashboard(profile: str = ""):
         pass
     try:
         from core.effect import compute_effect_totals as _eff_f_d
-        _r_d = None
-        with _LIVESIM_R_CACHE_LOCK:
-            for _k in list(_LIVESIM_R_CACHE.keys()):
-                if _k[2] == prof and isinstance(_LIVESIM_R_CACHE.get(_k, (0, None))[1], dict):
-                    _r_d = _LIVESIM_R_CACHE[_k][1]
-                    break
-        _tt_d = (_r_d or {}).get("today_trace")
+        _tt_d = _get_cached_today_trace(prof)
         if _tt_d is not None and len(_tt_d):
             _eff_exp = round(float((_eff_f_d(_tt_d, profile=prof, day=_today_iso) or {}).get("total_eur", 0.0)), 1)
     except Exception as _e_exp_d:
@@ -4620,6 +4633,13 @@ def _livesim_cache_store(case, port, profile, r):
         if m > 0:
             with _LIVESIM_R_CACHE_LOCK:
                 _LIVESIM_R_CACHE[(case, port, str(profile or ""))] = (m, r)
+            # COLD-START-BG (2026-06-21): persistuj aj na disk → po reštarte je trace
+            # dostupný pre VŠETKY bg profily (nielen ručne otvorené) bez nutnosti otvárať
+            # profil v prehliadači. Dashboard/fleet ho načíta z disku hneď po reštarte.
+            try:
+                _livesim_rcache_save(case, port, str(profile or ""), m, r)
+            except Exception:
+                pass
     except Exception:
         pass
 
