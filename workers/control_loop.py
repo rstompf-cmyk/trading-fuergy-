@@ -102,6 +102,85 @@ def run(tick_sec: Optional[float] = None, max_ticks: Optional[int] = None,
     print(f"[control_loop] zastavený po {n} tickoch", flush=True)
 
 
+def run_single(battery_id: int, tick_sec: Optional[float] = None,
+               max_ticks: Optional[int] = None, dt_h: Optional[float] = None) -> None:
+    """Tick LEN jednej batérie — pre model PROCES-PER-BATÉRIA (úplná izolácia).
+
+    Executor sa postaví raz (dlhožijúci — drží SOC v sim) a tickuje sa opakovane;
+    setpoint sa drží medzi tickmi (príkaz z DB ho prepíše cez control.loop.tick).
+    Ak batéria zmizne / sa vypne (enabled=False), proces sa korektne ukončí —
+    supervisor ho už znova nespustí. Chyba ticku NEzhodí proces (fail-safe)."""
+    from control.executor import build_executor
+    from control.loop import tick
+    import fleet
+
+    if tick_sec is None:
+        tick_sec = float(os.environ.get("FLEET_TICK_SEC", "60"))
+    if dt_h is None:
+        dt_h = tick_sec / 3600.0
+
+    b = fleet.get_battery(battery_id)
+    if not b:
+        print(f"[instance {battery_id}] batéria neexistuje → končím", flush=True)
+        return
+    st = fleet.get_status(battery_id)
+    soc0 = (st or {}).get("soc_pct")
+    ex = build_executor(b, soc_pct=soc0 if soc0 is not None else 50.0)
+    held = 0.0
+    print(f"[instance {battery_id}] štart — {b.get('name')} ({b.get('mode')}/"
+          f"{b.get('backend') or 'realio'}), tick={tick_sec}s", flush=True)
+
+    n = 0
+    while _RUNNING:
+        t0 = time.time()
+        try:
+            cur = fleet.get_battery(battery_id)
+            if not cur or not cur.get("enabled", False):
+                print(f"[instance {battery_id}] batéria vypnutá/zmizla → graceful stop", flush=True)
+                break
+            res = tick(battery_id, ex, current_setpoint_kw=held, dt_h=dt_h)
+            held = float(res.get("target_kw", 0.0))
+            print(f"[instance {battery_id}] {_ts()} tick {n}: {res.get('health')} "
+                  f"sp={held:+.1f}kW soc={res.get('soc_pct')}", flush=True)
+        except Exception as e:
+            print(f"[instance {battery_id}] {_ts()} tick {n} zlyhal (pokračujem): {e}", flush=True)
+
+        n += 1
+        if max_ticks is not None and n >= max_ticks:
+            break
+        sleep_s = max(0.0, tick_sec - (time.time() - t0))
+        slept = 0.0
+        while _RUNNING and slept < sleep_s:
+            step = min(0.5, sleep_s - slept)
+            time.sleep(step)
+            slept += step
+
+    print(f"[instance {battery_id}] zastavený po {n} tickoch", flush=True)
+
+
+def _parse_battery_id() -> Optional[int]:
+    """--battery <id> z argv alebo env FLEET_BATTERY_ID."""
+    argv = sys.argv[1:]
+    for i, a in enumerate(argv):
+        if a in ("--battery", "-b") and i + 1 < len(argv):
+            try:
+                return int(argv[i + 1])
+            except ValueError:
+                return None
+        if a.startswith("--battery="):
+            try:
+                return int(a.split("=", 1)[1])
+            except ValueError:
+                return None
+    env = os.environ.get("FLEET_BATTERY_ID")
+    if env:
+        try:
+            return int(env)
+        except ValueError:
+            return None
+    return None
+
+
 def main() -> None:
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
@@ -111,7 +190,11 @@ def main() -> None:
         print("[control_loop] FLEET_CONTROL != 1 → idle (nastav FLEET_CONTROL=1 "
               "pre reálny beh). Končím.", flush=True)
         return
-    run()
+    bid = _parse_battery_id()
+    if bid is not None:
+        run_single(bid)          # model proces-per-batéria
+    else:
+        run()                    # legacy: jeden proces tiká celú flotilu
 
 
 if __name__ == "__main__":

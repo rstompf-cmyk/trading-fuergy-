@@ -651,17 +651,40 @@ class LivesimTraceDay(Base):
 # IPC jadro↔inštancia (instance_status/command). Kontrakty viď core/schemas/vpp.py.
 # ════════════════════════════════════════════════════════════════════════════
 
+class Customer(Base):
+    """Zákazník — organizačné zoskupenie batérií (1 zákazník = N batérií, napr.
+    Muller = Muller-SE + Muller2-SE). Nezávislé od Block (ten je obchodná agregácia).
+    Slúži na správu a agregovaný pohľad po zákazníkoch (Manager dashboard)."""
+    __tablename__ = "customer"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(96), unique=True, nullable=False, index=True)
+    country: Mapped[str] = mapped_column(String(4), nullable=False)            # 'sk'|'cz'
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(32), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("country IN ('sk','cz')", name="ck_customer_country"),
+    )
+
+
 class Battery(Base):
     """Asset / inštancia batérie. Samostatný proces (real-time vykonanie + safety).
     Per-batéria realio config (rieši single-config blocker — viac Bender hostov).
-    profile_id = odkaz na Profile pre plán/parametre/mód (znovupoužitie)."""
+    profile_id = odkaz na Profile pre plán/parametre/mód (znovupoužitie).
+    customer_id = odkaz na Zákazníka (zoskupenie). backend = realio (Bender) | cdc
+    (centrálny CDC server); pre cdc je tag = cdc_prefix + zdieľaný suffix z cdc_system.json."""
     __tablename__ = "battery"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     country: Mapped[str] = mapped_column(String(4), nullable=False)            # 'sk'|'cz'
     profile_id: Mapped[Optional[int]] = mapped_column(ForeignKey("profile.id"), index=True)
+    customer_id: Mapped[Optional[int]] = mapped_column(ForeignKey("customer.id"), index=True)
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="simulation")  # simulation|real
+    backend: Mapped[str] = mapped_column(String(16), nullable=False, default="realio")   # realio|cdc
+    cdc_prefix: Mapped[Optional[str]] = mapped_column(String(64))              # CDC: prefix tagu (napr. 'VW-BA')
     batt_kw: Mapped[float] = mapped_column(Float, default=0.0)
     batt_kwh: Mapped[float] = mapped_column(Float, default=0.0)
     eff: Mapped[float] = mapped_column(Float, default=0.95)

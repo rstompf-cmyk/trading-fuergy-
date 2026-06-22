@@ -22,7 +22,9 @@ def _now() -> str:
 def _batt_dict(b) -> Dict[str, Any]:
     return {
         "id": b.id, "name": b.name, "country": b.country, "profile_id": b.profile_id,
-        "mode": b.mode, "batt_kw": b.batt_kw, "batt_kwh": b.batt_kwh, "eff": b.eff,
+        "customer_id": b.customer_id, "mode": b.mode,
+        "backend": b.backend, "cdc_prefix": b.cdc_prefix,
+        "batt_kw": b.batt_kw, "batt_kwh": b.batt_kwh, "eff": b.eff,
         "enabled": b.enabled, "realio_host": b.realio_host,
         "realio_username": b.realio_username, "realio_password": b.realio_password,
         "realio_tags_read": b.realio_tags_read, "realio_tags_write": b.realio_tags_write,
@@ -30,8 +32,15 @@ def _batt_dict(b) -> Dict[str, Any]:
     }
 
 
+def _cust_dict(c) -> Dict[str, Any]:
+    return {"id": c.id, "name": c.name, "country": c.country, "note": c.note,
+            "created_at": c.created_at, "updated_at": c.updated_at}
+
+
 # ── batérie ──────────────────────────────────────────────────────────────
 def register_battery(name: str, country: str, *, mode: str = "simulation",
+                     backend: str = "realio", cdc_prefix: Optional[str] = None,
+                     customer_id: Optional[int] = None,
                      batt_kw: float = 0.0, batt_kwh: float = 0.0, eff: float = 0.95,
                      profile_id: Optional[int] = None, enabled: bool = False,
                      realio_host: Optional[str] = None, realio_username: Optional[str] = None,
@@ -49,6 +58,9 @@ def register_battery(name: str, country: str, *, mode: str = "simulation",
             s.add(b)
         b.country = country
         b.mode = mode
+        b.backend = backend or "realio"
+        b.cdc_prefix = cdc_prefix
+        b.customer_id = customer_id
         b.batt_kw = float(batt_kw)
         b.batt_kwh = float(batt_kwh)
         b.eff = float(eff)
@@ -86,6 +98,66 @@ def set_enabled(battery_id: int, enabled: bool) -> None:
         if b:
             b.enabled = bool(enabled)
             b.updated_at = _now()
+
+
+# ── zákazníci (organizačné zoskupenie batérií) ────────────────────────────
+def create_customer(name: str, country: str, *, note: Optional[str] = None) -> int:
+    """UPSERT zákazníka podľa `name` (idempotentné). Vráti id."""
+    now = _now()
+    with get_session() as s:
+        c = s.query(m.Customer).filter_by(name=name).one_or_none()
+        if c is None:
+            c = m.Customer(name=name, created_at=now)
+            s.add(c)
+        c.country = country
+        c.note = note
+        c.updated_at = now
+        s.flush()
+        return c.id
+
+
+def list_customers(country: Optional[str] = None) -> List[Dict]:
+    with get_session() as s:
+        q = s.query(m.Customer)
+        if country:
+            q = q.filter(m.Customer.country == country)
+        return [_cust_dict(c) for c in q.order_by(m.Customer.name).all()]
+
+
+def get_customer(customer_id: int) -> Optional[Dict]:
+    with get_session() as s:
+        c = s.get(m.Customer, customer_id)
+        return _cust_dict(c) if c else None
+
+
+def update_customer(customer_id: int, *, name: Optional[str] = None,
+                    country: Optional[str] = None, note: Optional[str] = None) -> None:
+    with get_session() as s:
+        c = s.get(m.Customer, customer_id)
+        if not c:
+            return
+        if name is not None:
+            c.name = name
+        if country is not None:
+            c.country = country
+        if note is not None:
+            c.note = note
+        c.updated_at = _now()
+
+
+def set_battery_customer(battery_id: int, customer_id: Optional[int]) -> None:
+    """Priradí batériu zákazníkovi (alebo odpojí ak customer_id=None)."""
+    with get_session() as s:
+        b = s.get(m.Battery, battery_id)
+        if b:
+            b.customer_id = customer_id
+            b.updated_at = _now()
+
+
+def batteries_for_customer(customer_id: int) -> List[Dict]:
+    with get_session() as s:
+        q = s.query(m.Battery).filter(m.Battery.customer_id == customer_id)
+        return [_batt_dict(b) for b in q.order_by(m.Battery.name).all()]
 
 
 # ── bloky (agregačné skupiny) ─────────────────────────────────────────────

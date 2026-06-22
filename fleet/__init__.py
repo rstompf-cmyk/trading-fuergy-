@@ -9,6 +9,8 @@ Verejné API (plain dicts, žiadne ORM objekty von):
 """
 from .repository import (
     register_battery, list_batteries, get_battery, set_enabled,
+    create_customer, list_customers, get_customer, update_customer,
+    set_battery_customer, batteries_for_customer,
     create_block, get_block, list_blocks, assign,
     active_assignment, batteries_in_block,
     write_status, get_status, fleet_status,
@@ -17,6 +19,8 @@ from .repository import (
 
 __all__ = [
     "register_battery", "list_batteries", "get_battery", "set_enabled",
+    "create_customer", "list_customers", "get_customer", "update_customer",
+    "set_battery_customer", "batteries_for_customer",
     "create_block", "get_block", "list_blocks", "assign",
     "active_assignment", "batteries_in_block",
     "write_status", "get_status", "fleet_status",

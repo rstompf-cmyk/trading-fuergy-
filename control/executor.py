@@ -166,13 +166,79 @@ class RealExecutor(Executor):
         return float(v) * scale
 
 
+class CdcExecutor(Executor):
+    """Reálny executor — PER BATÉRIA cez centrálny CDC server (modul `cdc.py`).
+
+    Na rozdiel od RealExecutor (Trakany Bender, per-batéria host/creds) ide CDC cez
+    JEDEN systémový config na krajinu (`out/<market>/cdc_system.json` — host, auth,
+    tag KORENE/suffixy, scale). Batéria sa odlišuje len PREFIXOM (`cdc_prefix`),
+    reálny tag = prefix + suffix. Plány/RT ostávajú v Profile (ako dnes).
+
+    BEZPEČNOSŤ — rovnaký princíp ako RealExecutor:
+      1. build_executor stavia CdcExecutor len pre mode=='real' a backend=='cdc',
+      2. zápis na HW iba ak env FLEET_REAL_WRITE=1 (gate v cdc.write_value); inak
+         DRY-RUN (zostaví payload, zaloguje, NEpošle).
+    read_soc je read-only. Bez dosiahnuteľného servera → raise → fail-safe degraded.
+
+    Konvencia setpointu: + vybíja / − nabíja (kW). Zápis ide do write tagu
+    `cons_plan_kw` (`_U_REG_ConsumptionPlan_Manual_1h`), kW × scale_write → W.
+    POZOR: ZNAMIENKO voči CDC serveru OVERIŤ pri commissioningu (ak opačné, doplniť
+    per-batéria sign flag, prípadne scale_write záporné)."""
+
+    def __init__(self, battery: dict):
+        self.battery = battery
+        self.prefix = (battery.get("cdc_prefix") or "").strip()
+        self.country = (battery.get("country") or "").strip() or None
+        self.cfg = self._build_cfg(battery)
+
+    @staticmethod
+    def _build_cfg(battery: dict) -> dict:
+        """Systémový CDC config pre krajinu batérie; enabled/control_enabled
+        vynútené True (finálnou poistkou zápisu ostáva env FLEET_REAL_WRITE)."""
+        import cdc
+        cfg = cdc.load_system_config((battery.get("country") or "").strip() or None)
+        cfg["enabled"] = True
+        cfg["control_enabled"] = True
+        return cfg
+
+    def apply_setpoint(self, battery_id: int, setpoint_kw: float, dt_h: float = 1.0 / 60.0) -> Dict:
+        import cdc
+        if not self.prefix:
+            raise RuntimeError("cdc_prefix nie je nastavený pre batériu (CDC real mód)")
+        res = cdc.write_value(self.prefix, "cons_plan_kw", float(setpoint_kw),
+                              cfg=self.cfg, source="fleet_control")
+        if not res.get("ok"):
+            raise RuntimeError(f"CDC write zlyhal: {res.get('error')}")
+        if res.get("dry_run"):
+            print(f"[CdcExecutor {self.prefix}] DRY-RUN setpoint {float(setpoint_kw):+.1f} kW "
+                  f"(FLEET_REAL_WRITE!=1 → nezapísané) tag={res.get('tag')}", flush=True)
+        soc = self.read_soc(battery_id)
+        return {"soc_pct": soc, "applied_kw": float(setpoint_kw)}
+
+    def read_soc(self, battery_id: int) -> float:
+        import cdc
+        if not self.prefix:
+            raise RuntimeError("cdc_prefix nie je nastavený pre batériu (CDC real mód)")
+        data = cdc.fetch_latest(self.prefix, cfg=self.cfg) or {}
+        soc = data.get("batt_soc_pct")
+        if soc is None:
+            soc = data.get("batt_soc_pct_15m")
+        if soc is None:
+            raise RuntimeError(f"SOC nečitateľný z CDC (prefix {self.prefix})")
+        return float(soc)
+
+
 def build_executor(battery: dict, soc_pct: float = 50.0) -> Executor:
-    """Postaví executor pre batériu podľa jej módu (z DB battery dict).
-      • mode='simulation' → SimExecutor (fyzikálny model z parametrov batérie)
-      • mode='real'       → RealExecutor (realio wiring = ďalší krok)
+    """Postaví executor pre batériu podľa jej módu + backendu (z DB battery dict).
+      • mode='simulation'              → SimExecutor (fyzikálny model)
+      • mode='real', backend='cdc'     → CdcExecutor (centrálny CDC server, prefix)
+      • mode='real', backend=ostatné   → RealExecutor (Trakany Bender per-batéria)
     """
     mode = str(battery.get("mode", "simulation"))
     if mode == "real":
+        backend = str(battery.get("backend") or "realio").strip().lower()
+        if backend == "cdc":
+            return CdcExecutor(battery)
         return RealExecutor(battery)
     return SimExecutor(
         batt_kw=float(battery.get("batt_kw", 1000.0) or 1000.0),
