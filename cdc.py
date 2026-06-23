@@ -89,6 +89,20 @@ DEFAULT_TAGS_READ = {
 DEFAULT_TAGS_WRITE = {
     "cons_plan_kw":    "_U_REG_ConsumptionPlan_Manual_1h",   # setpoint (manuálny plán spotreby)
     "limit_plan_kw":   "_U_Regulation_LimitPlan",            # limit regulácie
+    # ── Plánovacie tagy regulácie v čase (per 15-min slot) ──
+    # GL = prahová hodnota (threshold), RL = požadovaná hodnota na batérke,
+    # SL = rozsah SOC. *_Act = povoliť/zakázať danú časť (true/false).
+    # POZN.: presné jednotky/škálovanie doplniť podľa popisu (zatiaľ scale 1.0).
+    "reg_gl_act_plan":  "_U_RegLimit_GL_Act_Plan",    # GL aktívne (on/off)
+    "reg_gl_min_plan":  "_U_RegLimit_GL_Min_Plan",
+    "reg_gl_base_plan": "_U_RegLimit_GL_Base_Plan",
+    "reg_gl_max_plan":  "_U_RegLimit_GL_Max_Plan",
+    "reg_rl_act_plan":  "_U_RegLimit_RL_Act_Plan",    # RL aktívne (on/off)
+    "reg_rl_min_plan":  "_U_RegLimit_RL_Min_Plan",
+    "reg_rl_base_plan": "_U_RegLimit_RL_Base_Plan",
+    "reg_rl_max_plan":  "_U_RegLimit_RL_Max_Plan",
+    "reg_sl_min_plan":  "_U_RegLimit_SL_Min_Plan",    # SOC rozsah dolný
+    "reg_sl_max_plan":  "_U_RegLimit_SL_Max_Plan",    # SOC rozsah horný
 }
 
 # Logické meno → multiplier (hodnota_servera × scale = kW alebo %).
@@ -108,6 +122,12 @@ DEFAULT_SCALE_READ = {
 DEFAULT_SCALE_WRITE = {
     "cons_plan_kw":    1000.0,
     "limit_plan_kw":   1000.0,
+    # plánovacie tagy: zatiaľ bez prepočtu (scale 1.0), kým nepoznáme jednotky
+    "reg_gl_act_plan":  1.0, "reg_gl_min_plan": 1.0,
+    "reg_gl_base_plan": 1.0, "reg_gl_max_plan": 1.0,
+    "reg_rl_act_plan":  1.0, "reg_rl_min_plan": 1.0,
+    "reg_rl_base_plan": 1.0, "reg_rl_max_plan": 1.0,
+    "reg_sl_min_plan":  1.0, "reg_sl_max_plan": 1.0,
 }
 
 DEFAULT_SYSTEM: Dict[str, Any] = {
