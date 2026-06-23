@@ -7713,7 +7713,28 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         _r_ftv = _r_batt = _r_soc = None
         _r_ts_str = "—"
         _r_age_min = None
-        if realio_overlay:
+        _cdc_card = _cdc_battery_for_profile(profile)
+        if realio_overlay and _cdc_card:
+            # CDC batéria — „Hodnoty teraz" z CDC (1-min, step=60), nie z Bendera.
+            try:
+                import cdc as _cdc_c
+                _ccfg_c = _cdc_c.load_system_config(_cdc_card.get("country"))
+                _ccfg_c["enabled"] = True
+                _ccfg_c["step_read_s"] = 60
+                _ccfg_c["timeout_s"] = min(int(_ccfg_c.get("timeout_s", 15) or 15), 5)
+                _live = _cdc_c.fetch_latest(_cdc_card.get("cdc_prefix"), cfg=_ccfg_c,
+                                            keys=["ftv_power_kw", "batt_power_kw", "batt_soc_pct"]) or {}
+                if isinstance(_live, dict) and not _live.get("_error"):
+                    v = _live.get("ftv_power_kw")
+                    if v is not None: _r_ftv = float(v)
+                    v = _live.get("batt_power_kw")
+                    if v is not None: _r_batt = float(v)
+                    v = _live.get("batt_soc_pct")
+                    if v is not None: _r_soc = float(v)
+                _r_ts_str = pd.Timestamp.now().strftime("%H:%M:%S")
+            except Exception:
+                pass
+        elif realio_overlay:
             try:
                 import realio as _rio
                 # PRIMÁRNY ZDROJ: fetch_latest_all (priamy HTTP Bender request)
@@ -9695,7 +9716,9 @@ def _realio_vizualizacia_page(msg: str = "", msg_kind: str = "info",
             _ccfg["enabled"] = True
             # UI čítanie: krátky timeout + len kľúče potrebné pre dashboard
             # (inak by meta-refresh 10s robil ~14 sekvenčných GET s 15s timeoutom).
+            # step=60 → 1-MIN hodnoty (rovnaké ako graf); inak by sa čítal 15-min bucket.
             _ccfg["timeout_s"] = min(int(_ccfg.get("timeout_s", 15) or 15), 4)
+            _ccfg["step_read_s"] = 60
             _viz_keys = ["load_power_kw", "ftv_power_kw", "batt_power_kw", "batt_soc_pct"]
             _live_vals = _cdc.fetch_latest(_pref, cfg=_ccfg, keys=_viz_keys)
             try:
