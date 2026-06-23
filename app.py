@@ -9550,6 +9550,23 @@ def _realio_cdc_battery(cust: str):
     return None
 
 
+def _realio_cust_picker(active_cust: str, active_tab: str) -> str:
+    """Výber zákazníka pre dark dashboard (Trakany + CDC batérie). Dropdown ak je
+    viac než jeden, inak statický badge."""
+    custs = _realio_customers()
+    if len(custs) > 1:
+        opts = "".join(
+            f'<option value="{c}"{" selected" if c==active_cust else ""}>{c}</option>'
+            for c in custs)
+        return (f'<form method="get" action="/realio" style="display:inline">'
+                f'<input type="hidden" name="tab" value="{active_tab}">'
+                f'<select name="cust" onchange="this.form.submit()" '
+                f'style="padding:6px 12px;border-radius:8px;font-size:13px;font-weight:600;'
+                f'background:var(--bg-2);color:var(--text-0);border:1px solid var(--line-strong)">'
+                f'{opts}</select></form>')
+    return f'<span class="cust-badge">📍 {active_cust}</span>'
+
+
 def _realio_customer_header(active_cust: str, active_tab: str) -> str:
     """Vráti HTML hornej časti /realio: breadcrumb + customer dropdown + sub-tab bar.
 
@@ -10040,7 +10057,7 @@ table.data tbody tr:hover {{ background:color-mix(in srgb,var(--accent) 5%,trans
 
 <div style="display:flex;align-items:center;gap:14px;margin:6px 0 0;flex-wrap:wrap">
   <span style="color:var(--text-2);font-size:13px">Zákazník:</span>
-  <span class="cust-badge">📍 {cust}</span>
+  {_realio_cust_picker(cust, "vizualizacia")}
 </div>
 
 <div class="dark-tabs">
