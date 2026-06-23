@@ -84,6 +84,18 @@
   {% endif %}
 
   {% if band_rows %}
+    <div class="banner {{ 'success' if write_enabled else 'info' }}" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <b>Zápis do batérie: {{ 'POVOLENÝ 🟢' if write_enabled else 'ZAKÁZANÝ 🔒' }}</b>
+      <form method="post" action="/customers/battery/regulation/toggle_write" style="display:inline">
+        <input type="hidden" name="id" value="{{ b.id }}">
+        <input type="hidden" name="day" value="{{ day }}">
+        <input type="hidden" name="enable" value="{{ '0' if write_enabled else '1' }}">
+        <button type="submit" class="btn {{ 'sec' if write_enabled else 'green' }} sm">
+          {{ 'Zakázať zápis' if write_enabled else 'Povoliť zápis' }}
+        </button>
+      </form>
+      <span class="muted" style="font-size:12px">aj keď povolený, reálny HW zápis ide len pri FLEET_REAL_WRITE=1 (inak DRY-RUN)</span>
+    </div>
     <form method="post" action="/customers/battery/regulation/write" style="margin:8px 0">
       <input type="hidden" name="id" value="{{ b.id }}">
       <input type="hidden" name="mode" value="{{ mode }}">
@@ -92,8 +104,8 @@
       <input type="hidden" name="day" value="{{ day }}">
       <input type="hidden" name="edited" value="1">
       <p>
-        <button type="submit" class="btn green">💾 Zapísať do batérie ({{ b.cdc_prefix }})</button>
-        <span class="muted" style="font-size:12px">upravené hodnoty nižšie sa zapíšu; zápis na HW len pri FLEET_REAL_WRITE=1, inak DRY-RUN</span>
+        <button type="submit" class="btn green" {% if not write_enabled %}disabled title="Najprv povoľ zápis"{% endif %}>💾 Zapísať do batérie ({{ b.cdc_prefix }})</button>
+        <span class="muted" style="font-size:12px">upravené hodnoty nižšie sa zapíšu</span>
       </p>
       <div style="max-height:460px;overflow:auto;border:1px solid #eee;border-radius:8px">
       <table class="tbl-compact" style="font-size:11px">
@@ -108,15 +120,15 @@
           <td>{{ r.time }}</td>
           <td class="muted">{% if r.batt_kw is not none %}{{ r.batt_kw }}{% else %}—{% endif %}</td>
           <td class="muted">{% if r.soc_pct is not none %}{{ r.soc_pct }}{% else %}—{% endif %}</td>
-          <td><input type="number" step="1" name="s{{ r.slot }}__sl_min" value="{{ r.sl_min }}" style="width:52px"></td>
-          <td><input type="number" step="1" name="s{{ r.slot }}__sl_max" value="{{ r.sl_max }}" style="width:52px"></td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__sl_min" value="{{ r.sl_min }}" style="width:64px;height:26px;padding:1px 4px"></td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__sl_max" value="{{ r.sl_max }}" style="width:64px;height:26px;padding:1px 4px"></td>
           <td><input type="checkbox" name="s{{ r.slot }}__gl_active" {% if r.gl_active %}checked{% endif %}></td>
-          <td><input type="number" step="1" name="s{{ r.slot }}__gl_min" value="{{ r.gl_min }}" style="width:52px"></td>
-          <td><input type="number" step="1" name="s{{ r.slot }}__gl_base" value="{{ r.gl_base }}" style="width:52px"></td>
-          <td><input type="number" step="1" name="s{{ r.slot }}__gl_max" value="{{ r.gl_max }}" style="width:52px"></td>
-          <td><input type="number" step="0.01" name="s{{ r.slot }}__rl_min" value="{{ r.rl_min }}" style="width:52px"></td>
-          <td><input type="number" step="0.01" name="s{{ r.slot }}__rl_base" value="{{ r.rl_base }}" style="width:52px"></td>
-          <td><input type="number" step="0.01" name="s{{ r.slot }}__rl_max" value="{{ r.rl_max }}" style="width:52px"></td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__gl_min" value="{{ r.gl_min }}" style="width:64px;height:26px;padding:1px 4px"></td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__gl_base" value="{{ r.gl_base }}" style="width:64px;height:26px;padding:1px 4px"></td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__gl_max" value="{{ r.gl_max }}" style="width:64px;height:26px;padding:1px 4px"></td>
+          <td><input type="number" step="0.01" name="s{{ r.slot }}__rl_min" value="{{ r.rl_min }}" style="width:64px;height:26px;padding:1px 4px"></td>
+          <td><input type="number" step="0.01" name="s{{ r.slot }}__rl_base" value="{{ r.rl_base }}" style="width:64px;height:26px;padding:1px 4px"></td>
+          <td><input type="number" step="0.01" name="s{{ r.slot }}__rl_max" value="{{ r.rl_max }}" style="width:64px;height:26px;padding:1px 4px"></td>
         </tr>
         {% endfor %}
       </table>

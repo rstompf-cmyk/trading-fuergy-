@@ -9524,6 +9524,32 @@ def load_import_clear(request: Request):
 REALIO_CUSTOMERS = ["Trakany"]
 
 
+def _realio_customers():
+    """Zoznam 'zákazníkov' pre /realio = Trakany (realio/Bender) + CDC batérie
+    (fleet, backend='cdc'). CDC batérie idú tou istou stránkou, len iný zdroj dát."""
+    out = list(REALIO_CUSTOMERS)
+    try:
+        import fleet
+        for b in fleet.list_batteries():
+            if str(b.get("backend")) == "cdc" and b.get("cdc_prefix") and b.get("name") not in out:
+                out.append(b["name"])
+    except Exception:
+        pass
+    return out
+
+
+def _realio_cdc_battery(cust: str):
+    """Vráti battery dict ak `cust` je CDC batéria (podľa mena), inak None."""
+    try:
+        import fleet
+        for b in fleet.list_batteries():
+            if b.get("name") == cust and str(b.get("backend")) == "cdc":
+                return b
+    except Exception:
+        pass
+    return None
+
+
 def _realio_customer_header(active_cust: str, active_tab: str) -> str:
     """Vráti HTML hornej časti /realio: breadcrumb + customer dropdown + sub-tab bar.
 
@@ -9541,10 +9567,11 @@ def _realio_customer_header(active_cust: str, active_tab: str) -> str:
         f'{"background:#1F4E78;color:#fff;border-radius:8px 8px 0 0" if tab==active_tab else "color:#1F4E78"}">'
         f'{lbl}</a>'
         for tab, lbl in tabs)
-    # Customer chooser (pre teraz len jeden — pripravená štruktúra na viac)
-    if len(REALIO_CUSTOMERS) > 1:
+    # Customer chooser — Trakany + CDC batérie (dynamicky)
+    _custs = _realio_customers()
+    if len(_custs) > 1:
         opts = "".join(f'<option value="{c}"{" selected" if c==active_cust else ""}>{c}</option>'
-                        for c in REALIO_CUSTOMERS)
+                        for c in _custs)
         cust_picker = (f'<form method="get" action="/realio" style="display:inline">'
                         f'<input type="hidden" name="tab" value="{active_tab}">'
                         f'<select name="cust" onchange="this.form.submit()" '
@@ -9574,14 +9601,37 @@ def _realio_vizualizacia_page(msg: str = "", msg_kind: str = "info",
     _live_vals = None
     df = pd.DataFrame()
     cfg = {}
-    try:
-        import realio as _rio
-        cfg = _rio.load_config()
-        if cfg.get("enabled"):
-            _live_vals = _rio.fetch_latest_all()
-        df = _rio.read_recent(n_minutes=120)  # pre sparkline historiu
-    except Exception:
-        pass
+    _cdc_b = _realio_cdc_battery(cust)
+    if _cdc_b:
+        # CDC batéria — rovnaký dashboard, iný zdroj dát (cdc.fetch_latest + history).
+        # Logické názvy (load_power_kw/ftv_power_kw/batt_power_kw/batt_soc_pct) sú zhodné
+        # s realio → zvyšok renderu funguje bez zmeny.
+        try:
+            import cdc as _cdc
+            import datetime as _dtm
+            _pref = _cdc_b.get("cdc_prefix")
+            _ccfg = _cdc.load_system_config(_cdc_b.get("country"))
+            _ccfg["enabled"] = True
+            _live_vals = _cdc.fetch_latest(_pref, cfg=_ccfg)
+            try:
+                _hist = _cdc.fetch_history_range(
+                    _pref, _dtm.datetime.now() - _dtm.timedelta(minutes=120),
+                    _dtm.datetime.now(), cfg=_ccfg)
+                if _hist is not None and not _hist.empty:
+                    df = _hist.reset_index()
+            except Exception:
+                df = pd.DataFrame()
+        except Exception:
+            pass
+    else:
+        try:
+            import realio as _rio
+            cfg = _rio.load_config()
+            if cfg.get("enabled"):
+                _live_vals = _rio.fetch_latest_all()
+            df = _rio.read_recent(n_minutes=120)  # pre sparkline historiu
+        except Exception:
+            pass
 
     # Časová značka — z fetch_latest ak je, inak z CSV
     ts_str = "—"
@@ -10137,8 +10187,9 @@ def _realio_page(msg: str = "", msg_kind: str = "info",
     tab='vizualizacia' → dark dashboard (Fuergy Brain štýl, live KPI tiles)
     tab='riadenie'     → Reálne riadenie — embedded /livesim s realio overlay
     """
-    if cust not in REALIO_CUSTOMERS:
-        cust = REALIO_CUSTOMERS[0]
+    _custs = _realio_customers()
+    if cust not in _custs:
+        cust = _custs[0]
     if tab == "vizualizacia":
         return _realio_vizualizacia_page(msg=msg, msg_kind=msg_kind, cust=cust)
     if tab == "riadenie":
@@ -10160,6 +10211,22 @@ def _realio_riadenie_page(msg: str = "", msg_kind: str = "info",
     pre RT controller. Žiadne tlačidlá na editáciu FTV scenára (zbytočné
     keď máme reálne meranie).
     """
+    _cdc_b = _realio_cdc_battery(cust)
+    if _cdc_b:
+        # CDC batéria — Reálne riadenie = okno regulácie (live meranie + 15-min
+        # tabuľka pásiem z plánu + zápis) embednuté v iframe, pod realio headerom.
+        hdr = _realio_customer_header(cust, "riadenie")
+        body = (
+            f'<div style="padding:10px 0">'
+            f'<iframe src="/customers/battery/regulation?id={_cdc_b["id"]}&embed=1" '
+            f'style="width:100%;height:1400px;border:1px solid #e5e5e5;border-radius:8px"></iframe>'
+            f'</div>')
+        return (f'<!doctype html><html><head><meta charset="utf-8">'
+                f'<title>Reálne riadenie — {cust}</title>'
+                f'<link rel="stylesheet" href="/static/css/app.css"></head><body>'
+                f'<div class="container">'
+                f'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
+                f'<h1>🔴 Reálne riadenie</h1></div>{hdr}{body}</div></body></html>')
     # Profile dispatch — Realio má VLASTNÝ pinned profil, NEZÁVISLÝ od globálneho active.
     # Užívateľ tak môže mať sim profil aktívny globálne (pre /plan, /livesim, /rt)
     # a real profil pinned pre Realio (manual setpoint, riadenie). Per-port (PORT/APP_PORT).
@@ -10501,6 +10568,21 @@ def _realio_profile_banner() -> str:
 
 def _realio_nastavenie_page(msg: str = "", msg_kind: str = "info", cust: str = "Trakany") -> str:
     """Render /realio?tab=nastavenie — konfigurácia tagov + live status + setpoint write."""
+    _cdc_b = _realio_cdc_battery(cust)
+    if _cdc_b:
+        # CDC batéria — nastavenie servera/tagov je centrálne na /cdc (per krajina),
+        # vzťahy (zákazník/prefix/profil) na /customers.
+        hdr = _realio_customer_header(cust, "nastavenie")
+        body = (
+            f'<div class="banner info" style="margin-top:12px">'
+            f'CDC batéria <b>{cust}</b> (prefix <code>{_cdc_b.get("cdc_prefix")}</code>). '
+            f'Server a korene tagov sa nastavujú centrálne na '
+            f'<a href="/cdc">🛰 Konfigurácia CDC</a> (per krajina); '
+            f'vzťahy (zákazník, prefix, profil) na <a href="/customers">🏭 Zákazníci</a>.</div>')
+        return (f'<!doctype html><html><head><meta charset="utf-8">'
+                f'<title>Nastavenie — {cust}</title>'
+                f'<link rel="stylesheet" href="/static/css/app.css"></head><body>'
+                f'<div class="container"><h1>⚙ Nastavenie</h1>{hdr}{body}</div></body></html>')
     try:
         import realio as _rio
     except ImportError:
@@ -17176,6 +17258,34 @@ def _reg_plan_svg_example():
             'GL (prah) a RL (požadovaná hodnota batérie) pásma doplním po dodaní jednotiek.</p>')
 
 
+def _cdc_write_flag_path():
+    import market as _mk
+    return os.path.join(_mk.data_dir(), "cdc_write_enable.json")
+
+
+def _cdc_write_enabled(bid) -> bool:
+    """Per-batéria povolenie zápisu (default False = zakázané)."""
+    try:
+        with open(_cdc_write_flag_path()) as f:
+            return bool(json.load(f).get(str(bid)))
+    except Exception:
+        return False
+
+
+def _cdc_set_write_enabled(bid, val: bool) -> None:
+    p = _cdc_write_flag_path()
+    d = {}
+    try:
+        with open(p) as f:
+            d = json.load(f)
+    except Exception:
+        pass
+    d[str(bid)] = bool(val)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as f:
+        json.dump(d, f)
+
+
 def _regulation_page(request, id, *, mode="battery", rt="fixed", soc_margin=7.0,
                      day=None, msg="", msg_kind="success", write_result=None):
     import fleet
@@ -17220,7 +17330,8 @@ def _regulation_page(request, id, *, mode="battery", rt="fixed", soc_margin=7.0,
                   snap_err=snap_err, tags=tags, write_tags=write_tags, rows=meas_rows,
                   status=status, viz_svg=_reg_plan_svg_example(),
                   band_rows=band_rows, mode=mode, rt=rt, soc_margin=soc_margin,
-                  day=day, msg=msg, msg_kind=msg_kind, write_result=write_result)
+                  day=day, msg=msg, msg_kind=msg_kind, write_result=write_result,
+                  write_enabled=_cdc_write_enabled(id))
 
 
 @app.get("/customers/battery/regulation", response_class=HTMLResponse)
@@ -17281,12 +17392,30 @@ async def customers_battery_regulation_write(request: Request):
         rows = cdc_reg_plan.build_band_table(b, day, mode=mode, rt=rt, soc_margin=soc_margin)
     cfg = cdc.load_system_config(b.get("country"))
     cfg["enabled"] = True
-    cfg["control_enabled"] = True
+    cfg["control_enabled"] = _cdc_write_enabled(bid)   # per-batéria prepínač
+    if not _cdc_write_enabled(bid):
+        return _regulation_page(request, bid, mode=mode, rt=rt, soc_margin=soc_margin,
+                                day=day, msg="Zápis je ZAKÁZANÝ — najprv povoľ prepínačom nižšie.",
+                                msg_kind="error")
     res = cdc.write_band_table(b["cdc_prefix"], rows, day, cfg=cfg)
     kind = "info" if res.get("dry_run") else "success"
     note = "DRY-RUN (nezapísané — FLEET_REAL_WRITE!=1)" if res.get("dry_run") else "Zapísané do batérie."
     return _regulation_page(request, bid, mode=mode, rt=rt, soc_margin=soc_margin,
                             day=day, msg=note, msg_kind=kind, write_result=res)
+
+
+@app.post("/customers/battery/regulation/toggle_write", response_class=HTMLResponse)
+async def customers_battery_regulation_toggle_write(request: Request):
+    form = await request.form()
+    try:
+        bid = int(form.get("id"))
+    except (TypeError, ValueError):
+        return HTMLResponse("<p>Neplatné id.</p>", status_code=400)
+    enable = form.get("enable") == "1"
+    _cdc_set_write_enabled(bid, enable)
+    return _regulation_page(request, bid, day=form.get("day"),
+                            msg=("Zápis POVOLENÝ." if enable else "Zápis ZAKÁZANÝ."),
+                            msg_kind=("success" if enable else "info"))
 
 
 @app.get("/rt", response_class=HTMLResponse)
