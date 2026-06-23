@@ -5,7 +5,7 @@ Spustenie:  python app.py     →  otvor http://127.0.0.1:8000
 Závislosti: fastapi, uvicorn  (+ už máš: pandas, scikit-learn, scipy, openpyxl, requests, lxml)
 """
 from __future__ import annotations
-import datetime as dt, os, io, json
+import datetime as dt, os, io, json, html as _html
 
 # Auto-load .env súboru ak existuje (credentials pre historian, atď.) —
 # musí byť PRED importom modulov ktoré čítajú env vars pri loade.
@@ -9567,28 +9567,39 @@ def _realio_cust_picker(active_cust: str, active_tab: str) -> str:
     custs = _realio_customers()
     if len(custs) > 1:
         opts = "".join(
-            f'<option value="{c}"{" selected" if c==active_cust else ""}>{c}</option>'
+            f'<option value="{_html.escape(c)}"{" selected" if c==active_cust else ""}>{_html.escape(c)}</option>'
             for c in custs)
         return (f'<form method="get" action="/realio" style="display:inline">'
-                f'<input type="hidden" name="tab" value="{active_tab}">'
+                f'<input type="hidden" name="tab" value="{_html.escape(active_tab)}">'
                 f'<select name="cust" onchange="this.form.submit()" '
                 f'style="padding:6px 12px;border-radius:8px;font-size:13px;font-weight:600;'
                 f'background:var(--bg-2);color:var(--text-0);border:1px solid var(--line-strong)">'
                 f'{opts}</select></form>')
-    return f'<span class="cust-badge">📍 {active_cust}</span>'
+    return f'<span class="cust-badge">📍 {_html.escape(active_cust)}</span>'
 
 
 def _cdc_battery_for_profile(profile_name: str):
     """Vráti CDC battery dict, ktorej profil (profile_id) zodpovedá `profile_name`.
-    Slúži na backend-aware export (livesim export button → CDC namiesto Bender)."""
+    Slúži na backend-aware export (livesim export button → CDC namiesto Bender).
+    Volá sa na hot livesim ceste, preto early-return: ak nie sú žiadne CDC batérie,
+    skončí 1 lacným dotazom (bez načítavania všetkých profilov)."""
     if not profile_name:
         return None
     try:
         import fleet
-        pmap = _profile_id_name_map()
-        for b in fleet.list_batteries():
-            if (str(b.get("backend")) == "cdc" and b.get("profile_id")
-                    and pmap.get(b["profile_id"]) == profile_name):
+        cdc_bats = [b for b in fleet.list_batteries()
+                    if str(b.get("backend")) == "cdc" and b.get("profile_id")]
+        if not cdc_bats:
+            return None
+        from db import get_session
+        from db.models import Profile as _DbP
+        with get_session() as s:
+            row = s.query(_DbP).filter_by(name=profile_name).one_or_none()
+            pid = row.id if row else None
+        if pid is None:
+            return None
+        for b in cdc_bats:
+            if b.get("profile_id") == pid:
                 return b
     except Exception:
         pass
@@ -9606,8 +9617,9 @@ def _realio_customer_header(active_cust: str, active_tab: str) -> str:
     tabs = [("vizualizacia", "📊 Vizualizácia"),
             ("riadenie",     "🔴 Reálne riadenie"),
             ("nastavenie",   "⚙ Nastavenie")]
+    _cust_q = _html.escape(active_cust)
     links = "".join(
-        f'<a href="/realio?cust={active_cust}&tab={tab}" target="_top" '
+        f'<a href="/realio?cust={_cust_q}&tab={tab}" target="_top" '
         f'style="padding:8px 18px;text-decoration:none;font-size:13px;font-weight:600;'
         f'{"background:#1F4E78;color:#fff;border-radius:8px 8px 0 0" if tab==active_tab else "color:#1F4E78"}">'
         f'{lbl}</a>'
@@ -9615,16 +9627,16 @@ def _realio_customer_header(active_cust: str, active_tab: str) -> str:
     # Customer chooser — Trakany + CDC batérie (dynamicky)
     _custs = _realio_customers()
     if len(_custs) > 1:
-        opts = "".join(f'<option value="{c}"{" selected" if c==active_cust else ""}>{c}</option>'
+        opts = "".join(f'<option value="{_html.escape(c)}"{" selected" if c==active_cust else ""}>{_html.escape(c)}</option>'
                         for c in _custs)
         cust_picker = (f'<form method="get" action="/realio" style="display:inline">'
-                        f'<input type="hidden" name="tab" value="{active_tab}">'
+                        f'<input type="hidden" name="tab" value="{_html.escape(active_tab)}">'
                         f'<select name="cust" onchange="this.form.submit()" '
                         f'style="padding:6px 10px;border:1px solid #ccc;border-radius:6px;font-size:13px">'
                         f'{opts}</select></form>')
     else:
         cust_picker = (f'<span style="background:#1F4E78;color:#fff;padding:5px 12px;'
-                        f'border-radius:6px;font-size:13px;font-weight:600">{active_cust}</span>')
+                        f'border-radius:6px;font-size:13px;font-weight:600">{_html.escape(active_cust)}</span>')
     return (
         f'<div style="display:flex;align-items:center;gap:14px;margin:6px 0 0;flex-wrap:wrap">'
         f'<span style="color:#666;font-size:13px">Zákazník:</span> {cust_picker}'
@@ -9657,11 +9669,15 @@ def _realio_vizualizacia_page(msg: str = "", msg_kind: str = "info",
             _pref = _cdc_b.get("cdc_prefix")
             _ccfg = _cdc.load_system_config(_cdc_b.get("country"))
             _ccfg["enabled"] = True
-            _live_vals = _cdc.fetch_latest(_pref, cfg=_ccfg)
+            # UI čítanie: krátky timeout + len kľúče potrebné pre dashboard
+            # (inak by meta-refresh 10s robil ~14 sekvenčných GET s 15s timeoutom).
+            _ccfg["timeout_s"] = min(int(_ccfg.get("timeout_s", 15) or 15), 4)
+            _viz_keys = ["load_power_kw", "ftv_power_kw", "batt_power_kw", "batt_soc_pct"]
+            _live_vals = _cdc.fetch_latest(_pref, cfg=_ccfg, keys=_viz_keys)
             try:
                 _hist = _cdc.fetch_history_range(
                     _pref, _dtm.datetime.now() - _dtm.timedelta(minutes=120),
-                    _dtm.datetime.now(), cfg=_ccfg)
+                    _dtm.datetime.now(), cfg=_ccfg, keys=_viz_keys)
                 if _hist is not None and not _hist.empty:
                     df = _hist.reset_index()
             except Exception:
@@ -10274,7 +10290,7 @@ def _realio_riadenie_page(msg: str = "", msg_kind: str = "info",
                      f'style="width:100%;height:2600px;border:1px solid #e5e5e5;border-radius:8px"></iframe>'
                      f'</div>')
         return (f'<!doctype html><html><head><meta charset="utf-8">'
-                f'<title>Reálne riadenie — {cust}</title>'
+                f'<title>Reálne riadenie — {_html.escape(cust)}</title>'
                 f'<link rel="stylesheet" href="/static/css/app.css"></head><body>'
                 f'<div class="container">'
                 f'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
@@ -10627,12 +10643,12 @@ def _realio_nastavenie_page(msg: str = "", msg_kind: str = "info", cust: str = "
         hdr = _realio_customer_header(cust, "nastavenie")
         body = (
             f'<div class="banner info" style="margin-top:12px">'
-            f'CDC batéria <b>{cust}</b> (prefix <code>{_cdc_b.get("cdc_prefix")}</code>). '
+            f'CDC batéria <b>{_html.escape(cust)}</b> (prefix <code>{_html.escape(str(_cdc_b.get("cdc_prefix") or ""))}</code>). '
             f'Server a korene tagov sa nastavujú centrálne na '
             f'<a href="/cdc">🛰 Konfigurácia CDC</a> (per krajina); '
             f'vzťahy (zákazník, prefix, profil) na <a href="/customers">🏭 Zákazníci</a>.</div>')
         return (f'<!doctype html><html><head><meta charset="utf-8">'
-                f'<title>Nastavenie — {cust}</title>'
+                f'<title>Nastavenie — {_html.escape(cust)}</title>'
                 f'<link rel="stylesheet" href="/static/css/app.css"></head><body>'
                 f'<div class="container"><h1>⚙ Nastavenie</h1>{hdr}{body}</div></body></html>')
     try:

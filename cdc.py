@@ -261,14 +261,18 @@ def _read_tag_raw(cfg: Dict[str, Any], s: requests.Session, tag: str,
 # ─── Verejné READ API ────────────────────────────────────────────────────────
 def fetch_latest(prefix: str, market: Optional[str] = None,
                  cfg: Optional[Dict[str, Any]] = None,
-                 lookback_min: int = 120) -> Optional[Dict[str, Optional[float]]]:
-    """Stiahne POSLEDNÚ hodnotu pre všetky read tagy danej batérie (prefix).
+                 lookback_min: int = 120,
+                 keys: Optional[list] = None) -> Optional[Dict[str, Optional[float]]]:
+    """Stiahne POSLEDNÚ hodnotu pre read tagy danej batérie (prefix).
+    `keys` (voliteľné) = obmedz na vybrané logické kľúče (rýchlejšie pre UI).
     Aplikuje scale. Vracia {logical: kW/%} + '_ts', alebo None ak modul disabled.
     """
     cfg = cfg or load_system_config(market)
     if not cfg.get("enabled"):
         return None
     tags = resolve_read_tags(prefix, cfg)
+    if keys:
+        tags = {k: v for k, v in tags.items() if k in keys}
     if not tags:
         return {}
     scale = cfg.get("scale_read") or {}
@@ -296,13 +300,17 @@ def fetch_latest(prefix: str, market: Optional[str] = None,
 
 def fetch_history_range(prefix: str, from_dt: dt.datetime, to_dt: dt.datetime,
                         step: Optional[int] = None, market: Optional[str] = None,
-                        cfg: Optional[Dict[str, Any]] = None):
+                        cfg: Optional[Dict[str, Any]] = None,
+                        keys: Optional[list] = None):
     """História pre jednu batériu (prefix) v rozsahu. Vracia pandas.DataFrame
-    indexovaný časom so stĺpcami = logické názvy (kW/%). Per-tag fetch (odolné)."""
+    indexovaný časom so stĺpcami = logické názvy (kW/%). Per-tag fetch (odolné).
+    `keys` (voliteľné) = obmedz na vybrané logické kľúče (rýchlejšie pre UI)."""
     if pd is None:
         raise RuntimeError("pandas nie je dostupné")
     cfg = cfg or load_system_config(market)
     tags = resolve_read_tags(prefix, cfg)
+    if keys:
+        tags = {k: v for k, v in tags.items() if k in keys}
     scale = cfg.get("scale_read") or {}
     step = int(step or cfg.get("step_read_s", 900))
     s = _session(cfg)
