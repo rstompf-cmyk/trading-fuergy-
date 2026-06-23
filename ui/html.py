@@ -186,30 +186,12 @@ def _profile_tabs(current_active: str = "") -> str:
 
 
 def _nav(active: str = "") -> str:
-    """Hlavná navigácia (Bug R1 — 3-pásmový layout).
+    """Hlavná navigácia — zoskupené rozbaľovacie menu (5 skupín), mode-aware.
 
-    Pásmo 1 (vrch): globálne pages (RT poradca, Profily, Nástroje)
-    Pásmo 2 (stred): profile chip tabs (každý profil ako vlastná karta)
-    Pásmo 3 (spodok): per-profile sub-nav (Plán D-1, Denný trh, ..., podľa mode)
-
-    Všetky linky majú `target="_top"` (žiadna iframe rekurzia).
+    Menu sa filtruje podľa módu aktívneho profilu (both/simulation/real); pod menu
+    ostáva riadok prepínača profilov (_profile_tabs) + market/user chip vpravo.
+    Linky target="_top". Redizajn 2026-06-22 — zhodné s templates/components/nav.html.
     """
-    # Pásmo 1: GLOBÁLNE pages (mimo profilu)
-    global_items = [
-        ("/manager", "🛰 Manager"),
-        ("/rt", "🔴 RT poradca"),
-        ("/profiles", "⚙ Profily"),
-        ("/customers", "🏭 Zákazníci"),
-        ("/cdc", "🛰 Konfigurácia CDC"),
-        ("/kalibracia", "📈 Kalibrácia"),
-        ("/data", "💾 Dáta"),
-    ]
-    global_links = "".join(
-        f'<a href="{href}" target="_top" style="padding:7px 11px;border-radius:7px;'
-        f'text-decoration:none;font-size:13px;'
-        f'{"background:#1F4E78;color:#fff;font-weight:600" if href==active else "color:#1F4E78"}">{lab}</a>'
-        for href, lab in global_items)
-    # Pásmo 3: per-profile pages (depends on active profile mode)
     try:
         import profiles as _pr
         from core.profile_resolver import get_active as _ga
@@ -218,24 +200,66 @@ def _nav(active: str = "") -> str:
     except Exception:
         cur_prof = ""
         cur_mode = "unknown"
-    profile_items = [
-        ("/", "🗓 Plán D-1"),
-        ("/dentrh", "⚡ Denný trh 15-min"),
-        ("/plan_batch", "📦 Batch plán"),
-        ("/plans", "📋 Plány"),
-        ("/livesim", "🟢 Živá simulácia"),
-        ("/load_import", "🏠 Spotreba"),
-        ("/auto_control", "🤖 Paper trading"),
-        ("/vdt", "💹 OKTE VDT"),
+    nav_groups = [
+        ("🗓 Plánovanie", [
+            ("/", "Plán D-1", "both"),
+            ("/dentrh", "Denný trh 15-min", "both"),
+            ("/plan_batch", "Batch plán", "both"),
+            ("/plans", "Uložené plány", "both"),
+        ]),
+        ("🟢 Simulácia & monitoring", [
+            ("/livesim", "Živá simulácia", "both"),
+            ("/manager", "Manager dashboard", "both"),
+            ("/fleet", "Flotila", "both"),
+            ("/dashboard", "Profil dashboard", "both"),
+            ("/simulacia", "Výsledok simulácie", "simulation"),
+        ]),
+        ("💹 Obchodovanie", [
+            ("/rt", "RT poradca", "both"),
+            ("/vdt", "OKTE VDT prehľad", "both"),
+            ("/vdt/live_advisor", "VDT Live advisor", "both"),
+            ("/vdt/d1", "VDT D-1", "both"),
+            ("/vdt/board", "VDT Board", "both"),
+            ("/vdt/simulator", "VDT Simulátor", "simulation"),
+            ("/vdt/backtest", "VDT Backtest", "simulation"),
+            ("/vdt/zco_backtest", "ZCO Backtest", "simulation"),
+            ("/auto_control", "Paper trading", "both"),
+        ]),
+        ("🔌 Reálne riadenie", [
+            ("/realio", "Reálne meranie", "real"),
+            ("/customers", "Zákazníci", "real"),
+            ("/cdc", "CDC konfigurácia", "real"),
+            ("/customers/battery/regulation", "Okno regulácie", "real"),
+        ]),
+        ("💾 Dáta & nastavenia", [
+            ("/profiles", "Profily", "both"),
+            ("/load_import", "Spotreba", "both"),
+            ("/ftv_scenario", "FTV scenár", "both"),
+            ("/kalibracia", "Kalibrácia", "both"),
+            ("/data", "Dáta", "both"),
+        ]),
     ]
-    # Reálne meranie iba pre real profile
-    if cur_mode == "real":
-        profile_items.insert(5, ("/realio", "🔌 Reálne meranie"))
-    profile_links = "".join(
-        f'<a href="{href}" target="_top" style="padding:7px 11px;border-radius:7px;'
-        f'text-decoration:none;font-size:13px;'
-        f'{"background:#1F4E78;color:#fff;font-weight:600" if href==active else "color:#1F4E78"}">{lab}</a>'
-        for href, lab in profile_items)
+
+    def _vis(m):
+        # 'both' vždy; inak len ak sedí mód; pri neznámom móde ukáž všetko (nefiltruj)
+        return m == "both" or m == cur_mode or cur_mode not in ("simulation", "real")
+
+    _groups_html = []
+    for _glabel, _items in nav_groups:
+        _vises = [(h, l) for (h, l, m) in _items if _vis(m)]
+        if not _vises:
+            continue
+        _has_active = any(h == active for h, l in _vises)
+        _links = ""
+        for h, l in _vises:
+            _acls = ' class="active"' if h == active else ''
+            _links += f'<a href="{h}" target="_top"{_acls}>{l}</a>'
+        _gcls = ' has-active' if _has_active else ''
+        _groups_html.append(
+            f'<div class="nav-group{_gcls}">'
+            f'<button type="button" class="nav-trig" onclick="navTog(this,event)">{_glabel} '
+            f'<span style="font-size:11px" aria-hidden="true">▾</span></button>'
+            f'<div class="nav-menu"><div class="nav-sec">{_glabel}</div>{_links}</div></div>')
     # User chip + Odhlásiť — JS naplní z /me. Bez auth ostane skrytý (display:none).
     user_chip = (
         '<span id="navUserChip" style="display:none;align-items:center;gap:8px;'
@@ -273,15 +297,14 @@ def _nav(active: str = "") -> str:
           '}catch(e){}'
         '})();</script>'
     )
-    # 3-pásmový layout (Bug R1)
-    pasmo1 = (f'<nav style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 6px;'
-                  f'padding:7px;background:#eef3f9;border-radius:10px">{global_links}'
-                  f'<span style="margin-left:auto;display:inline-flex;gap:6px;align-items:center">'
-                  f'{_market_badge()}{user_chip}</span></nav>')
-    pasmo2 = _profile_tabs(cur_prof)
-    pasmo3 = (f'<nav style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 18px;'
-                  f'padding:7px;background:#f7faff;border-radius:10px;border-left:3px solid #2E7D32" '
-                  f'aria-label="Stránky aktívneho profilu">'
-                  f'<span style="font-size:12px;color:#666;font-weight:600;margin-right:4px">PAGES:</span>'
-                  f'{profile_links}</nav>')
-    return pasmo1 + pasmo2 + pasmo3
+    _navjs = ('<script>function navTog(b,e){if(e)e.stopPropagation();'
+              'var g=b.parentNode,w=g.classList.contains("open"),a=document.querySelectorAll(".nav-group");'
+              'for(var i=0;i<a.length;i++)a[i].classList.remove("open");'
+              'if(!w)g.classList.add("open");}'
+              'document.addEventListener("click",function(){'
+              'var a=document.querySelectorAll(".nav-group.open");'
+              'for(var i=0;i<a.length;i++)a[i].classList.remove("open");});</script>')
+    menu_row = ('<nav class="app-nav">' + "".join(_groups_html) +
+                '<span class="app-nav-right">' + _market_badge() + user_chip + '</span></nav>')
+    # Pod menu: prepínač profilov (chip tabs) — zachované z pôvodného layoutu
+    return menu_row + _profile_tabs(cur_prof) + _navjs
