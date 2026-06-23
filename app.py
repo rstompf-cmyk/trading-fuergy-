@@ -17333,44 +17333,82 @@ async def customers_battery_enable(request: Request):
     return _customers_page(request, msg="Stav inštancie zmenený.")
 
 
-def _reg_plan_svg_example():
-    """Ilustračná SVG vizualizácia regulačného plánu (NÁVRH).
-    Zatiaľ len SL = rozsah SOC (jednoznačné %); GL/RL pásma sa doplnia po dodaní
-    jednotiek z popisu filtrov."""
-    W, H, padL, padR, padT, padB = 720, 240, 44, 16, 28, 24
-    n = 96
+def _reg_band_svg(title, rows, lo_key, hi_key, base_key, ymin, ymax, unit,
+                  line_key=None, line_label=None, color="#2b6cb0", dec=2):
+    """Časový graf (96 slotov) z band tabuľky: vyplnené pásmo lo..hi + base čiara
+    (+ voliteľná druhá čiara). x = 00:00…24:00, y = [ymin, ymax]."""
+    n = len(rows)
+    if n < 2 or ymax <= ymin:
+        return ""
+    W, H, padL, padR, padT, padB = 760, 190, 54, 14, 24, 24
     iw, ih = W - padL - padR, H - padT - padB
-    # príklad: SOC rozsah (SL) rastie počas dňa (ako v dashboarde)
-    sl_min = [6 + (55 - 6) * i / (n - 1) for i in range(n)]
-    sl_max = [20 + (70 - 20) * i / (n - 1) for i in range(n)]
 
     def x(i):
         return padL + iw * i / (n - 1)
 
-    def y(p):  # p v % SOC, 0 dole, 100 hore
-        return padT + ih * (1 - p / 100.0)
+    def y(v):
+        v = max(ymin, min(ymax, float(v)))
+        return padT + ih * (1 - (v - ymin) / (ymax - ymin))
 
-    top = " ".join(f"{x(i):.1f},{y(sl_max[i]):.1f}" for i in range(n))
-    bot = " ".join(f"{x(i):.1f},{y(sl_min[i]):.1f}" for i in range(n - 1, -1, -1))
-    band = f'<polygon points="{top} {bot}" fill="#cfe3ff" stroke="none" opacity="0.8"/>'
-    line_max = '<polyline points="' + " ".join(f"{x(i):.1f},{y(sl_max[i]):.1f}" for i in range(n)) + '" fill="none" stroke="#2b6cb0" stroke-width="1.5"/>'
-    line_min = '<polyline points="' + " ".join(f"{x(i):.1f},{y(sl_min[i]):.1f}" for i in range(n)) + '" fill="none" stroke="#2b6cb0" stroke-width="1.5" stroke-dasharray="4 3"/>'
-    # osi
+    def _g(i, k):
+        v = rows[i].get(k)
+        return None if v is None else float(v)
+
+    # pásmo lo..hi
+    top = " ".join(f"{x(i):.1f},{y(_g(i, hi_key) or 0):.1f}" for i in range(n))
+    bot = " ".join(f"{x(i):.1f},{y(_g(i, lo_key) or 0):.1f}" for i in range(n - 1, -1, -1))
+    band = f'<polygon points="{top} {bot}" fill="{color}" opacity="0.16"/>'
+
+    def line(key, dash="", w=1.6):
+        pts = [f"{x(i):.1f},{y(_g(i, key)):.1f}" for i in range(n) if _g(i, key) is not None]
+        if not pts:
+            return ""
+        da = ' stroke-dasharray="4 3"' if dash else ''
+        return f'<polyline points="{" ".join(pts)}" fill="none" stroke="{color}" stroke-width="{w}"{da}/>'
+
+    parts = [band, line(lo_key, dash="1", w=1), line(hi_key, dash="1", w=1)]
+    if base_key:
+        parts.append(line(base_key, w=2.2))
+    if line_key:
+        parts.append(line(line_key, w=1.6))
     grid = ""
-    for p in (0, 25, 50, 75, 100):
-        yy = y(p)
+    for k in range(5):
+        vv = ymin + (ymax - ymin) * k / 4
+        yy = y(vv)
+        lbl = (f"{vv:.0f}{unit}" if (unit in ("%", " kW", "kW") or dec == 0) else f"{vv:.{dec}f}")
         grid += f'<line x1="{padL}" y1="{yy:.1f}" x2="{W-padR}" y2="{yy:.1f}" stroke="#eee"/>'
-        grid += f'<text x="{padL-6}" y="{yy+3:.1f}" font-size="10" text-anchor="end" fill="#888">{p}%</text>'
-    xticks = ""
-    for hh in range(0, 25, 3):
+        grid += f'<text x="{padL-6}" y="{yy+3:.1f}" font-size="10" text-anchor="end" fill="#999">{lbl}</text>'
+    xt = ""
+    for hh in range(0, 25, 6):
         xx = padL + iw * (hh / 24.0)
-        xticks += f'<line x1="{xx:.1f}" y1="{padT}" x2="{xx:.1f}" y2="{H-padB}" stroke="#f4f4f4"/>'
-        xticks += f'<text x="{xx:.1f}" y="{H-padB+14}" font-size="10" text-anchor="middle" fill="#888">{hh:02d}:00</text>'
-    return (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:760px;border:1px solid #e5e5e5;border-radius:8px;background:#fff">'
-            f'<text x="{padL}" y="16" font-size="12" fill="#333" font-weight="600">SL — plánovaný rozsah SOC (príklad/návrh)</text>'
-            f'{grid}{xticks}{band}{line_max}{line_min}</svg>'
-            '<p class="muted" style="font-size:12px">Modré pásmo = povolený rozsah SOC (SL Min…SL Max) v čase. '
-            'GL (prah) a RL (požadovaná hodnota batérie) pásma doplním po dodaní jednotiek.</p>')
+        xt += f'<text x="{xx:.1f}" y="{H-padB+14}" font-size="10" text-anchor="middle" fill="#999">{hh:02d}:00</text>'
+    legend = f' · base (plná) · min/max (čiarkovane)' + (f' · {line_label} (plná)' if line_label else '')
+    return (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:820px;border:1px solid #e5e5e5;'
+            f'border-radius:8px;background:#fff;margin:6px 0;display:block">'
+            f'<text x="{padL}" y="14" font-size="12" font-weight="600" fill="#333">{title}{legend}</text>'
+            f'{grid}{xt}{"".join(parts)}</svg>')
+
+
+def _reg_plan_charts(rows):
+    """Tri grafy z band tabuľky: SOC+rozsah (SL), RL pásmo, GL pásmo (kW)."""
+    if not rows:
+        return '<div class="banner info">Žiadny plán pre tento deň — najprv vytvor plán pre profil batérie.</div>'
+    soc = _reg_band_svg("SOC — plán + povolený rozsah (SL)", rows, "sl_min", "sl_max",
+                        None, 0, 100, "%", line_key="soc_pct", line_label="plán SOC",
+                        color="#2b6cb0", dec=0)
+    rl = _reg_band_svg("RL — výkon batérie (base + pásmo, −1…+1)", rows, "rl_min", "rl_max",
+                       "rl_base", -1, 1, "", color="#7c3aed", dec=2)
+    gv = [v for r in rows for k in ("gl_min", "gl_base", "gl_max")
+          for v in [r.get(k)] if v is not None]
+    if gv and max(gv) != min(gv):
+        lo, hi = min(gv), max(gv)
+        pad = (hi - lo) * 0.1 or 1.0
+        gl = _reg_band_svg("GL — prah odberného miesta (kW)", rows, "gl_min", "gl_max",
+                           "gl_base", lo - pad, hi + pad, " kW", color="#0d9488", dec=0)
+    else:
+        gl = ('<p class="muted" style="font-size:12px">GL (prah) = 0 — režim „len batéria". '
+              'V režime „celé OM" sa tu zobrazí pásmo prahu odberného miesta.</p>')
+    return soc + rl + gl
 
 
 def _cdc_write_flag_path():
@@ -17443,7 +17481,7 @@ def _regulation_page(request, id, *, mode="battery", rt="fixed", soc_margin=7.0,
     from ui.templates import render
     return render(request, "pages/cdc_regulation.html", b=b, snap=snap,
                   snap_err=snap_err, tags=tags, write_tags=write_tags, rows=meas_rows,
-                  status=status, viz_svg=_reg_plan_svg_example(),
+                  status=status, viz_svg=_reg_plan_charts(band_rows),
                   band_rows=band_rows, mode=mode, rt=rt, soc_margin=soc_margin,
                   day=day, msg=msg, msg_kind=msg_kind, write_result=write_result,
                   write_enabled=_cdc_write_enabled(id))
