@@ -106,7 +106,24 @@ def render_legacy_body(request: Optional[Request], title: str,
 
     `head_extra` sa vloží do <head> bloku (napr. dodatočné CDN linky).
     `scripts` sa vloží na koniec body (napr. inicializačné JS).
+
+    NAV-EVERYWHERE (2026-06-22): _legacy_body.html vypína base.html nav, lebo legacy body
+    obvykle nesie vlastný _nav(). Ak ho NEnesie (napr. /manager, /fleet, /plan_batch,
+    chybové stránky), automaticky predložíme _nav(), aby hlavné menu NIKDY nezmizlo.
+    Guard `class="app-nav"` zabráni dvojitému menu pre stránky čo už _nav() volajú.
     """
+    try:
+        if 'class="app-nav"' not in (body_html or ""):
+            from ui.html import _nav
+            _active = ""
+            try:
+                if request is not None:
+                    _active = request.url.path
+            except Exception:
+                _active = ""
+            body_html = _nav(_active) + (body_html or "")
+    except Exception:
+        pass
     return render(request, "pages/_legacy_body.html",
                    legacy_title=title,
                    legacy_body=body_html,

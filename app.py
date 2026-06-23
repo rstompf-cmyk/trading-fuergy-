@@ -3711,6 +3711,7 @@ def dashboard(profile: str = ""):
         for href, lab in pages)
 
     body = (
+        f'{_nav("/dashboard")}'
         f'<div style="max-width:100%;margin:18px auto;padding:0 16px">'
         f'<h1 style="margin:0 0 14px;display:flex;align-items:center;gap:12px;color:#1F4E78">'
         f'<span style="background:{chip_bg};color:#fff;padding:6px 18px;border-radius:10px;font-size:20px">'

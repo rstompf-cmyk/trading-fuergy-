@@ -329,7 +329,16 @@ def _nav(active: str = "") -> str:
               'document.addEventListener("click",function(){'
               'var a=document.querySelectorAll(".nav-group.open");'
               'for(var i=0;i<a.length;i++)a[i].classList.remove("open");});</script>')
-    menu_row = ('<nav class="app-nav">' + "".join(_groups_html) +
-                '<span class="app-nav-right">' + _market_badge() + user_chip + '</span></nav>')
-    # Pod menu: prepínač profilov (chip tabs) — zachované z pôvodného layoutu
-    return _navcss + menu_row + _profile_tabs(cur_prof) + _navjs
+    menu_row = '<nav class="app-nav">' + "".join(_groups_html) + '</nav>'
+    # HORE: lišta profilov — úplne vľavo správa/editácia profilov, potom prepínač profilov
+    # (_profile_tabs), vpravo market + user/logout. Vždy viditeľná na každej stránke.
+    _prof_admin = ('<a href="/profiles" target="_top" title="Spravovať a editovať profily" '
+                   'style="display:inline-flex;align-items:center;gap:5px;padding:8px 13px;'
+                   'border-radius:9px;background:#1F4E78;color:#fff;font-size:13px;font-weight:600;'
+                   'text-decoration:none;white-space:nowrap">⚙ Profily</a>')
+    profile_bar = ('<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 4px">'
+                   + _prof_admin + _profile_tabs(cur_prof)
+                   + '<span class="app-nav-right" style="margin-left:auto">'
+                   + _market_badge() + user_chip + '</span></div>')
+    # Poradie: HORE profily, POD nimi menu (čo robiť s vybraným profilom).
+    return _navcss + profile_bar + menu_row + _navjs
