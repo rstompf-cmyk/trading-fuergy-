@@ -297,6 +297,31 @@ def _nav(active: str = "") -> str:
           '}catch(e){}'
         '})();</script>'
     )
+    # Inline CSS menu — legacy stránky (form_page, /dentrh, /livesim...) majú vlastný <head>
+    # bez app.css + generické button{} pravidlo. Scoped pod .app-nav (literál farby, vyššia
+    # špecificita prebije button{}). Bez tohto sa dropdowny zobrazia rozbalené a neštýlované.
+    _navcss = ('<style>'
+        '.app-nav{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:0 0 12px;'
+        'padding:8px;background:#eef3f9;border-radius:10px}'
+        '.app-nav .nav-group{position:relative}'
+        '.app-nav .nav-trig{border:0;background:transparent;color:#1F4E78;font:500 14px inherit;'
+        'padding:8px 12px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}'
+        '.app-nav .nav-trig:hover{background:#e2ebf6}'
+        '.app-nav .nav-group.open>.nav-trig,.app-nav .nav-group.has-active>.nav-trig'
+        '{background:#1F4E78;color:#fff}'
+        '.app-nav .nav-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:50;background:#fff;'
+        'border:1px solid #e3e8ef;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,.12);'
+        'padding:6px;min-width:230px;display:none}'
+        '.app-nav .nav-group.open>.nav-menu{display:block}'
+        '.app-nav .nav-menu .nav-sec{font:600 11px inherit;color:#888;text-transform:uppercase;'
+        'letter-spacing:.04em;padding:4px 10px 6px}'
+        '.app-nav .nav-menu a{display:block;padding:7px 10px;border-radius:7px;color:#222;'
+        'font-size:14px;text-decoration:none}'
+        '.app-nav .nav-menu a:hover{background:#eef3f9}'
+        '.app-nav .nav-menu a.active{background:#1F4E78;color:#fff;font-weight:600}'
+        '.app-nav-right{margin-left:auto;display:inline-flex;gap:6px;align-items:center}'
+        '@media (max-width:640px){.app-nav .nav-menu{left:0;right:0;min-width:0}}'
+        '</style>')
     _navjs = ('<script>function navTog(b,e){if(e)e.stopPropagation();'
               'var g=b.parentNode,w=g.classList.contains("open"),a=document.querySelectorAll(".nav-group");'
               'for(var i=0;i<a.length;i++)a[i].classList.remove("open");'
@@ -307,4 +332,4 @@ def _nav(active: str = "") -> str:
     menu_row = ('<nav class="app-nav">' + "".join(_groups_html) +
                 '<span class="app-nav-right">' + _market_badge() + user_chip + '</span></nav>')
     # Pod menu: prepínač profilov (chip tabs) — zachované z pôvodného layoutu
-    return menu_row + _profile_tabs(cur_prof) + _navjs
+    return _navcss + menu_row + _profile_tabs(cur_prof) + _navjs
