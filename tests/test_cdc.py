@@ -94,6 +94,19 @@ def test_customer_crud_and_battery_link():
     assert fleet.get_battery(b3)["backend"] == "realio"
 
 
+def test_rl_bounds_directional():
+    from cdc_reg_plan import rl_bounds
+    # pevné = striktne plán
+    assert rl_bounds(-0.3, "fixed") == (-0.3, -0.3)
+    assert rl_bounds(0.4, "fixed") == (0.4, 0.4)
+    # smerové: nabíja (base<0) → RT smie len viac nabíjať
+    assert rl_bounds(-0.3, "band") == (-1.0, -0.3)
+    # vybíja (base>0) → RT smie len viac vybíjať
+    assert rl_bounds(0.4, "band") == (0.4, 1.0)
+    # nečinné → RT voľné
+    assert rl_bounds(0.0, "band") == (-1.0, 1.0)
+
+
 def test_plan_source_no_profile_returns_none():
     _setup_db()
     import fleet

@@ -28,6 +28,21 @@ def _clip(x, lo, hi):
     return max(lo, min(hi, x))
 
 
+def rl_bounds(base: float, rt: str):
+    """Vráti (rl_min, rl_max) pre danú bázu a režim RT.
+      'fixed' → (base, base)  — striktne plán.
+      'band'  → smerové asymetrické (plán je floor, RT len bezpečným smerom):
+                 nabíja (base<0): (-1, base); vybíja (base>0): (base, +1);
+                 nečinné (base=0): (-1, +1)."""
+    if rt == "band":
+        if base < 0:
+            return -1.0, base
+        if base > 0:
+            return base, 1.0
+        return -1.0, 1.0
+    return base, base
+
+
 def _plan_arrays(battery: Dict[str, Any], day_iso: str):
     """Vráti (batt_kw[96], soc_pct[96]) z plánu profilu batérie pre daný deň.
     Chýbajúce → None polia. 96 = 15-min sloty (60-min plán sa upsampluje ×4)."""
@@ -88,11 +103,8 @@ def build_band_table(battery: Dict[str, Any], day_iso: Optional[str] = None, *,
             base = _clip(batt[i] / pnom, -1.0, 1.0)
         else:
             base = 0.0
-        if rt == "band":
-            rmin = _clip(base - rl_band_w, -1.0, 1.0)
-            rmax = _clip(base + rl_band_w, -1.0, 1.0)
-        else:  # fixed
-            rmin = rmax = base
+        # smerové asymetrické pásmo (plán floor) alebo pevné — viď rl_bounds()
+        rmin, rmax = rl_bounds(base, rt)
         # SL z plánovaného SOC ± margin
         if soc[i] is not None:
             slmin = _clip(soc[i] - soc_margin, 0.0, 100.0)

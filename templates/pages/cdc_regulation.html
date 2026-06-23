@@ -65,8 +65,8 @@
     </label>
     <label>RT:
       <select name="rt">
-        <option value="fixed" {% if rt=='fixed' %}selected{% endif %}>pevné (min=base=max)</option>
-        <option value="band" {% if rt=='band' %}selected{% endif %}>pásmo (RT −1…+1)</option>
+        <option value="fixed" {% if rt=='fixed' %}selected{% endif %}>pevné — striktne plán (min=base=max)</option>
+        <option value="band" {% if rt=='band' %}selected{% endif %}>pásmo — RT asistované (plán ako floor)</option>
       </select>
     </label>
     <label>SOC margin %: <input type="number" name="soc_margin" value="{{ soc_margin }}" step="0.5" style="width:80px"></label>
