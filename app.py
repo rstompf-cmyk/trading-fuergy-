@@ -7514,7 +7514,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     f"<div style='background:#ffeaea;border-left:6px solid #C0392B;padding:10px;border-radius:8px;"
                     f"margin:10px 0;font-size:13px'><b>⚠ Realio overlay zlyhal:</b> {_ovl_err}</div>")
         body = _livesim_body(r, dfull, dview, view_day, days, realio_overlay=realio_on, trace_full=trace_full,
-                              table_offset=table_offset, table_rows=table_rows)
+                              table_offset=table_offset, table_rows=table_rows, profile=profile)
         # Bug COMPUTE-WORKER: stale dáta (background prepočet beží) → banner + rýchlejší refresh
         stale_banner = ""
         _refresh_s = "60"
@@ -7594,7 +7594,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
 
 
 def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False, trace_full=None,
-                   table_offset: int = 0, table_rows: int = 20):
+                   table_offset: int = 0, table_rows: int = 20, profile: str = None):
     import numpy as _np
     bkw = float(r.get("batt_kw", 100.0))
     n = 0 if dfull is None else len(dfull)
@@ -8793,9 +8793,20 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"Energia balance: <i>Σ zdroje = Σ spotreba</i> (každú minútu/slot). "
                 f"Kliknutím v legende skry/zobraz dataset.</p>")
         # — Riadenie batérie: fyzická akcia (plán+RT) + odchýlka + SOC —
-        # Tlačidlo "📤 Export 15-min na Bender" iba v realio_overlay móde (= reálny profil)
+        # Export tlačidlo je BACKEND-AWARE podľa zdroja komunikácie batérie:
+        #   • CDC batéria → otvorí tabuľku regulačných parametrov (GL/RL/SL) a zapíše na CDC
+        #   • Bender (Trakany) → pošle 96 setpointov priamo na Bender (existujúce)
         _export_btn = ""
-        if realio_overlay:
+        _cdc_b_exp = _cdc_battery_for_profile(profile)
+        if _cdc_b_exp:
+            _export_btn = (
+                f"<a href='/customers/battery/regulation?id={_cdc_b_exp['id']}&day={view_day}' target='_top' "
+                f"style='background:#1F6FB2;color:#fff;padding:6px 14px;border-radius:8px;"
+                f"text-decoration:none;font-weight:600;font-size:13px;margin-left:14px' "
+                f"title='Otvorí tabuľku regulačných parametrov (GL/RL/SL) a zapíše ich na CDC'>"
+                f"📤 Export 15-min riadenia na CDC</a>"
+            )
+        elif realio_overlay:
             _export_btn = (
                 f"<a href='/realio/batt_plan_export?day={view_day}' target='_top' "
                 f"style='background:#C62828;color:#fff;padding:6px 14px;border-radius:8px;"
@@ -9567,6 +9578,23 @@ def _realio_cust_picker(active_cust: str, active_tab: str) -> str:
     return f'<span class="cust-badge">📍 {active_cust}</span>'
 
 
+def _cdc_battery_for_profile(profile_name: str):
+    """Vráti CDC battery dict, ktorej profil (profile_id) zodpovedá `profile_name`.
+    Slúži na backend-aware export (livesim export button → CDC namiesto Bender)."""
+    if not profile_name:
+        return None
+    try:
+        import fleet
+        pmap = _profile_id_name_map()
+        for b in fleet.list_batteries():
+            if (str(b.get("backend")) == "cdc" and b.get("profile_id")
+                    and pmap.get(b["profile_id"]) == profile_name):
+                return b
+    except Exception:
+        pass
+    return None
+
+
 def _realio_customer_header(active_cust: str, active_tab: str) -> str:
     """Vráti HTML hornej časti /realio: breadcrumb + customer dropdown + sub-tab bar.
 
@@ -10230,20 +10258,27 @@ def _realio_riadenie_page(msg: str = "", msg_kind: str = "info",
     """
     _cdc_b = _realio_cdc_battery(cust)
     if _cdc_b:
-        # CDC batéria — Reálne riadenie = okno regulácie (live meranie + 15-min
-        # tabuľka pásiem z plánu + zápis) embednuté v iframe, pod realio headerom.
+        # CDC batéria — Reálne riadenie = TÁ ISTÁ livesim stránka ako u ostatných
+        # batérií (profil batérie). Export tlačidlo v livesim je backend-aware →
+        # pre CDC otvorí tabuľku regulačných parametrov (GL/RL/SL) a zapíše na CDC.
+        _pmap = _profile_id_name_map()
+        _prof_name = _pmap.get(_cdc_b.get("profile_id"))
         hdr = _realio_customer_header(cust, "riadenie")
-        body = (
-            f'<div style="padding:10px 0">'
-            f'<iframe src="/customers/battery/regulation?id={_cdc_b["id"]}&embed=1" '
-            f'style="width:100%;height:1400px;border:1px solid #e5e5e5;border-radius:8px"></iframe>'
-            f'</div>')
+        if not _prof_name:
+            inner = ('<div class="banner info" style="margin-top:12px">Batéria nemá priradený '
+                     'profil — priraď ho v <a href="/customers">🏭 Zákazníci</a> '
+                     '(plán a parametre sa berú z profilu).</div>')
+        else:
+            inner = (f'<div style="padding:10px 0">'
+                     f'<iframe src="/livesim?profile={_prof_name}" '
+                     f'style="width:100%;height:2600px;border:1px solid #e5e5e5;border-radius:8px"></iframe>'
+                     f'</div>')
         return (f'<!doctype html><html><head><meta charset="utf-8">'
                 f'<title>Reálne riadenie — {cust}</title>'
                 f'<link rel="stylesheet" href="/static/css/app.css"></head><body>'
                 f'<div class="container">'
                 f'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
-                f'<h1>🔴 Reálne riadenie</h1></div>{hdr}{body}</div></body></html>')
+                f'<h1>🔴 Reálne riadenie</h1></div>{hdr}{inner}</div></body></html>')
     # Profile dispatch — Realio má VLASTNÝ pinned profil, NEZÁVISLÝ od globálneho active.
     # Užívateľ tak môže mať sim profil aktívny globálne (pre /plan, /livesim, /rt)
     # a real profil pinned pre Realio (manual setpoint, riadenie). Per-port (PORT/APP_PORT).
