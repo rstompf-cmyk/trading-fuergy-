@@ -6639,7 +6639,7 @@ def livesim_get(case: str = None, start: str = None, view: str = None, curtail: 
         try:
             import profiles as _pr
             import plan_store as _ps
-            _cur_prof = _ps.resolve_profile()
+            _cur_prof = _ps.resolve_profile(profile)   # rešpektuj ?profile= (napr. CDC batéria v iframe)
             if _pr.get_mode(_cur_prof) == _pr.MODE_REAL:
                 realio_on = True
         except Exception:
@@ -7384,8 +7384,32 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                            "rdf_rows": 0, "rdf_columns": []}
         if realio_on:
             try:
-                import realio as _rio
-                rdf = _rio.read_recent(n_minutes=1440 * 2)  # 2 dni
+                # Zdroj REÁLNEHO merania pre overlay je BACKEND-AWARE:
+                #   • CDC batéria (profil = CDC batéria) → história z CDC servera
+                #     (rovnaké logické názvy ftv/load/batt/soc; VW-BA bez FTV → FTV overlay zmizne)
+                #   • inak (Trakany/Bender) → realio CSV (pôvodné správanie)
+                try:
+                    import plan_store as _ps_ov
+                    _eff_prof_ov = _ps_ov.resolve_profile(profile)
+                except Exception:
+                    _eff_prof_ov = profile
+                _cdc_ov = _cdc_battery_for_profile(_eff_prof_ov)
+                if _cdc_ov:
+                    import cdc as _cdc_ovm
+                    import datetime as _dt_ov
+                    _ccfg_ov = _cdc_ovm.load_system_config(_cdc_ov.get("country"))
+                    _ccfg_ov["enabled"] = True
+                    _ccfg_ov["timeout_s"] = min(int(_ccfg_ov.get("timeout_s", 15) or 15), 6)
+                    _hist_ov = _cdc_ovm.fetch_history_range(
+                        _cdc_ov.get("cdc_prefix"),
+                        _dt_ov.datetime.now() - _dt_ov.timedelta(days=2),
+                        _dt_ov.datetime.now(), step=60, cfg=_ccfg_ov,
+                        keys=["load_power_kw", "ftv_power_kw", "batt_power_kw", "batt_soc_pct"])
+                    rdf = (_hist_ov.reset_index()
+                           if _hist_ov is not None and not _hist_ov.empty else pd.DataFrame())
+                else:
+                    import realio as _rio
+                    rdf = _rio.read_recent(n_minutes=1440 * 2)  # 2 dni
                 if not rdf.empty:
                     # Vytvor mapping čas → realio merania (ftv, load, batt, soc)
                     rdf = rdf.copy()
