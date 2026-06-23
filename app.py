@@ -17136,6 +17136,159 @@ async def customers_battery_enable(request: Request):
     return _customers_page(request, msg="Stav inštancie zmenený.")
 
 
+def _reg_plan_svg_example():
+    """Ilustračná SVG vizualizácia regulačného plánu (NÁVRH).
+    Zatiaľ len SL = rozsah SOC (jednoznačné %); GL/RL pásma sa doplnia po dodaní
+    jednotiek z popisu filtrov."""
+    W, H, padL, padR, padT, padB = 720, 240, 44, 16, 28, 24
+    n = 96
+    iw, ih = W - padL - padR, H - padT - padB
+    # príklad: SOC rozsah (SL) rastie počas dňa (ako v dashboarde)
+    sl_min = [6 + (55 - 6) * i / (n - 1) for i in range(n)]
+    sl_max = [20 + (70 - 20) * i / (n - 1) for i in range(n)]
+
+    def x(i):
+        return padL + iw * i / (n - 1)
+
+    def y(p):  # p v % SOC, 0 dole, 100 hore
+        return padT + ih * (1 - p / 100.0)
+
+    top = " ".join(f"{x(i):.1f},{y(sl_max[i]):.1f}" for i in range(n))
+    bot = " ".join(f"{x(i):.1f},{y(sl_min[i]):.1f}" for i in range(n - 1, -1, -1))
+    band = f'<polygon points="{top} {bot}" fill="#cfe3ff" stroke="none" opacity="0.8"/>'
+    line_max = '<polyline points="' + " ".join(f"{x(i):.1f},{y(sl_max[i]):.1f}" for i in range(n)) + '" fill="none" stroke="#2b6cb0" stroke-width="1.5"/>'
+    line_min = '<polyline points="' + " ".join(f"{x(i):.1f},{y(sl_min[i]):.1f}" for i in range(n)) + '" fill="none" stroke="#2b6cb0" stroke-width="1.5" stroke-dasharray="4 3"/>'
+    # osi
+    grid = ""
+    for p in (0, 25, 50, 75, 100):
+        yy = y(p)
+        grid += f'<line x1="{padL}" y1="{yy:.1f}" x2="{W-padR}" y2="{yy:.1f}" stroke="#eee"/>'
+        grid += f'<text x="{padL-6}" y="{yy+3:.1f}" font-size="10" text-anchor="end" fill="#888">{p}%</text>'
+    xticks = ""
+    for hh in range(0, 25, 3):
+        xx = padL + iw * (hh / 24.0)
+        xticks += f'<line x1="{xx:.1f}" y1="{padT}" x2="{xx:.1f}" y2="{H-padB}" stroke="#f4f4f4"/>'
+        xticks += f'<text x="{xx:.1f}" y="{H-padB+14}" font-size="10" text-anchor="middle" fill="#888">{hh:02d}:00</text>'
+    return (f'<svg viewBox="0 0 {W} {H}" width="100%" style="max-width:760px;border:1px solid #e5e5e5;border-radius:8px;background:#fff">'
+            f'<text x="{padL}" y="16" font-size="12" fill="#333" font-weight="600">SL — plánovaný rozsah SOC (príklad/návrh)</text>'
+            f'{grid}{xticks}{band}{line_max}{line_min}</svg>'
+            '<p class="muted" style="font-size:12px">Modré pásmo = povolený rozsah SOC (SL Min…SL Max) v čase. '
+            'GL (prah) a RL (požadovaná hodnota batérie) pásma doplním po dodaní jednotiek.</p>')
+
+
+def _regulation_page(request, id, *, mode="battery", rt="fixed", soc_margin=7.0,
+                     day=None, msg="", msg_kind="success", write_result=None):
+    import fleet
+    import cdc
+    import cdc_reg_plan
+    import datetime as _dt
+    b = fleet.get_battery(id)
+    if not b:
+        return HTMLResponse("<p>Batéria neexistuje.</p>", status_code=404)
+    snap = None
+    snap_err = None
+    tags = {}
+    write_tags = {}
+    if b.get("backend") == "cdc" and b.get("cdc_prefix"):
+        try:
+            cfg = cdc.load_system_config(b.get("country"))
+            cfg["enabled"] = True
+            tags = cdc.resolve_read_tags(b["cdc_prefix"], cfg)
+            write_tags = cdc.resolve_write_tags(b["cdc_prefix"], cfg)
+            snap = cdc.fetch_latest(b["cdc_prefix"], cfg=cfg)
+        except Exception as e:
+            snap_err = str(e)
+    meas_rows = [
+        ("load_power_kw", "Spotreba (1m)", "kW"),
+        ("ftv_power_kw", "FTV", "kW"),
+        ("batt_power_kw", "Výkon batérie (1m)", "kW"),
+        ("batt_soc_pct", "SOC", "%"),
+        ("threshold_kw", "Prah (threshold)", "kW"),
+        ("reg_output_kw", "Reg. výstup", "kW"),
+    ]
+    day = day or _dt.date.today().isoformat()
+    try:
+        band_rows = cdc_reg_plan.build_band_table(b, day, mode=mode, rt=rt,
+                                                  soc_margin=float(soc_margin))
+    except Exception as e:
+        band_rows = []
+        if not msg:
+            msg, msg_kind = f"Plán sa nepodarilo prepísať: {e}", "error"
+    status = fleet.get_status(id)
+    from ui.templates import render
+    return render(request, "pages/cdc_regulation.html", b=b, snap=snap,
+                  snap_err=snap_err, tags=tags, write_tags=write_tags, rows=meas_rows,
+                  status=status, viz_svg=_reg_plan_svg_example(),
+                  band_rows=band_rows, mode=mode, rt=rt, soc_margin=soc_margin,
+                  day=day, msg=msg, msg_kind=msg_kind, write_result=write_result)
+
+
+@app.get("/customers/battery/regulation", response_class=HTMLResponse)
+def customers_battery_regulation(request: Request, id: int, mode: str = "battery",
+                                 rt: str = "fixed", soc_margin: float = 7.0,
+                                 day: str = None):
+    return _regulation_page(request, id, mode=mode, rt=rt, soc_margin=soc_margin, day=day)
+
+
+@app.post("/customers/battery/regulation/write", response_class=HTMLResponse)
+async def customers_battery_regulation_write(request: Request):
+    import fleet
+    import cdc
+    import cdc_reg_plan
+    import datetime as _dt
+    form = await request.form()
+    try:
+        bid = int(form.get("id"))
+    except (TypeError, ValueError):
+        return HTMLResponse("<p>Neplatné id.</p>", status_code=400)
+    mode = form.get("mode") or "battery"
+    rt = form.get("rt") or "fixed"
+    try:
+        soc_margin = float(form.get("soc_margin") or 7.0)
+    except ValueError:
+        soc_margin = 7.0
+    day = form.get("day") or _dt.date.today().isoformat()
+    b = fleet.get_battery(bid)
+    if not b or b.get("backend") != "cdc" or not b.get("cdc_prefix"):
+        return _regulation_page(request, bid, mode=mode, rt=rt, soc_margin=soc_margin,
+                                day=day, msg="Batéria nie je CDC alebo nemá prefix.",
+                                msg_kind="error")
+    if form.get("edited") == "1":
+        # zapíš ručne upravené hodnoty z tabuľky (nie regenerované)
+        rows = []
+        for i in range(96):
+            h, m = divmod(i * 15, 60)
+            pfx = f"s{i}__"
+            if (pfx + "rl_base") not in form:
+                continue
+
+            def _f(key, default=0.0):
+                try:
+                    return float(form.get(pfx + key))
+                except (TypeError, ValueError):
+                    return default
+            rows.append({
+                "slot": i, "time": f"{h:02d}:{m:02d}",
+                "sl_min": _f("sl_min"), "sl_max": _f("sl_max", 100.0),
+                "gl_active": 1 if form.get(pfx + "gl_active") else 0,
+                "gl_min": _f("gl_min"), "gl_base": _f("gl_base"), "gl_max": _f("gl_max"),
+                "rl_active": 1,
+                "rl_min": _f("rl_min"), "rl_base": _f("rl_base"), "rl_max": _f("rl_max"),
+            })
+        if not rows:
+            rows = cdc_reg_plan.build_band_table(b, day, mode=mode, rt=rt, soc_margin=soc_margin)
+    else:
+        rows = cdc_reg_plan.build_band_table(b, day, mode=mode, rt=rt, soc_margin=soc_margin)
+    cfg = cdc.load_system_config(b.get("country"))
+    cfg["enabled"] = True
+    cfg["control_enabled"] = True
+    res = cdc.write_band_table(b["cdc_prefix"], rows, day, cfg=cfg)
+    kind = "info" if res.get("dry_run") else "success"
+    note = "DRY-RUN (nezapísané — FLEET_REAL_WRITE!=1)" if res.get("dry_run") else "Zapísané do batérie."
+    return _regulation_page(request, bid, mode=mode, rt=rt, soc_margin=soc_margin,
+                            day=day, msg=note, msg_kind=kind, write_result=res)
+
+
 @app.get("/rt", response_class=HTMLResponse)
 def rt_get(soc: float = None, margin: float = None, budget: float = None,
            mode: str = None, bchg: float = None, kdis: float = None, kchg: float = None,

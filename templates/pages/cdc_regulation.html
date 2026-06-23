@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Regulácia {{ b.name }} — {{ app_name }}{% endblock %}
+
+{% block content %}
+  <h1>🛰 Reálna regulácia — {{ b.name }}</h1>
+  <p>
+    <a href="/customers" class="btn sec sm">← Zákazníci</a>
+    <span class="chip {{ 'real' if b.mode=='real' else '' }}">{{ b.backend }}{% if b.cdc_prefix %} · {{ b.cdc_prefix }}{% endif %}</span>
+    {% if b.enabled %}<span class="chip">🟢 inštancia beží</span>{% else %}<span class="chip">⏸ inštancia vypnutá</span>{% endif %}
+  </p>
+
+  <div class="banner info">
+    Tento pohľad je <b>len na čítanie</b> — nezapisuje žiadne hodnoty a <b>neovplyvňuje reguláciu</b>.
+  </div>
+
+  <h2>📟 Aktuálne meranie (live z CDC)</h2>
+  {% if snap_err %}
+    <div class="banner error">Server neodpovedal: {{ snap_err }}</div>
+  {% elif snap is none %}
+    <div class="banner info">Batéria nie je CDC, alebo nemá prefix.</div>
+  {% else %}
+    <table class="tbl-compact">
+      <tr><th>veličina</th><th>tag</th><th>hodnota</th></tr>
+      {% for key, label, unit in rows %}
+      <tr>
+        <td>{{ label }}</td>
+        <td><code>{{ tags.get(key, '—') }}</code></td>
+        <td>
+          {% if snap.get(key) is none %}<span class="muted">—</span>
+          {% else %}<b>{{ snap.get(key) }}</b> {{ unit }}{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted" style="font-size:12px">_ts: {{ snap.get('_ts') }}{% if snap.get('_errors') %} · chyby: {{ snap.get('_errors') }}{% endif %}</p>
+  {% endif %}
+
+  {% if status %}
+    <h3>Stav inštancie (z control loopu)</h3>
+    <table class="tbl-compact">
+      <tr><th>health</th><th>SOC</th><th>posledný setpoint</th><th>ts</th></tr>
+      <tr>
+        <td>{{ status.get('health') }}</td>
+        <td>{% if status.get('soc_pct') is not none %}{{ status.get('soc_pct') }} %{% else %}—{% endif %}</td>
+        <td>{% if status.get('last_setpoint_kw') is not none %}{{ status.get('last_setpoint_kw') }} kW{% else %}—{% endif %}</td>
+        <td class="muted">{{ status.get('ts') }}</td>
+      </tr>
+    </table>
+  {% endif %}
+
+  <h2>📐 Regulačný plán po 15 min (GL / RL / SL)</h2>
+  <p class="muted">
+    Prepis D-1 plánu batérie na regulačné pásma. <b>RL</b> = výkon batérie (−1…+1 × Pnom),
+    <b>SL</b> = rozsah SOC, <b>GL</b> = prah odberného miesta (len v režime „celé OM").
+    Pri <b>pevnom</b> riadení sa nastaví <code>min=base=max</code> (bez RT závislosti).
+  </p>
+
+  <form method="get" action="/customers/battery/regulation" style="margin-bottom:8px">
+    <input type="hidden" name="id" value="{{ b.id }}">
+    <label>Režim:
+      <select name="mode">
+        <option value="battery" {% if mode=='battery' %}selected{% endif %}>len batéria (RL)</option>
+        <option value="point" {% if mode=='point' %}selected{% endif %}>celé OM (GL+RL)</option>
+      </select>
+    </label>
+    <label>RT:
+      <select name="rt">
+        <option value="fixed" {% if rt=='fixed' %}selected{% endif %}>pevné (min=base=max)</option>
+        <option value="band" {% if rt=='band' %}selected{% endif %}>pásmo (RT −1…+1)</option>
+      </select>
+    </label>
+    <label>SOC margin %: <input type="number" name="soc_margin" value="{{ soc_margin }}" step="0.5" style="width:80px"></label>
+    <label>Deň: <input type="date" name="day" value="{{ day }}"></label>
+    <button type="submit" class="btn sec sm">Generovať z plánu</button>
+  </form>
+
+  {% if viz_svg %}{{ viz_svg|safe }}{% endif %}
+
+  {% if write_result %}
+    <div class="banner {{ 'info' if write_result.dry_run else 'success' }}">
+      Zápis ({{ 'DRY-RUN' if write_result.dry_run else 'reálny' }}):
+      {% for lk, r in write_result.tags.items() %}<code>{{ lk }}</code>×{{ r.n }}{% if r.error %} ⚠{{ r.error }}{% endif %} {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if band_rows %}
+    <form method="post" action="/customers/battery/regulation/write" style="margin:8px 0">
+      <input type="hidden" name="id" value="{{ b.id }}">
+      <input type="hidden" name="mode" value="{{ mode }}">
+      <input type="hidden" name="rt" value="{{ rt }}">
+      <input type="hidden" name="soc_margin" value="{{ soc_margin }}">
+      <input type="hidden" name="day" value="{{ day }}">
+      <input type="hidden" name="edited" value="1">
+      <p>
+        <button type="submit" class="btn green">💾 Zapísať do batérie ({{ b.cdc_prefix }})</button>
+        <span class="muted" style="font-size:12px">upravené hodnoty nižšie sa zapíšu; zápis na HW len pri FLEET_REAL_WRITE=1, inak DRY-RUN</span>
+      </p>
+      <div style="max-height:460px;overflow:auto;border:1px solid #eee;border-radius:8px">
+      <table class="tbl-compact" style="font-size:11px">
+        <tr>
+          <th>čas</th><th>plán<br>kW</th><th>SOC<br>%</th>
+          <th>SL min</th><th>SL max</th>
+          <th>GL act</th><th>GL min</th><th>GL base</th><th>GL max</th>
+          <th>RL min</th><th>RL base</th><th>RL max</th>
+        </tr>
+        {% for r in band_rows %}
+        <tr>
+          <td>{{ r.time }}</td>
+          <td class="muted">{% if r.batt_kw is not none %}{{ r.batt_kw }}{% else %}—{% endif %}</td>
+          <td class="muted">{% if r.soc_pct is not none %}{{ r.soc_pct }}{% else %}—{% endif %}</td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__sl_min" value="{{ r.sl_min }}" style="width:52px"></td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__sl_max" value="{{ r.sl_max }}" style="width:52px"></td>
+          <td><input type="checkbox" name="s{{ r.slot }}__gl_active" {% if r.gl_active %}checked{% endif %}></td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__gl_min" value="{{ r.gl_min }}" style="width:52px"></td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__gl_base" value="{{ r.gl_base }}" style="width:52px"></td>
+          <td><input type="number" step="1" name="s{{ r.slot }}__gl_max" value="{{ r.gl_max }}" style="width:52px"></td>
+          <td><input type="number" step="0.01" name="s{{ r.slot }}__rl_min" value="{{ r.rl_min }}" style="width:52px"></td>
+          <td><input type="number" step="0.01" name="s{{ r.slot }}__rl_base" value="{{ r.rl_base }}" style="width:52px"></td>
+          <td><input type="number" step="0.01" name="s{{ r.slot }}__rl_max" value="{{ r.rl_max }}" style="width:52px"></td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+    </form>
+    <p class="muted" style="font-size:12px">96 slotov (15-min). RL = podiel z Pnom ({{ b.batt_kw }} kW), base = požadovaný výkon z plánu. SL = tolerancia (min=max → striktne podľa plánu). „Generovať z plánu" prepíše ručné úpravy.</p>
+  {% else %}
+    <div class="banner info">Pre tento deň/profil nie je plán — najprv vytvor plán pre profil batérie.</div>
+  {% endif %}
+
+  <h3>Plánovacie tagy (write) tejto batérie</h3>
+  <table class="tbl-compact">
+    <tr><th>logický kľúč</th><th>tag</th></tr>
+    {% for key, tag in write_tags.items() %}
+    <tr><td><code>{{ key }}</code></td><td><code>{{ tag }}</code></td></tr>
+    {% endfor %}
+  </table>
+{% endblock %}

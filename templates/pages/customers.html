@@ -108,7 +108,10 @@
             </button>
           </form>
         </td>
-        <td><a href="/customers?edit={{ b.id }}" class="btn sec sm">✏ Upraviť</a></td>
+        <td>
+          <a href="/customers/battery/regulation?id={{ b.id }}" class="btn sm">📐 Regulácia</a>
+          <a href="/customers?edit={{ b.id }}" class="btn sec sm">✏ Upraviť</a>
+        </td>
       </tr>
       {% endfor %}
     </table>

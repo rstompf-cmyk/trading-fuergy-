@@ -390,6 +390,79 @@ def write_setpoint(prefix: str, value_kw: float, market: Optional[str] = None,
     return write_value(prefix, "cons_plan_kw", value_kw, market=market, source=source)
 
 
+def write_series(prefix: str, logical: str, series: List, market: Optional[str] = None,
+                 cfg: Optional[Dict[str, Any]] = None, source: str = "plan",
+                 apply_scale: bool = False) -> Dict[str, Any]:
+    """Zapíše ČASOVÚ SÉRIU do jedného write tagu (jeden POST). `series` = list
+    (datetime, value). Pre plánovacie tagy (GL/RL/SL) apply_scale=False (hodnoty
+    sa posielajú tak ako sú). DRY-RUN ak nie je povolený reálny zápis."""
+    cfg = cfg or load_system_config(market)
+    wtags = resolve_write_tags(prefix, cfg)
+    tag = wtags.get(logical)
+    out: Dict[str, Any] = {"ok": False, "dry_run": True, "prefix": prefix,
+                           "logical": logical, "tag": tag, "n": len(series), "source": source}
+    if not tag:
+        out["error"] = f"write tag '{logical}' nie je nakonfigurovaný"
+        return out
+    scale = float((cfg.get("scale_write") or {}).get(logical, 1.0)) if apply_scale else 1.0
+    payload = {tag: [{"time": _fmt_dt(t).replace("_", " "), "value": v * scale}
+                     for (t, v) in series]}
+    out["payload_sample"] = payload[tag][:3]
+    if not _real_write_enabled(cfg):
+        out["ok"] = True
+        out["note"] = "DRY-RUN (zapnúť enabled+control_enabled a FLEET_REAL_WRITE=1)"
+        return out
+    host = (cfg.get("host") or "").rstrip("/")
+    path = cfg.get("endpoint_write") or "/api/excel/data/write"
+    s = _session(cfg)
+    try:
+        r = s.post(f"{host}{path}", data=json.dumps(payload),
+                   timeout=float(cfg.get("timeout_s", 15)))
+        out["status"] = r.status_code
+        r.raise_for_status()
+        out["ok"] = True
+        out["dry_run"] = False
+    except Exception as e:
+        out["ok"] = False
+        out["dry_run"] = False
+        out["error"] = str(e)
+    return out
+
+
+def write_band_table(prefix: str, rows: List[Dict[str, Any]], day_iso: str,
+                     market: Optional[str] = None, cfg: Optional[Dict[str, Any]] = None,
+                     source: str = "reg_plan") -> Dict[str, Any]:
+    """Zapíše celú 15-min tabuľku regulačných pásiem (z cdc_reg_plan.build_band_table)
+    — každý band tag ako časová séria (jeden POST/tag). DRY-RUN ak nie je povolené.
+    `rows` musia mať kľúče 'time' (HH:MM) + band hodnoty; mapovanie cez BAND_TO_TAG."""
+    from cdc_reg_plan import BAND_TO_TAG
+    cfg = cfg or load_system_config(market)
+    try:
+        base_day = dt.datetime.strptime(day_iso, "%Y-%m-%d")
+    except ValueError:
+        base_day = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    results: Dict[str, Any] = {"dry_run": True, "tags": {}}
+    any_real = False
+    for band_key, logical in BAND_TO_TAG.items():
+        series = []
+        for row in rows:
+            if band_key not in row:
+                continue
+            hh, mm = (row.get("time") or "00:00").split(":")
+            ts = base_day.replace(hour=int(hh), minute=int(mm))
+            series.append((ts, float(row[band_key])))
+        if not series:
+            continue
+        res = write_series(prefix, logical, series, cfg=cfg, source=source)
+        results["tags"][logical] = {"ok": res.get("ok"), "n": res.get("n"),
+                                    "dry_run": res.get("dry_run"), "tag": res.get("tag"),
+                                    "error": res.get("error")}
+        if not res.get("dry_run"):
+            any_real = True
+    results["dry_run"] = not any_real
+    return results
+
+
 # ─── Diagnostika ─────────────────────────────────────────────────────────────
 def diagnose(prefix: str, market: Optional[str] = None) -> Dict[str, Any]:
     """Rýchla diagnostika: config + poskladané tagy + skúšobný read."""
