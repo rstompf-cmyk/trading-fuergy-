@@ -1,24 +1,66 @@
-{# Hlavná navigácia — used by base.html. Active je current path. #}
-{% set nav_items = [
-  ("/", "🗓 Plán D-1"),
-  ("/dentrh", "⚡ Denný trh 15-min"),
-  ("/rt", "🔴 RT poradca"),
-  ("/plan_batch", "📦 Batch plán"),
-  ("/plans", "📋 Plány"),
-  ("/profiles", "⚙ Profily"),
-  ("/customers", "🏭 Zákazníci"),
-  ("/cdc", "🛰 Konfigurácia CDC"),
-  ("/livesim", "🟢 Živá simulácia"),
-  ("/load_import", "🏠 Spotreba"),
-  ("/realio", "🔌 Reálne meranie"),
-  ("/auto_control", "🤖 Paper trading"),
-  ("/vdt", "💹 OKTE VDT"),
-  ("/kalibracia", "📈 Kalibrácia"),
-  ("/data", "💾 Dáta"),
+{# Hlavná navigácia — zoskupené rozbaľovacie menu, mode-aware podľa active_profile.mode.
+   Položky tagované: "both" (vždy), "sim" (len simulačný profil), "real" (len reálny profil).
+   Skupina sa zobrazí len ak má aspoň jednu viditeľnú položku pre daný mód. #}
+{% set nav_mode = (active_profile.mode if active_profile else "simulation") %}
+{% set nav_groups = [
+  ("🗓 Plánovanie", [
+    ("/", "Plán D-1", "both"),
+    ("/dentrh", "Denný trh 15-min", "both"),
+    ("/plan_batch", "Batch plán", "both"),
+    ("/plans", "Uložené plány", "both")
+  ]),
+  ("🟢 Simulácia & monitoring", [
+    ("/livesim", "Živá simulácia", "both"),
+    ("/manager", "Manager dashboard", "both"),
+    ("/fleet", "Flotila", "both"),
+    ("/dashboard", "Profil dashboard", "both"),
+    ("/simulacia", "Výsledok simulácie", "simulation")
+  ]),
+  ("💹 Obchodovanie", [
+    ("/rt", "RT poradca", "both"),
+    ("/vdt", "OKTE VDT prehľad", "both"),
+    ("/vdt/live_advisor", "VDT Live advisor", "both"),
+    ("/vdt/d1", "VDT D-1", "both"),
+    ("/vdt/board", "VDT Board", "both"),
+    ("/vdt/simulator", "VDT Simulátor", "simulation"),
+    ("/vdt/backtest", "VDT Backtest", "simulation"),
+    ("/vdt/zco_backtest", "ZCO Backtest", "simulation"),
+    ("/auto_control", "Paper trading", "both")
+  ]),
+  ("🔌 Reálne riadenie", [
+    ("/realio", "Reálne meranie", "real"),
+    ("/customers", "Zákazníci", "real"),
+    ("/cdc", "CDC konfigurácia", "real"),
+    ("/customers/battery/regulation", "Okno regulácie", "real")
+  ]),
+  ("💾 Dáta & nastavenia", [
+    ("/profiles", "Profily", "both"),
+    ("/load_import", "Spotreba", "both"),
+    ("/ftv_scenario", "FTV scenár", "both"),
+    ("/kalibracia", "Kalibrácia", "both"),
+    ("/data", "Dáta", "both")
+  ])
 ] %}
 <nav class="app-nav">
-  {% for href, label in nav_items %}
-    <a href="{{ href }}" target="_top" {% if href == nav_active %}class="active"{% endif %}>{{ label }}</a>
+  {% for glabel, items in nav_groups %}
+    {% set ns = namespace(vis=[], active=false) %}
+    {% for href, label, m in items %}
+      {% if m == "both" or m == nav_mode %}
+        {% set _ = ns.vis.append((href, label)) %}
+        {% if href == nav_active %}{% set ns.active = true %}{% endif %}
+      {% endif %}
+    {% endfor %}
+    {% if ns.vis %}
+      <div class="nav-group {% if ns.active %}has-active{% endif %}">
+        <button type="button" class="nav-trig" onclick="navTog(this, event)">{{ glabel }} <span style="font-size:11px" aria-hidden="true">▾</span></button>
+        <div class="nav-menu">
+          <div class="nav-sec">{{ glabel }}</div>
+          {% for href, label in ns.vis %}
+            <a href="{{ href }}" target="_top" {% if href == nav_active %}class="active"{% endif %}>{{ label }}</a>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
   {% endfor %}
   <span class="app-nav-right">
     {% if active_profile %}
@@ -40,6 +82,18 @@
   </span>
 </nav>
 <script>
+function navTog(btn, ev){
+  if (ev) ev.stopPropagation();
+  var grp = btn.parentNode;
+  var wasOpen = grp.classList.contains("open");
+  var all = document.querySelectorAll(".nav-group");
+  for (var i=0;i<all.length;i++) all[i].classList.remove("open");
+  if (!wasOpen) grp.classList.add("open");
+}
+document.addEventListener("click", function(){
+  var all = document.querySelectorAll(".nav-group.open");
+  for (var i=0;i<all.length;i++) all[i].classList.remove("open");
+});
 (function(){
   try {
     fetch("/me", {credentials: "same-origin"}).then(function(r){ return r.json(); })
