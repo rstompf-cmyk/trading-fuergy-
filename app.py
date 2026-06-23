@@ -10338,7 +10338,7 @@ def _realio_riadenie_page(msg: str = "", msg_kind: str = "info",
                      f'</div>')
         return (f'<!doctype html><html><head><meta charset="utf-8">'
                 f'<title>Reálne riadenie — {_html.escape(cust)}</title>'
-                f'<link rel="stylesheet" href="/static/css/app.css"></head><body>'
+                f'<link rel="stylesheet" href="/static/css/app.css?v=20260622b"></head><body>'
                 f'<div class="container">'
                 f'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
                 f'<h1>🔴 Reálne riadenie</h1></div>{hdr}{inner}</div></body></html>')
@@ -10696,7 +10696,7 @@ def _realio_nastavenie_page(msg: str = "", msg_kind: str = "info", cust: str = "
             f'vzťahy (zákazník, prefix, profil) na <a href="/customers">🏭 Zákazníci</a>.</div>')
         return (f'<!doctype html><html><head><meta charset="utf-8">'
                 f'<title>Nastavenie — {_html.escape(cust)}</title>'
-                f'<link rel="stylesheet" href="/static/css/app.css"></head><body>'
+                f'<link rel="stylesheet" href="/static/css/app.css?v=20260622b"></head><body>'
                 f'<div class="container"><h1>⚙ Nastavenie</h1>{hdr}{body}</div></body></html>')
     try:
         import realio as _rio
