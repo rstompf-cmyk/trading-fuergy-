@@ -1409,6 +1409,19 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                              # je príliš konzervatívna — dobíjanie sa ráta.
                                              audit_future_horizon_slots=96,
                                              rt_engine=_rt_engine_sel, rt2_params=_rt2_params)
+            # DT-GATE (2026-06-24, fix "DT efekt aj keď nebol DT"): DT výnos sa započíta
+            # LEN v slotoch s reálnou DAM nomináciou (order_mwh≠0). Bez toho dtprof ocenil
+            # prietok batérie/FTV DT cenou aj v slotoch bez DAM príkazu → karta vykazovala
+            # DT hoci žiadny DT (denný trh) obchod nebol. Pre korektné profily no-op
+            # (kde order=0 má byť dt=0). Guard: aplikuj len ak order_mwh existuje a sedí dĺžka.
+            try:
+                if hasattr(sch, "columns") and "order_mwh" in sch.columns:
+                    _om_gate = np.asarray(sch["order_mwh"].values, float)
+                    _dtp_gate = np.asarray(dtprof, float)
+                    if len(_om_gate) == len(_dtp_gate):
+                        dtprof = np.where(np.abs(_om_gate) > 1e-6, _dtp_gate, 0.0)
+            except Exception as _e_dtgate:
+                print(f"[livesim DT-GATE] {_e_dtgate}")
             day_dt_total = float(np.nansum(dtprof))
             # SK fallback odstránený — rt_controller.run_day_physical teraz akceptuje
             # ZCO=NaN (= žiadne zúčtovanie odchýlky), takže bežný flow funguje aj pre SK

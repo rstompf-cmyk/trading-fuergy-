@@ -47,7 +47,9 @@ _DEFAULT_CRONS = {
     "dam_fetch_cz":        "30 13 * * *",       # 13:30 — OTE CZ
     "dam_fetch_sk":        "35 13 * * *",       # 13:35 — OKTE SK
     "imbalance_fetch_sk":  "35 11 * * *",       # 11:35 — OKTE ISZO D-1
-    "autoplan_d1":         "0 14 * * *",        # 14:00 — auto D-1 plán (po SK/CZ DAM clearance)
+    "autoplan_d1":         "0 14 * * *",        # 14:00 — auto D-1 plán (po SK/CZ DAM clearance) — LEGACY, len run_now
+    "autoplan_forecast":   "0 9 * * *",         # 09:00 — auto D-1 plán pre profily s kind='plan' (predikované ceny)
+    "autoplan_realdam":    "0 14 * * *",        # 14:00 — auto D-1 plán pre profily s kind='dentrh' (reálny denný trh)
     "seps_cookies":        "*/25 * * * *",      # každých 25 min — obnov SEPS cookies/XSRF
     "seps_realtime_log":   "* * * * *",         # každú minútu — log SEPS okamžitých hodnôt do CSV
     "historian_login":     "*/45 * * * *",      # každých 45 min — relogin firemný historian (1h session timeout)
@@ -595,45 +597,56 @@ def job_seps_cookies():
         _log("seps_cookies", f"refresh zlyhal: {msg}", level="warn")
 
 
-@_safe("autoplan_d1")
-def job_autoplan_d1():
-    """Auto-generovanie D-1 plánu na zajtra pre všetky uložené profile.
+def _profile_d1_kind(name: str) -> str:
+    """Kind posledného uloženého plánu profilu: 'plan' (predikované ceny, gen. 09:00)
+    alebo 'dentrh' (reálny denný trh, gen. 14:00). Default 'dentrh'.
 
-    Beží po DAM cleare (14:30). Pre každý profil zavolá `compute_d1_plan`
-    ktorý uloží plán ako `kind='dentrh'` (15-min) do plan_store.
-    /dentrh stránka, /vdt/d1 viewer a VDT live advisor čítajú TEN ISTÝ plán
-    cez cascade `dentrh → plan` — guarantuje konzistenciu naprieč UI.
+    Toto je klasifikátor pre rozdelenie autoplan 09:00 vs 14:00 — odvodené z toho,
+    aký kind profil naposledy generoval (to čo užívateľ nastavil pri generovaní plánov),
+    žiadny nový prepínač. Súbory: out/profiles/<name>/plans/<date>_<step>min_<kind>.json
+    """
+    try:
+        import plan_store as _ps
+        import glob as _glob
+        d = _ps._dir_for(name)
+        files = _glob.glob(os.path.join(d, "*.json"))
+        if not files:
+            return "dentrh"
+        newest = max(files, key=os.path.getmtime)
+        return "plan" if os.path.basename(newest).endswith("_plan.json") else "dentrh"
+    except Exception:
+        return "dentrh"
+
+
+def _run_autoplan(only_kind: Optional[str], job_id: str):
+    """Auto-generovanie D-1 plánu na zajtra. only_kind filtruje profily podľa
+    _profile_d1_kind ('plan' / 'dentrh'); None = všetky. compute_d1_plan sám určí
+    výsledný kind podľa dostupných dát (09:00 = predikcia → plan; 14:00 = reálny DAM → dentrh).
     """
     tomorrow = dt.date.today() + dt.timedelta(days=1)
-    _log("autoplan_d1", f"štart pre {tomorrow}")
+    _log(job_id, f"štart pre {tomorrow}" + (f" · kind={only_kind}" if only_kind else ""))
     try:
         import profiles as pr
     except ImportError:
-        _log("autoplan_d1", "profiles.py nedostupný — preskakujem", level="warn")
+        _log(job_id, "profiles.py nedostupný — preskakujem", level="warn")
         return
-
-    profile_names = []
     try:
         profile_names = [p.get("name") if isinstance(p, dict) else p
                          for p in pr.list_profiles()]
     except Exception as e:
-        _log("autoplan_d1", f"list_profiles zlyhalo: {e}", level="warn")
+        _log(job_id, f"list_profiles zlyhalo: {e}", level="warn")
         return
-
+    if only_kind:
+        profile_names = [n for n in profile_names if _profile_d1_kind(n) == only_kind]
     if not profile_names:
-        _log("autoplan_d1", "žiadne uložené profile — preskakujem", level="warn")
+        _log(job_id, "žiadne profily pre tento beh — preskakujem", level="warn")
         return
-
-    # Pre každý profil v aktívnom markete spusti D-1 plán cez d1_planner.
-    # Plán sa uloží do plan_store, ostatné komponenty (VDT live advisor,
-    # /vdt/d1 stránka) ho automaticky využijú.
     try:
         import d1_planner as _d1p
         import market as _mk
     except ImportError as e:
-        _log("autoplan_d1", f"d1_planner/market import zlyhal: {e}", level="warn")
+        _log(job_id, f"d1_planner/market import zlyhal: {e}", level="warn")
         return
-
     active_market = _mk.get_active_market()
     ok_count = fail_count = 0
     for prof in profile_names:
@@ -642,15 +655,33 @@ def job_autoplan_d1():
                                           profile=prof, save_to_store=True)
             if res.get("ok"):
                 zisk = res.get("summary", {}).get("ZISK_EUR", 0)
-                _log("autoplan_d1", f"  {prof}: OK · ZISK {zisk:+.2f} €")
+                _log(job_id, f"  {prof}: OK · ZISK {zisk:+.2f} €")
                 ok_count += 1
             else:
-                _log("autoplan_d1", f"  {prof}: ZLYHALO · {res.get('error','?')}", level="warn")
+                _log(job_id, f"  {prof}: ZLYHALO · {res.get('error','?')}", level="warn")
                 fail_count += 1
         except Exception as e:
-            _log("autoplan_d1", f"  {prof}: exception · {e}", level="warn")
+            _log(job_id, f"  {prof}: exception · {e}", level="warn")
             fail_count += 1
-    _log("autoplan_d1", f"hotovo · {ok_count} OK · {fail_count} zlyhalo · trh={active_market}")
+    _log(job_id, f"hotovo · {ok_count} OK · {fail_count} zlyhalo · trh={active_market}")
+
+
+@_safe("autoplan_forecast")
+def job_autoplan_forecast():
+    """09:00 — D-1 plán pre profily s kind='plan' (predikované ceny, pred DAM cleare)."""
+    _run_autoplan("plan", "autoplan_forecast")
+
+
+@_safe("autoplan_realdam")
+def job_autoplan_realdam():
+    """14:00 — D-1 plán pre profily s kind='dentrh' (reálny denný trh, po DAM cleare)."""
+    _run_autoplan("dentrh", "autoplan_realdam")
+
+
+@_safe("autoplan_d1")
+def job_autoplan_d1():
+    """LEGACY (run_now): D-1 plán pre VŠETKY profily bez ohľadu na kind."""
+    _run_autoplan(None, "autoplan_d1")
 
 
 @_safe("zco_profile_rebuild")
@@ -829,7 +860,8 @@ def start() -> BackgroundScheduler:
         ("dam_fetch_cz",       job_dam_fetch_cz,       "OTE CZ DAM"),
         ("dam_fetch_sk",       job_dam_fetch_sk,       "OKTE SK DAM"),
         ("imbalance_fetch_sk", job_imbalance_fetch_sk, "OKTE ISZO D-1"),
-        ("autoplan_d1",        job_autoplan_d1,        "Auto D-1 plán"),
+        ("autoplan_forecast",  job_autoplan_forecast,  "Auto D-1 plán 09:00 (predikcia, kind=plan)"),
+        ("autoplan_realdam",   job_autoplan_realdam,   "Auto D-1 plán 14:00 (reálny DAM, kind=dentrh)"),
         ("seps_cookies",       job_seps_cookies,       "SEPS cookies refresh"),
         ("seps_realtime_log",  job_seps_realtime_log,  "SEPS realtime CSV log"),
         ("historian_login",    job_historian_login,    "Historian relogin"),
@@ -874,6 +906,8 @@ def run_now(job_id: str):
         "dam_fetch_sk":       job_dam_fetch_sk,
         "imbalance_fetch_sk": job_imbalance_fetch_sk,
         "autoplan_d1":        job_autoplan_d1,
+        "autoplan_forecast":  job_autoplan_forecast,
+        "autoplan_realdam":   job_autoplan_realdam,
         "seps_cookies":       job_seps_cookies,
         "seps_realtime_log":  job_seps_realtime_log,
         "vdt_advisor":        job_vdt_advisor,
