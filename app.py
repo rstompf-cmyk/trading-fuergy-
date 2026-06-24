@@ -714,6 +714,22 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
           f"max_dam_im={fp.get('max_import_kwh_day')} "
           f"max_dam_ex={fp.get('max_export_kwh_day')} "
           f"joint_lp={(fp.get('joint_lp') or {}).get('enabled', False)}")
+    # VDT-ENGINE-FALLBACK (2026-06-24): ak fp (ui_settings) nenesie vdt_engine, dotiahni ho
+    # z uloženej šablóny aktívneho profilu (dentrh→plan). Bez tohto batch/re-sim default 'lp'
+    # aj keď je párový matcher uložený v profile → nepárové stratové večerné nákupy.
+    if not fp.get("vdt_engine"):
+        try:
+            import profiles as _pr_ve
+            from core.profile_resolver import get_active as _ga_ve
+            _pc_ve = _pr_ve.load_profile(_ga_ve()) or {}
+            for _sec_ve in ("dentrh", "plan"):
+                _s_ve = _pc_ve.get(_sec_ve) or {}
+                if _s_ve.get("vdt_engine"):
+                    fp = {**fp, "vdt_engine": _s_ve["vdt_engine"],
+                          "vdt_pair_priority": _s_ve.get("vdt_pair_priority", "closest")}
+                    break
+        except Exception:
+            pass
     if int(step_min) == 60 and kind == "plan":
         # Ak profil nemá FTV (kwp=0), netreba volať PVF — pv_arr = 0 array.
         # Cena sa berie zo ISOT predikcie nezávisle od počasia (model nemá GTI keď nie je PV).

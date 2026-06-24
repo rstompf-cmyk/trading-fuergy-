@@ -10,7 +10,7 @@ rm -f .git/index.lock
 echo "=== branch ==="; cat .git/HEAD
 echo "=== HEAD pred ==="; git log --oneline -1
 git add app.py livesim.py vdt_state.py vdt_optimizer.py vdt_live_advisor.py vdt_pair_matcher.py \
-        optimizer.py core/effect_db.py core/rt_audit.py scheduler.py price_model_15m.py \
+        optimizer.py core/effect_db.py core/rt_audit.py scheduler.py price_model_15m.py d1_planner.py \
         docker-compose.yml static/css/app.css templates/components/nav.html templates/base.html \
         ui/html.py ui/templates.py \
         tools/diag_trades.py tools/export_livesim_xlsx.py tests/test_vdt_pair_matcher.py \

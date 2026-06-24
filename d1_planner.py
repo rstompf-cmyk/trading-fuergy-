@@ -49,6 +49,15 @@ def _load_profile_params(profile: str) -> Dict[str, Any]:
         for k, v in p.items():
             if k not in out and not isinstance(v, dict):
                 out[k] = v
+        # VDT engine voľba — z dentrh (preferované, reálne ceny) alebo plan šablóny.
+        # Bez tohto compute_d1_plan vždy default 'lp' → nepárové stratové večerné nákupy
+        # aj keď užívateľ vybral párový matcher (2026-06-24).
+        for _sec in ("dentrh", "plan"):
+            _s = p.get(_sec)
+            if isinstance(_s, dict):
+                for _k in ("vdt_engine", "vdt_pair_priority"):
+                    if _s.get(_k) and not out.get(_k):
+                        out[_k] = _s[_k]
         # Legacy → moderne názvy
         rename = {
             "soc_init": "soc_init_pct",
@@ -276,6 +285,10 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
                 "grid_fee": grid_fee, "cycle_cost": cycle_cost,
                 "max_export_kwh_day": max_export_kwh_day,
                 "max_import_kwh_day": max_import_kwh_day,
+                # VDT engine voľba do plan params — vdt_live_advisor + downstream ju čítajú
+                # odtiaľto (inak default 'lp'). 2026-06-24.
+                "vdt_engine": str(pp.get("vdt_engine", "lp") or "lp"),
+                "vdt_pair_priority": str(pp.get("vdt_pair_priority", "closest") or "closest"),
             }
             step_min = int(dt_h * 60)
             # plan_store.save_plan očakáva schedule ako Dict[str, list]
