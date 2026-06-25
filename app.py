@@ -7640,8 +7640,29 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 "border-radius:8px;margin:10px 0;font-size:14px'>"
                 f"{_hdr} — niektoré dni v rozsahu ešte nie sú dopočítané, takže súčty (Zisk SPOLU) "
                 f"nie sú definitívne. {'Klikni „Spustiť/Obnoviť“ pre dopočet.' if not _running else 'Stránka sa obnoví automaticky.'}{_barl}</div>")
-        return (head.replace("</head>", f'<meta http-equiv="refresh" content="{_refresh_s}">' + "</head>")
-                + form + plan_warn + plan_only_warn + zero_plan_warn + realio_banner + stale_banner + body + "</body></html>")
+        # SOFT-REFRESH (2026-06-25): namiesto <meta refresh> (tvrdý reload = biele prebliknutie
+        # celej obrazovky každých N s) — AJAX: stiahni HTML, vymeň telo na mieste, re-spusti
+        # skripty (grafy), zachovaj scroll. Žiadny flash. Slučka sa udržiava (nová stránka má
+        # opäť tento skript). Fallback na location.reload pri chybe fetchu.
+        _soft_ms = int(_refresh_s) * 1000
+        _soft_js = (
+            "<script>(function(){var MS=" + str(_soft_ms) + ";"
+            "function soft(){fetch(location.href,{credentials:'same-origin'})"
+            ".then(function(r){return r.text();}).then(function(html){"
+            "var doc=new DOMParser().parseFromString(html,'text/html');"
+            "var sy=window.scrollY;"
+            "document.body.innerHTML=doc.body.innerHTML;"
+            "document.body.querySelectorAll('script').forEach(function(o){"
+            "var s=document.createElement('script');"
+            "for(var i=0;i<o.attributes.length;i++){s.setAttribute(o.attributes[i].name,o.attributes[i].value);}"
+            "if(!o.src){s.textContent=o.textContent;}o.parentNode.replaceChild(s,o);});"
+            "window.scrollTo(0,sy);"
+            "}).catch(function(){location.reload();});}"
+            "setTimeout(soft,MS);})();</script>"
+        )
+        return (head
+                + form + plan_warn + plan_only_warn + zero_plan_warn + realio_banner + stale_banner + body
+                + _soft_js + "</body></html>")
     except Exception as ex:
         import traceback
         tb = traceback.format_exc()

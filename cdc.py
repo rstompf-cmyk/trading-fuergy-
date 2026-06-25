@@ -144,6 +144,8 @@ DEFAULT_SYSTEM: Dict[str, Any] = {
     "verify_ssl": False,
     "timeout_s": 15,
     "step_read_s": 900,            # 900 = 15-min, 3600 = 1h
+    "tz_offset_h": 0,              # CDC server TZ → lokálny: +h pripočítané k CDC času
+                                   #   (CET server vs CEST lokál v lete = 1). Tuneable v /cdc.
     "enabled": False,              # master kill switch (read)
     "control_enabled": False,      # write povolené (+ env FLEET_REAL_WRITE=1)
     "tags_read":   dict(DEFAULT_TAGS_READ),
@@ -317,11 +319,17 @@ def fetch_history_range(prefix: str, from_dt: dt.datetime, to_dt: dt.datetime,
         tags = {k: v for k, v in tags.items() if k in keys}
     scale = cfg.get("scale_read") or {}
     step = int(step or cfg.get("step_read_s", 900))
+    # TZ-FIX (2026-06-25): CDC server hlási čas v inej zóne (zvyčajne CET/UTC+1) než lokálny
+    # plán (Europe/Bratislava). `tz_offset_h` = o koľko hodín pripočítať k CDC času aby sedel
+    # s lokálnym. Query posielame v serverovom čase (−offset), výsledok relabelujeme (+offset).
+    _tz_off = float(cfg.get("tz_offset_h", 0) or 0)
+    _q_from = from_dt - dt.timedelta(hours=_tz_off)
+    _q_to = to_dt - dt.timedelta(hours=_tz_off)
     s = _session(cfg)
     frames = []
     for logical, tag in tags.items():
         try:
-            rows = _read_tag_raw(cfg, s, tag, from_dt, to_dt, step)
+            rows = _read_tag_raw(cfg, s, tag, _q_from, _q_to, step)
         except Exception as e:
             print(f"[cdc.fetch_history_range] {tag} zlyhal: {e}")
             continue
@@ -333,6 +341,8 @@ def fetch_history_range(prefix: str, from_dt: dt.datetime, to_dt: dt.datetime,
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, axis=1).sort_index()
+    if _tz_off:
+        df.index = df.index + pd.Timedelta(hours=_tz_off)   # server TZ → lokálny
     df.index.name = "time"
     return df
 
