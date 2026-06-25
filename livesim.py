@@ -491,9 +491,17 @@ def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
 
     Vracia: sch, dtprof_per_period, period_step_min, d1_cycles, price_per_period, pv_per_period."""
     step_min = int(getattr(cfg, "d1_step_min", 60))
-    kind = "dentrh" if step_min == 15 else "plan"
     date_iso = pd.Timestamp(date).date().isoformat()
-    plan = ps.load_plan(date_iso, step_min, kind)            # PlanMissingError ak chyba
+    # KIND-SELECT (2026-06-25): simulácia = poctivý backtest → uprednostni PREDIKOVANÝ plán
+    # (kind="plan", ceny z forecastu, postavený ako v čase D-1). Reálny DENNÝ TRH
+    # (kind="dentrh") sa použije len ak predikovaný plán pre daný deň neexistuje.
+    if step_min == 15:
+        plan = (ps.load_plan_safe(date_iso, 15, "plan")
+                or ps.load_plan_safe(date_iso, 15, "dentrh"))
+        if plan is None:
+            plan = ps.load_plan(date_iso, 15, "plan")       # vyhodí PlanMissingError (kind=plan)
+    else:
+        plan = ps.load_plan(date_iso, step_min, "plan")     # PlanMissingError ak chýba
     schedule = plan["schedule"]
     n = 96 if step_min == 15 else 24
     # rekonštrukcia DataFrame so správnym poradím stĺpcov

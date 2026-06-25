@@ -204,8 +204,25 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
         # 15-min ceny — jednoducho zoberieme prvých `slots`
         prices = df_dam.sort_values("period")["cena_EUR"].values[:slots]
     elif len(df_dam) == 24 and slots == 96:
-        # Hodinové ceny — rozšíri na 96
-        prices = np.repeat(df_dam.sort_values("period")["cena_EUR"].values, 4)
+        # Hodinové ceny → 15-min. PRIORITA: dedikovaný 15-min MODEL (vnútrohodinový tvar,
+        # OOS +24 % vs plochá kópia) — rovnaká logika ako _gen_one_plan (app.py).
+        # Poistka: plochý upsample (cena rovnaká v rámci hodiny) ak model chýba/zlyhá.
+        _hourly = df_dam.sort_values("period")["cena_EUR"].values
+        prices = None
+        try:
+            from price_model_15m import load_cached as _pm15_load
+            _m15 = _pm15_load("out/price_model_15m.joblib")
+            if _m15 is not None:
+                prices = np.asarray(_m15.predict_shape(_hourly, date, None), dtype=float)[:96]
+                if len(prices) >= 96:
+                    print(f"[15-MIN] {date.isoformat()}: hodinová DAM → 15-min MODEL (tvar)")
+                else:
+                    prices = None
+        except Exception as _e15:
+            print(f"[15-MIN] {date.isoformat()}: 15-min model zlyhal ({_e15}) → flat upsample")
+        if prices is None:
+            prices = np.repeat(_hourly, 4)
+            print(f"[15-MIN] {date.isoformat()}: hodinová DAM → flat upsample (poistka)")
     else:
         # Iný formát — preindex podľa period
         prices = np.zeros(slots, dtype=float)

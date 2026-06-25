@@ -853,9 +853,19 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                             rt_mask=list(map(float, rtm)),
                             block_planned_discharge=npd, zco_bias_w=zbw, rt_freedom=rtf,
                             meta=dict(source="batch", price_kind="predicted"))
-    elif int(step_min) == 15 and kind == "dentrh":
-        ote = _fetch_ote_cached(d)
-        price15 = _dt15_from_ote(ote)
+    elif int(step_min) == 15 and kind in ("dentrh", "plan"):
+        # PRICE-SOURCE (2026-06-25):
+        #   kind="plan"  = PREDIKOVANÝ plán → VŽDY forecast (ISOT hodinová predikcia +
+        #                  15-min model), aj na histórii. NIKDY nečíta reálny DAM. Toto je
+        #                  poctivý backtest plánovania (rozhoduje sa s informáciou z D-1).
+        #   kind="dentrh"= DENNÝ TRH → REÁLNY DAM (15-min OTE). Plán VZNIKÁ len keď reálne
+        #                  15-min OTE existujú; žiaden forecast fallback (bez DAM = chyba).
+        _predicted = (kind == "plan")
+        if _predicted:
+            price15 = None                       # vynúť forecast — preskoč reálny DAM
+        else:
+            ote = _fetch_ote_cached(d)
+            price15 = _dt15_from_ote(ote)
         # Ak profil nemá FTV (kwp=0), netreba volať PVF
         _kwp15 = float(fp.get("kwp", DEF["kwp"]))
         if _kwp15 > 0.01:
@@ -874,13 +884,17 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             # No-FTV profil: 24 hodín × 0 kW
             pv_h = np.zeros(24)
         pv15 = np.repeat(pv_h[:24], 4) / 4.0
-        # 15-MIN MERGE (2026-06-18): pre D+1 (alebo deň bez reálnych uzavretých 15-min OTE)
-        # neexistuje 15-min cenová predikcia → FALLBACK: hodinová ISOT predikcia (ako 60-min
-        # vetva) rozkopírovaná na 15-min (cena ROVNAKÁ v hodine, np.repeat). Reálne OTE 15-min
-        # majú PRIORITU (použijú sa keď sú kompletné). Hodinový pohľad = priemer 15-min.
+        # Cenový zdroj: predikovaný = forecast (ISOT hodinová predikcia + 15-min model);
+        # dentrh = reálny DAM (musí byť kompletný, inak plán nevzniká).
         _p15a = (np.asarray(price15, dtype=float) if price15 is not None and len(price15)
                  else np.array([]))
-        if not (_p15a.size >= 96 and int(np.isfinite(_p15a[:96]).sum()) >= 90):
+        _real_ok = (_p15a.size >= 96 and int(np.isfinite(_p15a[:96]).sum()) >= 90)
+        if (not _predicted) and (not _real_ok):
+            # DENNÝ TRH = reálny DAM only → bez reálnych 15-min OTE plán NEVZNIKÁ.
+            raise RuntimeError(
+                f"Denný trh (dentrh) pre {date_iso}: reálny DAM 15-min ešte neexistuje "
+                f"— plán sa negeneruje (pre dentrh sa predikcia nepoužíva).")
+        if not _real_ok:                          # len PREDIKOVANÝ → postav cenu z forecastu
             try:
                 from core.granularity import upsample_price_h_to_15 as _up_px15
                 _wxp = (wx[["time", "gti", "temp", "cloud"]].copy() if _kwp15 > 0.01 else
@@ -906,12 +920,12 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                         if _m15 is not None:
                             price15 = _m15.predict_shape(_ph, d, _wxp[["time", "gti", "temp", "cloud"]])
                             _used15m = True
-                            print(f"[15-MIN] {date_iso}: reálne 15-min OTE chýbajú → 15-min MODEL (tvar na hodinovej predikcii, D+1)")
+                            print(f"[15-MIN] {date_iso}: PREDIKOVANÝ plán → 15-min MODEL (tvar na hodinovej ISOT predikcii)")
                     except Exception as _em15:
                         print(f"[15-MIN] {date_iso}: 15-min model zlyhal ({_em15}) → flat upsample")
                     if not _used15m:
                         price15 = _up_px15(_ph)
-                        print(f"[15-MIN] {date_iso}: reálne 15-min OTE chýbajú → flat upsample hodinovej predikcie (D+1)")
+                        print(f"[15-MIN] {date_iso}: PREDIKOVANÝ plán → flat upsample hodinovej predikcie")
             except Exception as _ep15:
                 print(f"[15-MIN] {date_iso}: cenový fallback (predikcia) zlyhal: {_ep15}")
         n = min(len(pv15), len(price15))
@@ -999,11 +1013,12 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         rtm = np.asarray(rt_use, float)
         if not rtf:
             rtm = np.where(np.abs(bk) > 0.5, rtm, 0.0)
-        return ps.save_plan(date_iso, 15, "dentrh", params=params, schedule=sched, summary=summ,
+        return ps.save_plan(date_iso, 15, kind, params=params, schedule=sched, summary=summ,
                             mults=list(map(float, mult_use)),
                             rt_mask=list(map(float, rtm)),
                             block_planned_discharge=npd, zco_bias_w=0.0, rt_freedom=rtf,
-                            meta=dict(source="batch", price_kind="real_ote"))
+                            meta=dict(source="batch",
+                                      price_kind=("predicted" if _predicted else "real_ote")))
     else:
         raise ValueError(f"nesúlad step_min={step_min} a kind={kind}")
 
@@ -1064,15 +1079,16 @@ hodnôt vo formulári <a href="/">/Plán D-1</a> a <a href="/dentrh">/Denný trh
 <label><span>Do (vrátane)</span><input name="to_date" type="date" value="{default_to}" required></label>
 <label><span>Krok plánu</span>
   <select name="step_min">
-    <option value="15"{" selected" if sel_step == 15 else ""}>15 min — kind=dentrh (ODPORÚČANÉ; reálne OTE 15-min, inak upsample hodinovej predikcie)</option>
-    <option value="60"{" selected" if sel_step == 60 else ""}>60 min — kind=plan (legacy hodinový, predikované ceny)</option>
+    <option value="15"{" selected" if sel_step == 15 else ""}>15 min (ODPORÚČANÉ)</option>
+    <option value="60"{" selected" if sel_step == 60 else ""}>60 min (legacy hodinový)</option>
   </select></label>
 <label><span>Typ plánu (kind)</span>
   <select name="kind">
-    <option value="plan"{" selected" if sel_kind == "plan" else ""}>plan (z /plan POST, predikované ceny)</option>
-    <option value="dentrh"{" selected" if sel_kind == "dentrh" else ""}>dentrh (z /dentrh POST, reálne ceny)</option>
+    <option value="plan"{" selected" if sel_kind == "plan" else ""}>plan — PREDIKOVANÝ (forecast: ISOT + 15-min model, VŽDY aj na histórii; poctivý backtest)</option>
+    <option value="dentrh"{" selected" if sel_kind == "dentrh" else ""}>dentrh — DENNÝ TRH (reálny DAM 15-min; vznikne LEN keď reálny DAM existuje)</option>
   </select></label>
-<p style="color:#666;font-size:12px;margin:6px 0">Tip: pri kroku 60 použi <b>kind=plan</b>, pri kroku 15 použi <b>kind=dentrh</b>. (Inak livesim plán nenájde.)</p>
+<p style="color:#666;font-size:12px;margin:6px 0">Pre backtest na histórii použi <b>kind=plan</b> (15 min) — plán sa stavia z predikcie ako v čase D-1, nečíta reálny DAM.
+<b>kind=dentrh</b> vyžaduje reálny publikovaný DAM (inak deň preskočí). 60 min = legacy hodinový plán.</p>
 </fieldset>
 <fieldset style="background:#fff3e0;border-left:4px solid #FB8C00">
 <legend style="color:#E65100">Pred regeneráciou</legend>
@@ -1938,7 +1954,10 @@ def _collect_month_grid_kwh(profile: str, year: int, month: int):
         d_iso = f"{year:04d}-{month:02d}-{d:02d}"
         vals = [0.0] * 96
         try:
-            p = ps.load_plan_safe(d_iso, 15, "dentrh") if ps is not None else None
+            # Reálny DENNÝ TRH (dentrh) má prioritu ak existuje, inak PREDIKOVANÝ plán (plan).
+            p = None
+            if ps is not None:
+                p = ps.load_plan_safe(d_iso, 15, "dentrh") or ps.load_plan_safe(d_iso, 15, "plan")
             sch = (p or {}).get("schedule", {}) if p else {}
             arr = sch.get(col)
             if arr and len(arr) >= 96:
@@ -1958,62 +1977,78 @@ def _resolve_export_my(profile, month):
     return prof, y, m, _customer_label_for_profile(prof)
 
 
+def _agg_hourly_kwh(vals96):
+    """96 × 15-min kWh → 24 hodinových kWh (súčet 4 slotov; energia je aditívna)."""
+    return [round(sum(vals96[h * 4:h * 4 + 4]), 6) for h in range(24)]
+
+
 @app.get("/plan_export_matrix")
-def plan_export_matrix(profile: str = None, month: str = None):
-    """Export plánu (kWh) ako matica: riadok = deň, stĺpce = 96 × 15-min (Hodina 1–24).
-    Dodávka do siete = záporná, odber = kladná. Názov súboru = zákazník_MM_RRRR.xlsx."""
+def plan_export_matrix(profile: str = None, month: str = None, step: str = "15"):
+    """Export plánu (kWh) ako matica: riadok = deň, stĺpce = sloty (Hodina 1–24).
+    step=15 → 96 × 15-min stĺpcov (00-15…45-60), step=60 → 24 hodinových stĺpcov.
+    Dodávka do siete = záporná, odber = kladná. Názov súboru = zákazník_MM_RRRR_<step>min.xlsx."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment
     import io as _io
+    hourly = (str(step) == "60")
     prof, y, m, label = _resolve_export_my(profile, month)
     days = _collect_month_grid_kwh(prof, y, m)
     wb = Workbook(); ws = wb.active; ws.title = (f"{label} -kWh")[:31]
     _bold = Font(bold=True); _ctr = Alignment(horizontal="center")
     ws.cell(row=2, column=1, value="Dátum").font = _bold
-    _slots = ["00-15", "15-30", "30-45", "45-60"]
-    for h in range(24):
-        c0 = 2 + h * 4
-        hc = ws.cell(row=1, column=c0, value=f"Hodina {h+1}"); hc.font = _bold; hc.alignment = _ctr
-        ws.merge_cells(start_row=1, start_column=c0, end_row=1, end_column=c0 + 3)
-        for j in range(4):
-            ws.cell(row=2, column=c0 + j, value=_slots[j]).font = _bold
+    if hourly:
+        for h in range(24):
+            hc = ws.cell(row=2, column=2 + h, value=f"Hodina {h+1}"); hc.font = _bold; hc.alignment = _ctr
+    else:
+        _slots = ["00-15", "15-30", "30-45", "45-60"]
+        for h in range(24):
+            c0 = 2 + h * 4
+            hc = ws.cell(row=1, column=c0, value=f"Hodina {h+1}"); hc.font = _bold; hc.alignment = _ctr
+            ws.merge_cells(start_row=1, start_column=c0, end_row=1, end_column=c0 + 3)
+            for j in range(4):
+                ws.cell(row=2, column=c0 + j, value=_slots[j]).font = _bold
     r = 3
     for d_iso, vals in days:
+        row_vals = _agg_hourly_kwh(vals) if hourly else vals
         dc = ws.cell(row=r, column=1, value=dt.date.fromisoformat(d_iso)); dc.number_format = "DD.MM.YYYY"
-        for i, v in enumerate(vals):
+        for i, v in enumerate(row_vals):
             ws.cell(row=r, column=2 + i, value=round(v, 3))
         r += 1
     ws.freeze_panes = "B3"
     buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
-    fname = f"{label}_{m:02d}_{y}.xlsx"
+    fname = f"{label}_{m:02d}_{y}_{'60' if hourly else '15'}min.xlsx"
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @app.get("/plan_export_long")
-def plan_export_long(profile: str = None, month: str = None):
+def plan_export_long(profile: str = None, month: str = None, step: str = "15"):
     """Export plánu (kWh) ako 2 stĺpce: dátum+čas, hodnota (rovnaká konvencia ako matica:
-    dodávka záporná, odber kladný). Názov = zákazník_MM_RRRR_2stlpce.xlsx."""
+    dodávka záporná, odber kladný). step=15 → 15-min časy, step=60 → hodinové.
+    Názov = zákazník_MM_RRRR_2stlpce_<step>min.xlsx."""
     from openpyxl import Workbook
     from openpyxl.styles import Font
     import io as _io
+    hourly = (str(step) == "60")
     prof, y, m, label = _resolve_export_my(profile, month)
     days = _collect_month_grid_kwh(prof, y, m)
     wb = Workbook(); ws = wb.active; ws.title = (f"{label} -kWh")[:31]
     ws.cell(row=1, column=1, value="Dátum a čas").font = Font(bold=True)
     ws.cell(row=1, column=2, value="kWh").font = Font(bold=True)
+    step_min = 60 if hourly else 15
     r = 2
     for d_iso, vals in days:
         base = dt.datetime.fromisoformat(d_iso)
-        for i, v in enumerate(vals):
-            ts = base + dt.timedelta(minutes=15 * i)
+        row_vals = _agg_hourly_kwh(vals) if hourly else vals
+        for i, v in enumerate(row_vals):
+            ts = base + dt.timedelta(minutes=step_min * i)
             tc = ws.cell(row=r, column=1, value=ts); tc.number_format = "DD.MM.YYYY HH:MM"
             ws.cell(row=r, column=2, value=round(v, 3))
             r += 1
     ws.freeze_panes = "A2"
     ws.column_dimensions["A"].width = 18
     buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
-    fname = f"{label}_{m:02d}_{y}_2stlpce.xlsx"
+    fname = f"{label}_{m:02d}_{y}_2stlpce_{'60' if hourly else '15'}min.xlsx"
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
@@ -5096,43 +5131,22 @@ def _auto_regen_stale_plans(case: str, port: str = None, profile=None) -> list:
     pre budúce dni ktorých soc_init je zastaraný voči meta.soc_after_done (drift > 1 %).
     Tým graf aj nominácia ostanú kontinuálne bez ručného /plan_batch hotfixu.
 
-    Vracia zoznam regenerovaných dátumov (prázdny ak nič netreba)."""
-    found = _find_stale_future_plans(case, port, profile=profile)
-    if not found or not found["stale"]:
-        return []
+    Vracia zoznam regenerovaných dátumov (prázdny ak nič netreba).
+
+    IMMUTABLE-PLANS (2026-06-25, user: "ak raz je vygenerovaný plán, zmení sa LEN explicitným
+    pregenerovaním, inak nie. plán je obchod ktorý vznikol v čase, nedá sa potom meniť.").
+    Auto-regen je preto VYPNUTÝ — plány sa NIKDY automaticky neprepisujú. SOC drift sa iba
+    ZOBRAZÍ (banner cez _find_stale_future_plans v _stale_plans_banner); naprávu robí výhradne
+    používateľ cez /plan_batch / /plan / /dentrh."""
     try:
-        profile = ps.resolve_profile(None)
+        found = _find_stale_future_plans(case, port, profile=profile)
+        if found and found.get("stale"):
+            print(f"[IMMUTABLE-PLANS] {case}: {len(found['stale'])} budúcich plánov má SOC drift "
+                  f"voči done_through={found.get('done_through')} — auto-regen VYPNUTÝ "
+                  f"(plán = obchod, mení sa len explicitným pregenerovaním). Banner upozorní.")
     except Exception:
-        profile = "default"
-    gkey = (profile, case)
-    gval = (found["done_through"], round(found["carried_pct"], 2))
-    with _PLAN_AUTOREGEN_LOCK:
-        if _PLAN_AUTOREGEN_GUARD.get(gkey) == gval:
-            return []                                       # už riešené pre tento stav meta
-        _PLAN_AUTOREGEN_GUARD[gkey] = gval                  # nastav HNEĎ — žiadne retry loopy
-    ui_key = "plan" if found["step_min"] == 60 else "dentrh"
-    fp = dict(_ui_load(ui_key, DEF))
-    regen = []
-    for d_iso, soc0 in found["stale"]:
-        try:
-            print(f"[SOC-CONT-V3] {d_iso}: LP plán má soc_init={soc0:.1f}% ale "
-                  f"meta.soc_after_done={found['carried_pct']:.1f}% "
-                  f"(done_through={found['done_through']}) → auto-regen")
-            _gen_one_plan(d_iso, found["step_min"], found["kind"], fp)
-            regen.append(d_iso)
-        except Exception as _e_regen:
-            print(f"[SOC-CONT-V3] auto-regen {d_iso} zlyhal: {_e_regen}")
-    if regen:
-        # Bug CACHE-WIPE-2 + STALE-NOT-DROP (2026-06-15): po auto-regene NEodstraňuj cache entry
-        # (to spôsobilo plnú progress stránku pri ďalšom otvorení — user: "preplo sa to naspäť do
-        # výpočtového") a NIE celý case (to mazalo ostatné profily). Namiesto toho len TENTO profil
-        # OZNAČ ako stale (mtime=-1) a NECHAJ staré r → SWITCH-INSTANT vráti staré dáta + banner
-        # "prepočítava sa", bg medzitým prepočíta čerstvé. Žiadny skok do výpočtovej stránky.
-        with _LIVESIM_R_CACHE_LOCK:
-            for _k in list(_LIVESIM_R_CACHE.keys()):
-                if _k[0] == case and _k[2] == str(profile or "") and _LIVESIM_R_CACHE.get(_k):
-                    _LIVESIM_R_CACHE[_k] = (-1.0, _LIVESIM_R_CACHE[_k][1])
-    return regen
+        pass
+    return []
 
 
 def _livesim_pred_dt(today):
@@ -16611,6 +16625,29 @@ a{{color:#1F4E78}}</style></head><body>
 <p>Plán som <b>NEGENEROVAL</b>. Vráť sa na <a href="/">/plan</a> a klikni „Generuj plán D-1" keď chceš vygenerovať plán s týmito nastaveniami.</p>
 <p style="color:#666;font-size:13px">(Auto-redirect za 2 s na /plan…)</p>
 </body></html>"""
+    # ── 15-MIN PREDIKOVANÝ PLÁN D-1 (2026-06-25) ──────────────────────────────────
+    # Plán D-1 = PREDIKOVANÝ plán: 15-min, ceny VŽDY z forecastu (ISOT hodinová predikcia
+    # + 15-min model), aj na histórii — nikdy nečíta reálny DAM. Tým je backtest poctivý
+    # (rozhoduje sa s informáciou dostupnou v D-1). Reálny DENNÝ TRH (dentrh) je samostatný
+    # produkt (/dentrh) a vzniká až keď reálny DAM existuje. Plán je obchod → po vytvorení
+    # immutable (mení sa len opätovným explicitným generovaním). 24-slot × šablóna sa
+    # broadcastne na 96. Starý 60-min blok nižšie je neaktívny (ponechaný ako referencia).
+    try:
+        _fp_15 = dict(_ui_load("plan", DEF))
+        _gen_one_plan(date, 15, "plan", _fp_15)
+    except Exception as _e_gen15:
+        return form_page(f"Generovanie predikovaného 15-min plánu D-1 pre {date} zlyhalo: {_e_gen15}")
+    return HTMLResponse(
+        f"""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Plán vygenerovaný</title>
+<meta http-equiv="refresh" content="1;url=/plan_view?date={date}&step=15&kind=plan">
+<style>body{{font-family:-apple-system,Segoe UI,Arial;max-width:680px;margin:48px auto;padding:0 16px;text-align:center}}
+.ok{{background:#e8f5e9;border-left:4px solid #2E7D32;border-radius:8px;padding:18px;margin:20px 0;color:#1B5E20;text-align:left}}
+a{{color:#1F4E78}}</style></head><body>
+<h1 style="color:#2E7D32">✓ Plán D-1 vygenerovaný (15-min, predikovaný)</h1>
+<div class="ok">Plán pre <b>{date}</b> bol vytvorený ako <b>15-min predikovaný</b> (ceny z forecastu).
+{mult_msg if mult_msg else ""}</div>
+<p>Otváram <a href="/plan_view?date={date}&step=15&kind=plan">zobrazenie plánu</a>…</p>
+</body></html>""")
     try:
         # Pre batt-only profily (kwp=0, napr. Trakany_real) PVF fetch nedáva zmysel —
         # vytvoríme syntetický wx grid s 0 kW + neutrálne počasie pre ISOT predikciu.

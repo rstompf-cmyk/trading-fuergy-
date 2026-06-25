@@ -648,9 +648,23 @@ def _run_autoplan(only_kind: Optional[str], job_id: str):
         _log(job_id, f"d1_planner/market import zlyhal: {e}", level="warn")
         return
     active_market = _mk.get_active_market()
-    ok_count = fail_count = 0
+    try:
+        import plan_store as _ps_chk
+    except Exception:
+        _ps_chk = None
+    _t_iso = tomorrow.isoformat()
+    ok_count = fail_count = skip_count = 0
     for prof in profile_names:
         try:
+            # IMMUTABLE-PLANS (2026-06-25): auto-gen vytvorí plán LEN ak ešte neexistuje.
+            # Existujúci plán (obchod) sa NIKDY automaticky neprepíše — len explicitným
+            # /plan_batch / /plan / /dentrh.
+            if _ps_chk is not None and (
+                    _ps_chk.has_plan(_t_iso, 15, "dentrh", profile=prof)
+                    or _ps_chk.has_plan(_t_iso, 60, "plan", profile=prof)):
+                _log(job_id, f"  {prof}: plán pre {_t_iso} už existuje — preskakujem (immutable)")
+                skip_count += 1
+                continue
             res = _d1p.compute_d1_plan(tomorrow, market=active_market,
                                           profile=prof, save_to_store=True)
             if res.get("ok"):
@@ -663,7 +677,7 @@ def _run_autoplan(only_kind: Optional[str], job_id: str):
         except Exception as e:
             _log(job_id, f"  {prof}: exception · {e}", level="warn")
             fail_count += 1
-    _log(job_id, f"hotovo · {ok_count} OK · {fail_count} zlyhalo · trh={active_market}")
+    _log(job_id, f"hotovo · {ok_count} OK · {skip_count} už existuje · {fail_count} zlyhalo · trh={active_market}")
 
 
 @_safe("autoplan_forecast")
