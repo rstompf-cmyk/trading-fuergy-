@@ -1908,15 +1908,30 @@ def _customer_label_for_profile(profile_name: str) -> str:
     return profile_name
 
 
-def _collect_month_grid_kwh(profile: str, year: int, month: int):
-    """Za každý deň mesiaca vráti (date_iso, [96 hodnôt]) — hodnota = NOMINÁCIA (to čo sa plánuje/
-    obchoduje), kWh/15-min slot. Dodávka do siete = záporné, odber = kladné.
+def _export_params_for_profile(profile: str):
+    """Vráti (export_col, export_mult) z plán šablóny profilu (dentrh→plan). Konfigurovateľné
+    v pláne: KTORÝ stĺpec rozvrhu exportovať + NÁSOBITEĽ (prepočtová konštanta). Default
+    order_mwh × 1000 (MWh→kWh). Znamienka sa NEotáčajú — sú ako v pláne (násobiteľ ich vie otočiť)."""
+    col, mult = "order_mwh", 1000.0
+    try:
+        import profiles as _pr_ex
+        pt = _pr_ex.load_profile(profile) or {}
+        tpl = pt.get("dentrh") or pt.get("plan") or {}
+        if tpl.get("export_col"):
+            col = str(tpl["export_col"])
+        if tpl.get("export_mult") not in (None, ""):
+            mult = float(tpl["export_mult"])
+    except Exception:
+        pass
+    return col, mult
 
-    Zdroj = `order_mwh` (×1000) zo 15-min plánu — to je DAM nominácia, ktorá rešpektuje nastavenia
-    plánu (trade_batt/trade_load/trade_ftv): napr. Coop/TBB nenominujú celú spotrebu, len batériu.
-    `grid_kwh` (celý netto na prahu vrátane neobchodovaného loadu) sa NEpoužíva. Fallback na
-    −grid_kwh len ak order_mwh v pláne chýba (staré plány). Chýbajúci plán → nuly."""
+
+def _collect_month_grid_kwh(profile: str, year: int, month: int):
+    """Za každý deň mesiaca vráti (date_iso, [96 hodnôt]) podľa nastavení plánu profilu:
+    hodnota = `schedule[export_col][i] × export_mult` (znamienka ako v pláne). Default
+    order_mwh×1000 = batériová nominácia v kWh. Chýbajúci plán / stĺpec → nuly."""
     import calendar as _cal
+    col, mult = _export_params_for_profile(profile)
     ndays = _cal.monthrange(year, month)[1]
     out = []
     for d in range(1, ndays + 1):
@@ -1925,13 +1940,9 @@ def _collect_month_grid_kwh(profile: str, year: int, month: int):
         try:
             p = ps.load_plan_safe(d_iso, 15, "dentrh") if ps is not None else None
             sch = (p or {}).get("schedule", {}) if p else {}
-            om = sch.get("order_mwh")
-            if om and len(om) >= 96:
-                vals = [(-float(om[i]) * 1000.0 if om[i] is not None else 0.0) for i in range(96)]
-            else:
-                g = sch.get("grid_kwh")
-                if g and len(g) >= 96:
-                    vals = [(-float(g[i]) if g[i] is not None else 0.0) for i in range(96)]
+            arr = sch.get(col)
+            if arr and len(arr) >= 96:
+                vals = [(float(arr[i]) * mult if arr[i] is not None else 0.0) for i in range(96)]
         except Exception:
             pass
         out.append((d_iso, vals))
@@ -3990,12 +4001,14 @@ def _dentrh_form(msg=""):
                "grid_kw", "grid_kw_import", "grid_kw_export",
                "grid_fee", "cycle_cost", "min_spread",
                "max_export_kwh_day", "max_import_kwh_day",
-               "zco_bias_w", "vdt_engine", "vdt_pair_priority")
+               "zco_bias_w", "vdt_engine", "vdt_pair_priority", "export_col", "export_mult")
     for _k in _SHARED:
         if _k in _plan and _plan[_k] not in (None, ""):
             f[_k] = _plan[_k]
     _vdt_eng = str(f.get("vdt_engine", "lp") or "lp").lower()
     _vdt_prio = str(f.get("vdt_pair_priority", "closest") or "closest").lower()
+    _ex_col = str(f.get("export_col", "order_mwh") or "order_mwh")
+    _ex_mult = f.get("export_mult", 1000)
     def _sel(v, opt):
         return " selected" if v == opt else ""
     # Distribučný poplatok — single source of truth (rovnaké ako form_page)
@@ -4276,6 +4289,19 @@ Ak zvolíš <b>dnešný deň</b>, dole uvidíš aj odporúčanie pre aktuálny 1
   </select></label>
 </div>
 <p style="color:#666;font-size:13px;margin:6px 0 0"><b>Párový matcher</b>: VDT nákup sa uzavrie LEN spolu so ziskovým predajom (spread ≥ breakeven + min_spread, poplatok len na nabíjaní). Žiadne nepárové nákupy → koniec stratových večerných nákupov. Oba smery (nákup→predaj aj predaj→spätný nákup).</p></fieldset>
+<fieldset><legend>Export plánu (stĺpec + násobiteľ)</legend><div class="cols">
+<label>Stĺpec na export
+  <select name="export_col">
+    <option value="order_mwh"{_sel(_ex_col,"order_mwh")}>order_mwh — nominácia (len obchodované)</option>
+    <option value="grid_kwh"{_sel(_ex_col,"grid_kwh")}>grid_kwh — celý netto na prahu</option>
+    <option value="batt_kw"{_sel(_ex_col,"batt_kw")}>batt_kw — výkon batérie (kW)</option>
+    <option value="load_kwh"{_sel(_ex_col,"load_kwh")}>load_kwh — spotreba</option>
+    <option value="pv_kwh"{_sel(_ex_col,"pv_kwh")}>pv_kwh — FTV výroba</option>
+  </select></label>
+<label>Násobiteľ (prepočtová konštanta)
+  <input name="export_mult" type="number" step="any" value="{_ex_mult}"></label>
+</div>
+<p style="color:#666;font-size:13px;margin:6px 0 0">Export berie <b>zvolený stĺpec × násobiteľ</b> (znamienka ako v pláne). Napr. <b>order_mwh × 1000</b> = nominácia v kWh. Pre opačnú konvenciu znamienok daj záporný násobiteľ.</p></fieldset>
 <fieldset class="tpl-editor"><legend>× a RT šablóna (pre celý profil, 96 × 15-min)</legend>
 <p style="color:#666;font-size:13px;margin:0 0 6px">Hodnoty per 15-min slot sa uložia ako <b>globálna šablóna pre aktívny profil</b> pri každom submite. Šablóna platí pre VŠETKY dni rovnako.</p>
 {_build_template_editor_html_dentrh()}
@@ -4323,6 +4349,8 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
            zco_bias_w: float = Form(default=0.0),
            vdt_engine: str = Form(default="lp"),
            vdt_pair_priority: str = Form(default="closest"),
+           export_col: str = Form(default="order_mwh"),
+           export_mult: float = Form(default=1000.0),
            mult_action: str = Form(default=""),
            mult_arr: list[float] = Form(default=[]),
            rt_arr: list[str] = Form(default=[]),
@@ -4377,7 +4405,9 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                             max_export_kwh_day=float(max_export_kwh_day or 0),
                             max_import_kwh_day=float(max_import_kwh_day or 0),
                             zco_bias_w=zbw,
-                            vdt_engine=_vdt_engine, vdt_pair_priority=_vdt_pair_priority))
+                            vdt_engine=_vdt_engine, vdt_pair_priority=_vdt_pair_priority,
+                            export_col=str(export_col or "order_mwh"),
+                            export_mult=float(export_mult if export_mult is not None else 1000.0)))
     # SYNC: shared FTV/batt/sieť parametre tiež do ui_settings.plan — aby boli /plan a /dentrh
     # vždy konzistentné. Bez tohto sync-u by /dentrh forma pri reloade prepísala uloženú dentrh
     # hodnotu starou hodnotou z .plan (lebo _dentrh_form má .plan > .dentrh priority).
