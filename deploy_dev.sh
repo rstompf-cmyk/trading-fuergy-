@@ -12,7 +12,7 @@ echo "=== HEAD pred ==="; git log --oneline -1
 git add app.py livesim.py vdt_state.py vdt_optimizer.py vdt_live_advisor.py vdt_pair_matcher.py \
         optimizer.py core/effect_db.py core/rt_audit.py scheduler.py price_model_15m.py d1_planner.py cdc.py \
         docker-compose.yml static/css/app.css templates/components/nav.html templates/base.html \
-        ui/html.py ui/templates.py \
+        templates/pages/plans_list.html ui/html.py ui/templates.py \
         tools/diag_trades.py tools/export_livesim_xlsx.py tests/test_vdt_pair_matcher.py \
         scripts/upgrade_dev.ps1 deploy_dev.sh 2>/dev/null || true
 git add -f out/price_model_15m.joblib 2>/dev/null || true

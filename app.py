@@ -1890,7 +1890,111 @@ def plans_browse(request: Request, date_from: str = None, date_to: str = None,
                    rows=rows_data, profiles=all_profiles,
                    active_profile_name=active_profile,
                    date_from=df, date_to=dt_,
-                   kind_filter=fk, step_filter=fs_step)
+                   kind_filter=fk, step_filter=fs_step,
+                   exp_month=dt.date.today().strftime("%Y-%m"))
+
+
+def _customer_label_for_profile(profile_name: str) -> str:
+    """Názov pre súbor/hárok = meno zákazníka (ak je profil CDC batéria), inak meno profilu."""
+    try:
+        b = _cdc_battery_for_profile(profile_name)
+        if b and b.get("customer_id"):
+            import fleet as _fl_lbl
+            for c in _fl_lbl.list_customers():
+                if c.get("id") == b.get("customer_id"):
+                    return c.get("name") or profile_name
+    except Exception:
+        pass
+    return profile_name
+
+
+def _collect_month_grid_kwh(profile: str, year: int, month: int):
+    """Za každý deň mesiaca vráti (date_iso, [96 hodnôt]) — hodnota = −grid_kwh z 15-min plánu
+    (dodávka do siete = záporné, odber = kladné), kWh/15-min slot. Chýbajúci plán → nuly."""
+    import calendar as _cal
+    ndays = _cal.monthrange(year, month)[1]
+    out = []
+    for d in range(1, ndays + 1):
+        d_iso = f"{year:04d}-{month:02d}-{d:02d}"
+        vals = [0.0] * 96
+        try:
+            p = ps.load_plan_safe(d_iso, 15, "dentrh") if ps is not None else None
+            g = (p or {}).get("schedule", {}).get("grid_kwh") if p else None
+            if g and len(g) >= 96:
+                vals = [(-float(g[i]) if g[i] is not None else 0.0) for i in range(96)]
+        except Exception:
+            pass
+        out.append((d_iso, vals))
+    return out
+
+
+def _resolve_export_my(profile, month):
+    prof = ps.resolve_profile(profile) if ps is not None else (profile or "profil")
+    if month and len(str(month)) >= 7:
+        y, m = int(str(month)[:4]), int(str(month)[5:7])
+    else:
+        _t = dt.date.today(); y, m = _t.year, _t.month
+    return prof, y, m, _customer_label_for_profile(prof)
+
+
+@app.get("/plan_export_matrix")
+def plan_export_matrix(profile: str = None, month: str = None):
+    """Export plánu (kWh) ako matica: riadok = deň, stĺpce = 96 × 15-min (Hodina 1–24).
+    Dodávka do siete = záporná, odber = kladná. Názov súboru = zákazník_MM_RRRR.xlsx."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+    import io as _io
+    prof, y, m, label = _resolve_export_my(profile, month)
+    days = _collect_month_grid_kwh(prof, y, m)
+    wb = Workbook(); ws = wb.active; ws.title = (f"{label} -kWh")[:31]
+    _bold = Font(bold=True); _ctr = Alignment(horizontal="center")
+    ws.cell(row=2, column=1, value="Dátum").font = _bold
+    _slots = ["00-15", "15-30", "30-45", "45-60"]
+    for h in range(24):
+        c0 = 2 + h * 4
+        hc = ws.cell(row=1, column=c0, value=f"Hodina {h+1}"); hc.font = _bold; hc.alignment = _ctr
+        ws.merge_cells(start_row=1, start_column=c0, end_row=1, end_column=c0 + 3)
+        for j in range(4):
+            ws.cell(row=2, column=c0 + j, value=_slots[j]).font = _bold
+    r = 3
+    for d_iso, vals in days:
+        dc = ws.cell(row=r, column=1, value=dt.date.fromisoformat(d_iso)); dc.number_format = "DD.MM.YYYY"
+        for i, v in enumerate(vals):
+            ws.cell(row=r, column=2 + i, value=round(v, 3))
+        r += 1
+    ws.freeze_panes = "B3"
+    buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
+    fname = f"{label}_{m:02d}_{y}.xlsx"
+    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.get("/plan_export_long")
+def plan_export_long(profile: str = None, month: str = None):
+    """Export plánu (kWh) ako 2 stĺpce: dátum+čas, hodnota (rovnaká konvencia ako matica:
+    dodávka záporná, odber kladný). Názov = zákazník_MM_RRRR_2stlpce.xlsx."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    import io as _io
+    prof, y, m, label = _resolve_export_my(profile, month)
+    days = _collect_month_grid_kwh(prof, y, m)
+    wb = Workbook(); ws = wb.active; ws.title = (f"{label} -kWh")[:31]
+    ws.cell(row=1, column=1, value="Dátum a čas").font = Font(bold=True)
+    ws.cell(row=1, column=2, value="kWh").font = Font(bold=True)
+    r = 2
+    for d_iso, vals in days:
+        base = dt.datetime.fromisoformat(d_iso)
+        for i, v in enumerate(vals):
+            ts = base + dt.timedelta(minutes=15 * i)
+            tc = ws.cell(row=r, column=1, value=ts); tc.number_format = "DD.MM.YYYY HH:MM"
+            ws.cell(row=r, column=2, value=round(v, 3))
+            r += 1
+    ws.freeze_panes = "A2"
+    ws.column_dimensions["A"].width = 18
+    buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
+    fname = f"{label}_{m:02d}_{y}_2stlpce.xlsx"
+    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @app.post("/plans/delete", response_class=HTMLResponse)

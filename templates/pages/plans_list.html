@@ -40,6 +40,28 @@
     <span class="muted" style="font-size:12px;margin-left:auto">{{ rows|length }} plánov</span>
   </form>
 
+  <div class="card card-green flex gap-12 items-center flex-wrap mt-8">
+    <b style="color:#1F4E78">📤 Export plánu (mesiac, kWh)</b>
+    <label class="flex" style="flex-direction:column;font-size:12px;color:#666">
+      Mesiac <input type="month" id="exp_month" value="{{ exp_month }}">
+    </label>
+    <a id="exp_matrix" class="btn" href="#">⬇ Matica (dni × 96 slotov)</a>
+    <a id="exp_long" class="btn sec" href="#">⬇ 2 stĺpce (čas + hodnota)</a>
+    <span class="muted" style="font-size:12px">dodávka do siete = záporná · odber = kladná · súbor: {{ active_profile_name }}_MM_RRRR</span>
+  </div>
+  <script>
+  (function(){
+    var mEl=document.getElementById('exp_month');
+    var prof=encodeURIComponent("{{ active_profile_name }}");
+    function upd(){
+      var m=mEl.value||"{{ exp_month }}";
+      document.getElementById('exp_matrix').href='/plan_export_matrix?profile='+prof+'&month='+m;
+      document.getElementById('exp_long').href='/plan_export_long?profile='+prof+'&month='+m;
+    }
+    mEl.addEventListener('change',upd); upd();
+  })();
+  </script>
+
   <table class="tbl-compact mt-8">
     <tr>
       <th>Dátum</th><th>Krok</th><th>Kind</th><th>Zisk €</th><th>Cykly</th>
