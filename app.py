@@ -7421,7 +7421,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                         _cdc_ov.get("cdc_prefix"),
                         _dt_ov.datetime.now() - _dt_ov.timedelta(days=2),
                         _dt_ov.datetime.now(), step=60, cfg=_ccfg_ov,
-                        keys=["load_power_kw", "ftv_power_kw", "batt_power_kw", "batt_soc_pct"])
+                        keys=["load_power_kw", "load_power_kw_15m", "ftv_power_kw", "ftv_power_kw_15m", "batt_power_kw", "batt_soc_pct"])
                     rdf = (_hist_ov.reset_index()
                            if _hist_ov is not None and not _hist_ov.empty else pd.DataFrame())
                 else:
@@ -9736,7 +9736,7 @@ def _realio_vizualizacia_page(msg: str = "", msg_kind: str = "info",
             # step=60 → 1-MIN hodnoty (rovnaké ako graf); inak by sa čítal 15-min bucket.
             _ccfg["timeout_s"] = min(int(_ccfg.get("timeout_s", 15) or 15), 4)
             _ccfg["step_read_s"] = 60
-            _viz_keys = ["load_power_kw", "ftv_power_kw", "batt_power_kw", "batt_soc_pct"]
+            _viz_keys = ["load_power_kw", "load_power_kw_15m", "ftv_power_kw", "ftv_power_kw_15m", "batt_power_kw", "batt_soc_pct"]
             _live_vals = _cdc.fetch_latest(_pref, cfg=_ccfg, keys=_viz_keys)
             try:
                 _hist = _cdc.fetch_history_range(
