@@ -24,6 +24,15 @@ FEAT = ["qoh", "qoh_sin", "qoh_cos", "hour", "hour_sin", "hour_cos",
         "dow", "month", "gti", "temp", "cloud"]
 
 
+def _to_local(series) -> pd.Series:
+    """UTC timestampy (historian time_utc) → naive LOKÁLNY SK čas (Europe/Bratislava,
+    DST-aware). Bez tohto sa vnútrohodinový tvar aj špic posunú o 1-2h (leto)."""
+    try:
+        return pd.to_datetime(series, utc=True).dt.tz_convert("Europe/Bratislava").dt.tz_localize(None)
+    except Exception:
+        return pd.to_datetime(series) + pd.Timedelta(hours=2)   # fallback: fixný letný posun
+
+
 def _calendar_feats(d: pd.DataFrame) -> pd.DataFrame:
     d["qoh_sin"] = np.sin(2 * np.pi * d["qoh"] / 4)
     d["qoh_cos"] = np.cos(2 * np.pi * d["qoh"] / 4)
@@ -39,7 +48,7 @@ class PriceModel15:
     def fit(self, hist15: pd.DataFrame, weather: pd.DataFrame) -> "PriceModel15":
         """hist15: stĺpce time_utc, value (15-min ISOT). weather: time, gti, temp, cloud (hodinové)."""
         h = hist15.copy()
-        h["t"] = pd.to_datetime(h["time_utc"] if "time_utc" in h else h["time"])
+        h["t"] = _to_local(h["time_utc"]) if "time_utc" in h else pd.to_datetime(h["time"])
         h = h[["t", ("value" if "value" in h else "price15")]].copy()
         h.columns = ["t", "price15"]
         h = h.dropna().sort_values("t")
@@ -118,7 +127,7 @@ def load_cached(path: str = "out/price_model_15m.joblib"):
 def _oos_eval(hist, weather, test_days=14):
     """Rýchle OOS porovnanie: 15-min model (level+tvar) vs plochá hodinová kópia."""
     from sklearn.metrics import mean_absolute_error
-    h = hist.copy(); h["t"] = pd.to_datetime(h["time_utc"]);
+    h = hist.copy(); h["t"] = _to_local(h["time_utc"]);
     ts = h["t"] - pd.Timedelta(minutes=15)
     h["price15"] = h["value"]; h["date"] = ts.dt.date; h["hour"] = ts.dt.hour
     h["qoh"] = (ts.dt.minute // 15).astype(int); h["dow"] = ts.dt.dayofweek; h["month"] = ts.dt.month

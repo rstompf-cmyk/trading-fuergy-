@@ -41,8 +41,16 @@ def _sk_isot_hourly() -> pd.DataFrame:
     if _SK_ISOT_CACHE["mtime"] == mt and _SK_ISOT_CACHE["df"] is not None:
         return _SK_ISOT_CACHE["df"]
     df = pd.read_csv(_SK_ISOT_HIST_PATH, parse_dates=["time_utc"]).drop_duplicates("time_utc")
-    df = df.rename(columns={"time_utc": "time", "value": "isot_eur"})
-    df["time"] = df["time"].dt.floor("h")
+    # TZ FIX (2026-06-25): historian je v UTC (stĺpec time_utc), ale plán/realita bežia v
+    # LOKÁLNOM SK čase (leto CEST = UTC+2, zima CET = +1). Bez prevodu sa večerný špic
+    # posunie o 1-2h skôr (model učil h18 namiesto h20) → predikcia „mimo" o 2h. Prevedieme
+    # UTC → Europe/Bratislava (DST-aware) a odstránime tz (naive lokál, ako zvyšok systému).
+    try:
+        _t = pd.to_datetime(df["time_utc"], utc=True).dt.tz_convert("Europe/Bratislava").dt.tz_localize(None)
+    except Exception:
+        _t = pd.to_datetime(df["time_utc"]) + pd.Timedelta(hours=2)   # fallback: fixný letný posun
+    df["time"] = _t.dt.floor("h")
+    df = df.rename(columns={"value": "isot_eur"})
     h = df.groupby("time", as_index=False)["isot_eur"].mean().sort_values("time")
     _SK_ISOT_CACHE.update(mtime=mt, df=h)
     return h
