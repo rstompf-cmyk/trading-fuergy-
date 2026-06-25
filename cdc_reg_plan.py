@@ -57,7 +57,9 @@ def _plan_arrays(battery: Dict[str, Any], day_iso: str):
     name = profile_name_for(battery)
     if not name:
         return batt, soc
-    plan = _ps.load_plan_safe(day_iso, step_min=15, kind="dentrh", profile=name)
+    # Cascade: PREDIKOVANÝ (15 plan) → reálny DENNÝ TRH (15 dentrh) → legacy 60 plan.
+    plan = (_ps.load_plan_safe(day_iso, step_min=15, kind="plan", profile=name)
+            or _ps.load_plan_safe(day_iso, step_min=15, kind="dentrh", profile=name))
     step = 15
     if plan is None:
         plan = _ps.load_plan_safe(day_iso, step_min=60, kind="plan", profile=name)

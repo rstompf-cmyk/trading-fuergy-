@@ -11,6 +11,7 @@ echo "=== branch ==="; cat .git/HEAD
 echo "=== HEAD pred ==="; git log --oneline -1
 git add app.py livesim.py vdt_state.py vdt_optimizer.py vdt_live_advisor.py vdt_pair_matcher.py \
         optimizer.py core/effect_db.py core/rt_audit.py scheduler.py price_model_15m.py d1_planner.py cdc.py report.py \
+        auto_control.py cdc_reg_plan.py vdt_extras.py daily_settlement.py combined_backtest.py \
         docker-compose.yml static/css/app.css templates/components/nav.html templates/base.html \
         templates/pages/plans_list.html ui/html.py ui/templates.py \
         tools/diag_trades.py tools/export_livesim_xlsx.py tests/test_vdt_pair_matcher.py \

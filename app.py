@@ -630,8 +630,12 @@ def _resolve_soc_init_carryover(date_iso: str, fp: dict,
         import datetime as _dt
         _prev_day = (_dt.date.fromisoformat(date_iso) - _dt.timedelta(days=1)).isoformat()
         _step_min = 60 if case == "plan_d1" else 15
-        _kind = "plan" if case == "plan_d1" else "dentrh"
-        _prev_plan = _ps_carry.load_plan_safe(_prev_day, _step_min, kind=_kind)
+        # Cascade: 15-min → PREDIKOVANÝ (plan) → reálny DENNÝ TRH (dentrh); 60 → plan.
+        if _step_min == 15:
+            _prev_plan = (_ps_carry.load_plan_safe(_prev_day, 15, kind="plan")
+                          or _ps_carry.load_plan_safe(_prev_day, 15, kind="dentrh"))
+        else:
+            _prev_plan = _ps_carry.load_plan_safe(_prev_day, 60, kind="plan")
         if _prev_plan and isinstance(_prev_plan, dict):
             _slots = _prev_plan.get("slots") or _prev_plan.get("plan") or []
             if _slots and isinstance(_slots, list):
@@ -3257,7 +3261,7 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
             try:
                 _plan = None
                 if _ps:
-                    for _step, _kind in ((15, "dentrh"), (60, "plan")):
+                    for _step, _kind in ((15, "plan"), (15, "dentrh"), (60, "plan")):
                         try:
                             _plan = _ps.load_plan_safe(day_iso, _step, kind=_kind, profile=name)
                         except TypeError:
@@ -6915,11 +6919,17 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         _ui_save("livesim", {"case": case, "start": start, "use_rt": cur_use_rt})
         _lbl, _bc, _st = MODES[case]
         # pre-flight kontrola: existujú plány pre celý rozsah start → today?
-        plan_kind = "dentrh" if int(_st) == 15 else "plan"
+        # PRIMÁRNY je PREDIKOVANÝ plán (kind=plan) — pre 15 aj 60. Pri 15-min sa deň ráta
+        # ako pokrytý aj keď má reálny DENNÝ TRH (dentrh) — rovnaká cascade ako _day_plan
+        # (plan → dentrh). Inak by predikované plány boli "neviditeľné" (banner "neexistujú").
+        plan_kind = "plan"
         miss_plans = []
         if ps is not None:
             try:
                 miss_plans = ps.missing_plans(start, dt.date.today().isoformat(), int(_st), plan_kind)
+                if int(_st) == 15 and miss_plans:
+                    _miss_dentrh = set(ps.missing_plans(start, dt.date.today().isoformat(), 15, "dentrh"))
+                    miss_plans = [d for d in miss_plans if d in _miss_dentrh]   # chýba LEN ak nemá ani plan ani dentrh
             except Exception:
                 miss_plans = []
         # ── AUTO-DETEKCIA: ak aktuálny case nemá žiadne plány pre rozsah dni
@@ -6934,8 +6944,10 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 # druhý mód
                 other_case = "dt_15min" if case == "plan_d1" else "plan_d1"
                 _other_st = 15 if other_case == "dt_15min" else 60
-                other_kind = "dentrh" if other_case == "dt_15min" else "plan"
-                _miss_other = ps.missing_plans(start, _today_iso, _other_st, other_kind)
+                _miss_other = ps.missing_plans(start, _today_iso, _other_st, "plan")
+                if _other_st == 15 and _miss_other:
+                    _mo_dentrh = set(ps.missing_plans(start, _today_iso, 15, "dentrh"))
+                    _miss_other = [d for d in _miss_other if d in _mo_dentrh]
                 _have_cur = _total_days - _miss_cur
                 _have_other = _total_days - len(_miss_other)
                 active_prof = ps.resolve_profile()
@@ -7115,11 +7127,15 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         # Rozšíriť dropdown o dni so saved plánmi pre aktívny profil (minulé aj budúce),
         # aby sa dali pozrieť aj dni, na ktoré livesim ešte nedobehol. plan_store iteruje
         # iba aktívny profil/market, takže nevidíš plány z iného profilu.
-        # Step_min sa odvodí z plan_kind (60 pre 'plan', 15 pre 'dentrh').
+        # Step_min sa odvodí z MÓDU (_st), nie z plan_kind. Pre 15-min zahrň dni
+        # pokryté predikovaným (plan) AJ reálnym (dentrh) plánom.
         try:
             if ps is not None:
-                _live_step = 15 if plan_kind == "dentrh" else 60
-                _plan_items = ps.list_plans(kind=plan_kind) or []
+                _live_step = int(_st)
+                _kinds_for = (["plan", "dentrh"] if _live_step == 15 else ["plan"])
+                _plan_items = []
+                for _k in _kinds_for:
+                    _plan_items += (ps.list_plans(kind=_k) or [])
                 _plan_days = set()
                 for _pi in _plan_items:
                     if int(_pi.get("step_min", 60)) != _live_step:
@@ -7528,7 +7544,9 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         plan_only_warn = ""
         try:
             if view_day and (dview is None or dview.empty):
-                _has_plan = ps.has_plan(view_day, _st, plan_kind) if ps is not None else False
+                _has_plan = (ps is not None and (
+                    ps.has_plan(view_day, _st, "plan")
+                    or (int(_st) == 15 and ps.has_plan(view_day, 15, "dentrh"))))
                 _is_future = dt.date.fromisoformat(view_day) > dt.date.today()
                 if _has_plan:
                     _label = "budúci" if _is_future else "minulý"
@@ -7557,7 +7575,8 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         zero_plan_warn = ""
         try:
             if ps is not None and view_day:
-                _pdat = ps.load_plan_safe(view_day, _st, plan_kind)
+                _pdat = (ps.load_plan_safe(view_day, _st, "plan")
+                         or (ps.load_plan_safe(view_day, 15, "dentrh") if int(_st) == 15 else None))
                 if _pdat:
                     _mlts = _pdat.get("mults") or []
                     _rtmm = _pdat.get("rt_mask") or []
@@ -12582,23 +12601,25 @@ def vdt_d1_page(date: str = "", profile: str = ""):
         f"</form>"
     )
 
-    # Cascade: skús dentrh (15-min) najprv, potom plan (hourly)
+    # Cascade: PREDIKOVANÝ (15 plan) → reálny DENNÝ TRH (15 dentrh) → legacy 60 plan.
     schedule = None
     summary = None
     params = None
     source_kind = None
     source_step = None
-    try:
-        plan_15 = _ps.load_plan(date_obj.isoformat(), step_min=15, kind="dentrh",
-                                  profile=profile)
-        if plan_15 and plan_15.get("schedule"):
-            schedule = plan_15["schedule"]
-            summary = plan_15.get("summary", {})
-            params = plan_15.get("params", {})
-            source_kind = "dentrh"
-            source_step = 15
-    except Exception:
-        pass
+    for _ck in ("plan", "dentrh"):
+        try:
+            plan_15 = _ps.load_plan(date_obj.isoformat(), step_min=15, kind=_ck,
+                                      profile=profile)
+            if plan_15 and plan_15.get("schedule"):
+                schedule = plan_15["schedule"]
+                summary = plan_15.get("summary", {})
+                params = plan_15.get("params", {})
+                source_kind = _ck
+                source_step = 15
+                break
+        except Exception:
+            pass
     if schedule is None:
         try:
             plan_60 = _ps.load_plan(date_obj.isoformat(), step_min=60, kind="plan",

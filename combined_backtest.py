@@ -180,9 +180,15 @@ def run_combined(dparams=None, rt_margin=None, max_cycles=MAX_CYCLES,
         fac = _factor_for(mth, pv_cal)                       # kalibrácia výroby
         d_iso = pd.Timestamp(d).date().isoformat()
         step_min_now = 15 if int(d1_step_min) == 15 else 60
-        kind_now = "dentrh" if step_min_now == 15 else "plan"
         # ── STRICT MODE: čítaj plán z plan_store; bez plánu deň preskočíme ──
-        sch_disk = _ps.load_plan_safe(d_iso, step_min_now, kind_now) if _ps is not None else None
+        # Cascade: 15-min → PREDIKOVANÝ (plan) → reálny DENNÝ TRH (dentrh); 60 → plan.
+        if _ps is None:
+            sch_disk = None
+        elif step_min_now == 15:
+            sch_disk = (_ps.load_plan_safe(d_iso, 15, "plan")
+                        or _ps.load_plan_safe(d_iso, 15, "dentrh"))
+        else:
+            sch_disk = _ps.load_plan_safe(d_iso, 60, "plan")
         if sch_disk is None:
             skipped.append(d_iso)
             continue

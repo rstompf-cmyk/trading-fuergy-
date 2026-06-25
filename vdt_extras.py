@@ -199,10 +199,10 @@ def _load_ftv_per_slot(profile: Optional[str], date_iso: str) -> Dict[int, float
     except Exception:
         return {}
     try:
-        # Preferuj 15-min (dentrh), fallback na 60-min (plan)
-        plan = _ps.load_plan_safe(date_iso, step_min=15, kind="dentrh", profile=profile)
-        if plan is None:
-            plan = _ps.load_plan_safe(date_iso, step_min=60, kind="plan", profile=profile)
+        # Cascade: PREDIKOVANÝ (15 plan) → reálny DENNÝ TRH (15 dentrh) → legacy 60 plan.
+        plan = (_ps.load_plan_safe(date_iso, step_min=15, kind="plan", profile=profile)
+                or _ps.load_plan_safe(date_iso, step_min=15, kind="dentrh", profile=profile)
+                or _ps.load_plan_safe(date_iso, step_min=60, kind="plan", profile=profile))
         if plan is None:
             return {}
         sched = plan.get("schedule") or {}

@@ -78,7 +78,8 @@ def _dam_settlement(date_iso: str, profile: str) -> Dict[str, Any]:
             out["diag"] = "Reálne DAM ceny ešte nie sú publikované — orientačne."
             try:
                 import plan_store as _ps
-                pdata = _ps.load_plan_safe(date_iso, 15, "dentrh") \
+                pdata = _ps.load_plan_safe(date_iso, 15, "plan") \
+                          or _ps.load_plan_safe(date_iso, 15, "dentrh") \
                           or _ps.load_plan_safe(date_iso, 60, "plan")
                 if pdata is not None:
                     sch = pdata.get("schedule") or {}
