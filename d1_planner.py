@@ -121,11 +121,11 @@ def _build_pv_kwh(profile_params: Dict[str, Any], date: dt.date,
     return np.zeros(slots, dtype=float)
 
 
-def _forecast_prices_15m(pp: Dict[str, Any], date: dt.date) -> np.ndarray:
+def _forecast_prices_15m(pp: Dict[str, Any], date: dt.date, market: str = None) -> np.ndarray:
     """96 × €/MWh PREDIKOVANÝCH cien pre daný deň — IDENTICKÝ forecast ako _gen_one_plan
-    (app.py): hodinová ISOT predikcia (core.caches._model na _isot_history + počasie) →
+    (app.py): hodinová ISOT predikcia (market-aware model na _isot_history + počasie) →
     15-min tvar (price_model_15m). Poistka: flat upsample. NEČÍTA reálny DAM.
-    Profilovo parametrizované (žiadna väzba na aktívny profil ani cyklický import app)."""
+    `market` (cz/sk) vyberá samostatný cenový model + históriu (SK z OKTE, CZ z OTE)."""
     from core.caches import _model, _isot_history, _fetch_pv_cached
     d = date
     price_scale = float(pp.get("price_scale", 1.0) or 1.0)
@@ -141,15 +141,18 @@ def _forecast_prices_15m(pp: Dict[str, Any], date: dt.date) -> np.ndarray:
         wx = pd.DataFrame({"time": pd.date_range(pd.Timestamp(d), periods=24, freq="h"),
                            "gti": np.zeros(24), "temp": np.full(24, 15.0), "cloud": np.full(24, 50.0)})
     _wx2 = wx[["time", "gti", "temp", "cloud"]].copy(); _wx2["isot_eur"] = np.nan
-    hist = _isot_history(d, days=8).copy()
+    hist = _isot_history(d, days=8, market=market).copy()
     for _c in ["gti", "temp", "cloud"]:
         hist[_c] = np.nan
     ctx = pd.concat([hist[["time", "isot_eur", "gti", "temp", "cloud"]], _wx2], ignore_index=True)
-    pred = _model().predict(ctx)
+    _pm = _model(market)
+    pred = _pm.predict(ctx)
     dayp = pred[pred.time.dt.date == d].sort_values("time")
     ph = (np.asarray(dayp.pred_isot.values, float) * price_scale)[:24]
     if len(ph) < 24:
         raise RuntimeError(f"forecast predikcia neúplná pre {d} ({len(ph)}/24)")
+    if getattr(_pm, "_clip", None):                              # anti-runaway clip
+        ph = np.clip(ph, _pm._clip[0], _pm._clip[1])
     try:
         from price_model_15m import load_cached as _pm15_load
         _m15 = _pm15_load("out/price_model_15m.joblib")
@@ -233,7 +236,7 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
         dt_h = 0.25
         slots = 96
         try:
-            prices = _forecast_prices_15m(pp, date)
+            prices = _forecast_prices_15m(pp, date, market=m)
         except Exception as e:
             return {"ok": False,
                     "error": f"forecast cien zlyhal pre {date.isoformat()}: {e}",

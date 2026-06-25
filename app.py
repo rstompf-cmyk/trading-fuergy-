@@ -754,13 +754,15 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                 "kw": np.zeros(24), "gti": np.zeros(24),
                 "temp": np.full(24, 15.0), "cloud": np.full(24, 50.0),
             })
-        hist = _isot_history(d, days=8)
+        _mkt60 = mk.get_active_market() if mk is not None else "cz"
+        hist = _isot_history(d, days=8, market=_mkt60)
         wx2 = wx[["time", "gti", "temp", "cloud"]].copy(); wx2["isot_eur"] = np.nan
         h2 = hist.copy()
         for c in ["gti", "temp", "cloud"]:
             h2[c] = np.nan
         ctx = pd.concat([h2[["time", "isot_eur", "gti", "temp", "cloud"]], wx2], ignore_index=True)
-        pred = _model().predict(ctx)
+        _pm60 = _model(_mkt60)
+        pred = _pm60.predict(ctx)
         dayp = pred[pred.time.dt.date == d][["time", "pred_isot", "p_neg"]]
         day = wx.merge(dayp, on="time").sort_values("time")
         if len(day) < 24:
@@ -768,6 +770,8 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         cal = _cal_for(d)
         pv_arr = day.kw.values * cal * float(fp.get("pv_scale", 1.0))
         price_arr = day.pred_isot.values * float(fp.get("price_scale", 1.0))
+        if getattr(_pm60, "_clip", None):
+            price_arr = np.clip(price_arr, _pm60._clip[0], _pm60._clip[1])
         zbw = float(fp.get("zco_bias_w", 0.0))
         decision_price = lsim._apply_zco_bias(price_arr, d, float(pv_arr.sum()), 60, zbw)
         npd = bool(fp.get("no_planned_discharge", False))
@@ -906,14 +910,18 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                                       "gti": np.zeros(24), "temp": np.full(24, 15.0),
                                       "cloud": np.full(24, 50.0)}))
                 _wxp["isot_eur"] = np.nan
-                _h2p = _isot_history(d, days=8).copy()
+                _mkt_p = mk.get_active_market() if mk is not None else "cz"
+                _h2p = _isot_history(d, days=8, market=_mkt_p).copy()
                 for _c in ["gti", "temp", "cloud"]:
                     _h2p[_c] = np.nan
                 _ctxp = pd.concat([_h2p[["time", "isot_eur", "gti", "temp", "cloud"]], _wxp],
                                   ignore_index=True)
-                _predp = _model().predict(_ctxp)
+                _pm_p = _model(_mkt_p)
+                _predp = _pm_p.predict(_ctxp)
                 _dpp = _predp[_predp.time.dt.date == d].sort_values("time")
                 _ph = (_dpp.pred_isot.values * float(fp.get("price_scale", 1.0)))[:24]
+                if getattr(_pm_p, "_clip", None):                 # anti-runaway clip
+                    _ph = np.clip(_ph, _pm_p._clip[0], _pm_p._clip[1])
                 if len(_ph) >= 24:
                     # Dedikovaný 15-min model (vnútrohodinový tvar na hodinovej predikcii).
                     # OOS +24 % vs plochá kópia. Flat upsample ostáva poistka ak model chýba/zlyhá.
@@ -5178,19 +5186,24 @@ def _livesim_pred_dt(today):
                 "kw": np.zeros(24), "gti": np.zeros(24),
                 "temp": np.full(24, 15.0), "cloud": np.full(24, 50.0),
             })
-        hist = _isot_history(d, days=8)
+        _mkt_lp = mk.get_active_market() if mk is not None else "cz"
+        hist = _isot_history(d, days=8, market=_mkt_lp)
         wx2 = wx[["time", "gti", "temp", "cloud"]].copy(); wx2["isot_eur"] = np.nan
         h2 = hist.copy()
         for c in ["gti", "temp", "cloud"]:
             h2[c] = np.nan
         ctx = pd.concat([h2[["time", "isot_eur", "gti", "temp", "cloud"]], wx2], ignore_index=True)
-        pred = _model().predict(ctx)
+        _pm_lp = _model(_mkt_lp)
+        pred = _pm_lp.predict(ctx)
         dayp = pred[pred.time.dt.date == d][["time", "pred_isot"]].sort_values("time")
         if len(dayp) < 24:
             return None
+        _clp = getattr(_pm_lp, "_clip", None)
         out = {}
         for _, row in dayp.iterrows():
             t = pd.Timestamp(row["time"]).floor("h"); p = float(row["pred_isot"])
+            if _clp:
+                p = min(max(p, _clp[0]), _clp[1])
             for q in range(4):
                 out[t + pd.Timedelta(minutes=15*q)] = p     # hodinová predikcia → 4×15-min
         return out
@@ -5300,9 +5313,9 @@ def _livesim_live_minutes():
 def _livesim_modes():
     cases = cc.list_cases()
     base = "realistic" if "realistic" in cases else (cases[0] if cases else "realistic")
-    # 15-MIN MERGE: 15-min plán (RT+VDT) je primárny; hodinový plan_d1 ostáva legacy.
-    return {"dt_15min": ("Plán 15-min (RT+VDT)", base, 15),
-            "plan_d1": ("Plán D-1 (hodinový, legacy)", base, 60)}
+    # JEDEN 15-MIN MÓD (2026-06-25): všetko je 15-min (predikovaný plán aj denný trh cez
+    # cascade). Starý 60-min "plan_d1" zrušený (bola to len pasca na chybu plánu).
+    return {"dt_15min": ("Plán 15-min (RT+VDT)", base, 15)}
 
 
 def _livesim_rt_params_from_profile(prof_plan_rt: dict, cfg):
@@ -5372,11 +5385,11 @@ def _livesim_bg_tick():
     Vracia súčet pridaných minút. Jedno zlyhanie neblokuje ostatné."""
     try:
         MODES = _livesim_modes()
-        saved = _ui_load("livesim", {"case": "plan_d1",
+        saved = _ui_load("livesim", {"case": "dt_15min",
                                      "start": (dt.date.today() - dt.timedelta(days=7)).isoformat()})
         case = saved.get("case")
         if case not in MODES:
-            case = "plan_d1"
+            case = "dt_15min"
         start = saved.get("start")
         _lbl, _bc, _st = MODES[case]
         live = _livesim_live_minutes()
@@ -5463,7 +5476,7 @@ def _livesim_bg_tick():
 
 
 @app.get("/livesim/chC_export")
-def livesim_chC_export(case: str = "plan_d1", view: str = None):
+def livesim_chC_export(case: str = "dt_15min", view: str = None):
     """Manažérsky Excel report zo živej simulácie.
     7 sheetov: Zhrnutie, Po_mesiacoch (+grafy), Po_dnoch (+grafy), Vsetky_15min,
                Detail_15min (+grafy), Per_minute (raw), Metadata."""
@@ -6093,7 +6106,7 @@ def livesim_chC_export(case: str = "plan_d1", view: str = None):
 
 
 @app.get("/livesim/chC_export_pdf")
-def livesim_chC_export_pdf(case: str = "plan_d1", view: str = None):
+def livesim_chC_export_pdf(case: str = "dt_15min", view: str = None):
     """PDF report — kompaktný manažérsky súhrn (Variant A) s grafmi cez matplotlib.
 
     Obsah: titulná strana so Zhrnutím + KPI, mesačná tabuľka + 4 grafy,
@@ -6693,7 +6706,7 @@ pip install reportlab matplotlib</code>
 
 
 @app.get("/livesim_table_xlsx")
-def livesim_table_xlsx(case: str = "plan_d1", day: str = None):
+def livesim_table_xlsx(case: str = "dt_15min", day: str = None):
     """Export 15-min agregát tabuľky ako Excel (xlsx) pre celý deň.
     Slot, batt_kw, DAM_kw, VDT_kw, work_kWh, SOC%, FTV_kw, DT_eur, VDT_eur.
 
@@ -6848,10 +6861,11 @@ def livesim_get(case: str = None, start: str = None, view: str = None, curtail: 
     try:
         cases = cc.list_cases()
         base = "realistic" if "realistic" in cases else (cases[0] if cases else "realistic")
-        # dve pomenované možnosti – OBE používajú nastavenia z 'base' (tvoje naladené), líšia sa granularitou plánu
-        # 15-MIN MERGE: 15-min plán (RT+VDT) je primárny; hodinový plan_d1 ostáva legacy.
-        MODES = {"dt_15min": ("Plán 15-min (RT+VDT)", base, 15),
-                 "plan_d1": ("Plán D-1 (hodinový, legacy)", base, 60)}
+        # JEDEN 15-MIN MÓD (2026-06-25): odkedy je všetko 15-min (predikovaný plán aj denný
+        # trh, oba kind sa načítavajú cez cascade), starý 60-min "plan_d1" mód bol len pasca
+        # (plány sú 15-min → v 60-min móde "neexistujú" → chyba). Ostáva jediný 15-min mód;
+        # case="plan_d1" (staré URL/uložený stav) sa skoerciuje na "dt_15min".
+        MODES = {"dt_15min": ("Plán 15-min (RT+VDT)", base, 15)}
         saved = _ui_load("livesim", {"case": "dt_15min",
                                      "start": (dt.date.today() - dt.timedelta(days=7)).isoformat()})
         case = case or saved.get("case")
@@ -6934,8 +6948,14 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 miss_plans = []
         # ── AUTO-DETEKCIA: ak aktuálny case nemá žiadne plány pre rozsah dni
         # → ponúkni prepnutie na druhý mód (ak má plány v tomto profile) ──
+        # _have_cur (počet dní pokrytých plánom v aktuálnom móde) sa počíta VŽDY — aj pri
+        # jedinom móde — lebo ho používa _abort_advance nižšie (bez plánov nevolaj advance).
+        try:
+            _have_cur = max(1, len(pd.date_range(start, dt.date.today().isoformat(), freq="D"))) - len(miss_plans)
+        except Exception:
+            _have_cur = 1
         mode_switch_banner = ""
-        if ps is not None:
+        if ps is not None and len(MODES) > 1:
             try:
                 _today_iso = dt.date.today().isoformat()
                 _all_dates = pd.date_range(start, _today_iso, freq="D")

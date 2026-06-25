@@ -60,6 +60,7 @@ _DEFAULT_CRONS = {
     "joint_mpc_tick":      "* * * * *",         # každú min — joint MPC kontrolér (Bug CC2): SOC + DAM + VDT + FTV + Load → joint LP
     "zco_profile_rebuild": "0 2 * * 0",         # nedeľa 02:00 — prebuilduj SK deviation_profile (PV+weekday split)
     "price_model_15m_retrain": "30 2 * * 0",    # nedeľa 02:30 — pretrénuj 15-min cenový model z čerstvého historiánu
+    "price_model_retrain":     "0 3 * * *",     # DENNE 03:00 — pretrénuj hodinové modely (CZ/SK) z čerstvých dát (vždy keď príde nový deň)
     "auto_control_apply":  "0,15,30,45 * * * *", # každú 15-minútovku — paper trading sim apply D-1 plánu (Fáza A.5)
 }
 _DEFAULT_TZ = "Europe/Bratislava"
@@ -757,6 +758,20 @@ def job_price_model_15m_retrain():
         _log("price_model_15m_retrain", f"retrain zlyhal: {e}", level="warn")
 
 
+@_safe("price_model_retrain")
+def job_price_model_retrain():
+    """Pretrénuje HODINOVÉ cenové modely (úrovne) samostatne na krajinu:
+    CZ z OTE (price_train_2026.csv), SK z OKTE historianu. Beží denne pred 9:00 autoplánom,
+    aby predikčný plán používal čerstvý market-aware model."""
+    _log("price_model_retrain", "štart")
+    try:
+        import core.caches as _cc
+        msg = _cc.retrain_price_models()
+        _log("price_model_retrain", f"hotovo · {msg}")
+    except Exception as e:
+        _log("price_model_retrain", f"retrain zlyhal: {e}", level="warn")
+
+
 @_safe("auto_control_apply")
 def job_auto_control_apply():
     """Fáza A.5 paper trading — každú štvrťhodinu prečíta D-1 plán
@@ -892,6 +907,7 @@ def start() -> BackgroundScheduler:
         ("joint_mpc_tick",     job_joint_mpc_tick,     "Joint MPC kontroler (1-min, Bug CC2)"),
         ("zco_profile_rebuild",job_zco_profile_rebuild,"SK ZCO deviation profile rebuild (nedeľa 02:00)"),
         ("price_model_15m_retrain", job_price_model_15m_retrain, "15-min cenový model retrain (nedeľa 02:30)"),
+        ("price_model_retrain", job_price_model_retrain, "Hodinové cenové modely CZ/SK retrain (denne 03:00)"),
         ("auto_control_apply", job_auto_control_apply, "Fáza A.5 paper trading apply (SIMULATION)"),
     ]
 
@@ -934,6 +950,7 @@ def run_now(job_id: str):
         "joint_mpc_tick":     job_joint_mpc_tick,
         "zco_profile_rebuild":job_zco_profile_rebuild,
         "price_model_15m_retrain": job_price_model_15m_retrain,
+        "price_model_retrain": job_price_model_retrain,
         "auto_control_apply": job_auto_control_apply,
         "historian_login":    job_historian_login,
         "historian_extend":   job_historian_extend,

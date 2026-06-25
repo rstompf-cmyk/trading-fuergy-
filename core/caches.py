@@ -18,7 +18,9 @@ from price_model import PriceModel, FEATURES
 
 
 # ─── Cache dicty + TTL konštanty ────────────────────────────────────────────
-_MODEL_CACHE = {"pm": None}
+_MODEL_CACHE = {"pm": None}      # legacy kľúč; market-aware modely sa kľúčujú "cz"/"sk"
+_SK_ISOT_CACHE = {"mtime": None, "df": None}
+_SK_ISOT_HIST_PATH = "out/sk/historian_C_WEB_OKTE_ISOT_15m.csv"
 _OTE_CACHE = {}                    # dict[date_iso] → (mtime, df) pre fetch_ote_dayahead
 _PVF_CACHE = {}                    # dict[key] → (timestamp, df) pre fetch_pv_forecast
 _ISOT_HIST_CACHE = {}              # dict[(target_iso, days)] → (timestamp, df)
@@ -29,20 +31,89 @@ _ISOT_HIST_TTL = 600               # _isot_history cache TTL
 _LIVE_FETCH_TTL = 45               # live fetch (OTE+ČEPS+VDT): 45 s
 
 
-def _model():
-    """Načíta PriceModel z disku, pri chybe trénuje nový z out/price_train_2026.csv. Cachuje."""
-    if _MODEL_CACHE["pm"] is not None:
-        return _MODEL_CACHE["pm"]
+def _sk_isot_hourly() -> pd.DataFrame:
+    """SK OKTE ISOT hodinové ceny (z historianu, od 1.1.). Cache podľa mtime súboru.
+    Vracia DataFrame [time, isot_eur]."""
     try:
-        pm = PriceModel.load("out/price_model.joblib")
-        if pm.reg is not None and getattr(pm.reg, "n_features_in_", None) == len(FEATURES):
-            _MODEL_CACHE["pm"] = pm
-            return pm
+        mt = os.path.getmtime(_SK_ISOT_HIST_PATH)
+    except OSError:
+        return pd.DataFrame(columns=["time", "isot_eur"])
+    if _SK_ISOT_CACHE["mtime"] == mt and _SK_ISOT_CACHE["df"] is not None:
+        return _SK_ISOT_CACHE["df"]
+    df = pd.read_csv(_SK_ISOT_HIST_PATH, parse_dates=["time_utc"]).drop_duplicates("time_utc")
+    df = df.rename(columns={"time_utc": "time", "value": "isot_eur"})
+    df["time"] = df["time"].dt.floor("h")
+    h = df.groupby("time", as_index=False)["isot_eur"].mean().sort_values("time")
+    _SK_ISOT_CACHE.update(mtime=mt, df=h)
+    return h
+
+
+def _train_df_for_market(market: str) -> pd.DataFrame:
+    """Tréningová báza pre cenový model podľa trhu (samostatne CZ/SK, od 1.1.):
+      • CZ → out/price_train_2026.csv (OTE/ISOT CZ + počasie).
+      • SK → SK OKTE hodinové ceny + počasie (z CZ price_train ako proxy; cenové lagy = SK)."""
+    if str(market).lower() == "sk":
+        h = _sk_isot_hourly()
+        try:
+            cz = pd.read_csv("out/price_train_2026.csv", parse_dates=["time"])[["time", "gti", "temp", "cloud"]]
+            return h.merge(cz, on="time", how="inner").sort_values("time")
+        except Exception:
+            out = h.copy(); out["gti"] = 0.0; out["temp"] = 15.0; out["cloud"] = 50.0
+            return out.sort_values("time")
+    return pd.read_csv("out/price_train_2026.csv", parse_dates=["time"])
+
+
+def _model(market=None):
+    """Market-aware PriceModel (samostatný model na krajinu — CZ/SK nie sú zameniteľné).
+    SK → out/price_model_sk.joblib (báza OKTE), CZ → out/price_model.joblib (báza OTE).
+    Pri chýbajúcom/nekompatibilnom súbore natrénuje z bázy. Cachuje per trh.
+    Na pm._clip pripne (lo, hi) z tréningových cien (anti-runaway clip pri predikcii)."""
+    key = "sk" if str(market or "").lower() == "sk" else "cz"
+    if _MODEL_CACHE.get(key) is not None:
+        return _MODEL_CACHE[key]
+    path = "out/price_model_sk.joblib" if key == "sk" else "out/price_model.joblib"
+    pm = None
+    try:
+        cand = PriceModel.load(path)
+        if cand.reg is not None and getattr(cand.reg, "n_features_in_", None) == len(FEATURES):
+            pm = cand
     except Exception:
-        pass
-    pm = PriceModel().fit(pd.read_csv("out/price_train_2026.csv", parse_dates=["time"]))
-    _MODEL_CACHE["pm"] = pm
+        pm = None
+    if pm is None:
+        pm = PriceModel().fit(_train_df_for_market(key))
+        try:
+            pm.save(path)
+        except Exception:
+            pass
+    # clip bounds z tréningových cien (1. … 99. percentil ×1.1) — zabráni úteku predikcie
+    try:
+        _y = _train_df_for_market(key)["isot_eur"].dropna()
+        pm._clip = (float(_y.quantile(0.01)), float(_y.quantile(0.99)) * 1.10)
+    except Exception:
+        pm._clip = None
+    _MODEL_CACHE[key] = pm
     return pm
+
+
+def retrain_price_models() -> str:
+    """Pretrénuj + ulož OBA hodinové cenové modely (samostatne na krajinu):
+      • CZ → out/price_model.joblib (báza OTE price_train_2026.csv).
+      • SK → out/price_model_sk.joblib (báza OKTE historian).
+    Vyčistí cache, aby ďalšia predikcia použila čerstvý model. Volá scheduler/CLI."""
+    msgs = []
+    for key, path in (("cz", "out/price_model.joblib"), ("sk", "out/price_model_sk.joblib")):
+        try:
+            df = _train_df_for_market(key)
+            n = int(df["isot_eur"].notna().sum()) if df is not None and len(df) else 0
+            if n < 200:
+                msgs.append(f"{key}: málo dát ({n}h) — preskočené")
+                continue
+            PriceModel().fit(df).save(path)
+            _MODEL_CACHE[key] = None
+            msgs.append(f"{key}: OK ({n}h → {path})")
+        except Exception as e:
+            msgs.append(f"{key}: zlyhal ({e})")
+    return "; ".join(msgs)
 
 
 def _ote_cache_csv(d: dt.date) -> str:
@@ -123,14 +194,24 @@ def _fetch_ote_cached(d: dt.date) -> pd.DataFrame:
         raise
 
 
-def _isot_history(target: dt.date, days: int = 8) -> pd.DataFrame:
-    """Posledných `days` dní hodinových cien ISOT z OTE (pre výpočet lag/rolling príznakov).
-    Cachované per (target, days) na TTL."""
+def _isot_history(target: dt.date, days: int = 8, market=None) -> pd.DataFrame:
+    """Posledných `days` dní hodinových cien ISOT (pre lag/rolling príznaky), market-aware:
+      • SK → SK OKTE historian (rovnaká báza ako SK model).
+      • CZ → OTE day-ahead (pôvodná cesta).
+    Cachované per (target, days, trh) na TTL."""
     import time
-    key = (target.isoformat(), int(days))
+    mk = "sk" if str(market or "").lower() == "sk" else "cz"
+    key = (target.isoformat(), int(days), mk)
     cached = _ISOT_HIST_CACHE.get(key)
     if cached is not None and (time.time() - cached[0]) < _ISOT_HIST_TTL:
         return cached[1]
+    if mk == "sk":
+        h = _sk_isot_hourly()
+        lo = pd.Timestamp(target - dt.timedelta(days=days))
+        hi = pd.Timestamp(target)
+        out = h[(h["time"] >= lo) & (h["time"] < hi)][["time", "isot_eur"]].copy()
+        _ISOT_HIST_CACHE[key] = (time.time(), out)
+        return out
     parts = []
     for k in range(days, 0, -1):
         dd = target - dt.timedelta(days=k)
