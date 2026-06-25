@@ -1038,7 +1038,7 @@ def version_endpoint():
 
 @app.get("/plan_batch", response_class=HTMLResponse)
 def plan_batch_form(from_date: str = None, to_date: str = None, step_min: int = 15,
-                    kind: str = "dentrh"):  # 15-MIN MERGE: default 15-min
+                    kind: str = "plan"):  # 15-min + PREDIKOVANÝ default
     """Samostatná stránka pre hromadné generovanie plánov za rozsah dátumov.
     Voliteľné query params (`from_date`, `to_date`, `step_min`, `kind`) pre-vyplnia formulár —
     napríklad keď príde redirect zo `/simulacia` pri chýbajúcich plánoch."""
@@ -1046,7 +1046,7 @@ def plan_batch_form(from_date: str = None, to_date: str = None, step_min: int = 
     default_from = from_date or (today - dt.timedelta(days=7)).isoformat()
     default_to = to_date or (today + dt.timedelta(days=1)).isoformat()
     sel_step = int(step_min) if int(step_min) in (15, 60) else 15
-    sel_kind = kind if kind in ("plan", "dentrh") else "dentrh"
+    sel_kind = kind if kind in ("plan", "dentrh") else "plan"
     # výpis existujúcich plánov pre prehľad
     existing = ps.list_plans() if ps is not None else []
     by_step = {60: [], 15: []}
@@ -1141,7 +1141,7 @@ hodnôt vo formulári <a href="/">/Plán D-1</a> a <a href="/dentrh">/Denný trh
 
 @app.post("/plan_batch", response_class=HTMLResponse)
 def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
-                step_min: int = Form(default=15), kind: str = Form(default="dentrh"),  # 15-MIN MERGE: default 15-min
+                step_min: int = Form(default=15), kind: str = Form(default="plan"),  # 15-min + PREDIKOVANÝ default
                 # voliteľné: ak pošle main /plan alebo /dentrh form spolu s rozsahom, prepíšeme ui_settings
                 lat: float = Form(default=None), lon: float = Form(default=None),
                 kwp: float = Form(default=None), tilt: float = Form(default=None),
@@ -1186,11 +1186,15 @@ def plan_batch(from_date: str = Form(...), to_date: str = Form(...),
         dates = pd.date_range(from_date, to_date, freq="D")
     except Exception as e:
         return f"<p>Zlý rozsah dátumov: {e}</p>"
-    # 15-MIN MERGE: kind MUSÍ sedieť so step_min (15→dentrh, 60→plan). Formulár má dva
-    # nezávislé dropdowny (krok + kind) → dali sa rozladiť na neplatnú dvojicu (napr.
-    # step=15 + kind=plan → _gen_one_plan vyhodí "nesúlad"). Tu vynútime súlad server-side.
+    # KIND (2026-06-25): 15-min podporuje OBA druhy — "plan" = PREDIKOVANÝ (forecast,
+    # default, funguje aj pre budúcnosť bez reálneho DAM) a "dentrh" = reálny DENNÝ TRH
+    # (vyžaduje publikovaný DAM, inak deň zlyhá). 60-min = len legacy predikovaný "plan".
     step_min = 15 if int(step_min) == 15 else 60
-    kind = "dentrh" if int(step_min) == 15 else "plan"
+    _k = str(kind).lower().strip()
+    if step_min == 60:
+        kind = "plan"
+    else:
+        kind = _k if _k in ("plan", "dentrh") else "plan"
     # ak sú v requeste form polia, prepíšeme ui_settings ešte pred batch
     _overrides = {k: v for k, v in dict(
         lat=lat, lon=lon, kwp=kwp, tilt=tilt, azimuth=azimuth, eff=eff,

@@ -85,5 +85,64 @@ def build_plan_excel(schedule, summary, meta, path):
     s.cell(r+1, 1, f"Vygenerované {dt.datetime.now():%Y-%m-%d %H:%M}").font = Font(italic=True, color="808080")
     s.column_dimensions["A"].width = 24; s.column_dimensions["B"].width = 22
 
+    # ── hárok Hodinové (agregácia 15-min → hodina) ──────────────────────────────
+    # Energia (kWh/MWh) = SÚČET 4 slotov; cena/výkon/SOC = PRIEMER. (Pri už hodinovom
+    # pláne ostáva 1:1.) Aby hodinová tabuľka bola konzistentná s 15-min plánom.
+    try:
+        sdf = schedule.copy()
+        if "hour" in sdf.columns:
+            sdf["_h"] = sdf["hour"].astype(float).apply(lambda x: int(x // 1))
+        else:
+            _per_h = max(1, len(sdf) // 24)
+            sdf["_h"] = [i // _per_h for i in range(len(sdf))]
+        _agg = {"pv_kwh": "sum", "price_eur": "mean", "batt_kw": "mean",
+                "grid_kwh": "sum", "order_mwh": "sum", "curtail_kwh": "sum",
+                "soc_pct": "mean"}
+        _present = {k: v for k, v in _agg.items() if k in sdf.columns}
+        g = sdf.groupby("_h").agg(_present).reset_index().sort_values("_h")
+
+        hsh = wb.create_sheet("Hodinové")
+        hsh["A1"] = f"Plán D-1 – hodinový pohľad – {meta.get('date','')}"
+        hsh["A1"].font = TITLE_FONT
+        hsh["A2"] = ("Energia (FTV, Sieť, Obchod, Orezané) = súčet 15-min slotov; "
+                     "cena/batéria/SOC = priemer.")
+        hsh["A2"].font = Font(italic=True, color="808080")
+        hcols = [("hod", "_h"), ("FTV [kWh]", "pv_kwh"), ("ISOT [€/MWh]", "price_eur"),
+                 ("Batéria [kW] (+vyb/−nab)", "batt_kw"), ("Sieť [kWh] (+pred/−nák)", "grid_kwh"),
+                 ("Obchod [MWh]", "order_mwh"), ("Orezané [kWh]", "curtail_kwh"), ("SOC [%]", "soc_pct")]
+        for j, (label, key) in enumerate(hcols, start=1):
+            c = hsh.cell(hr, j, label); c.fill = HDR_FILL; c.font = HDR_FONT
+            c.alignment = Alignment(horizontal="center", wrap_text=True)
+        for i, (_, row) in enumerate(g.iterrows(), start=hr+1):
+            for j, (_, key) in enumerate(hcols, start=1):
+                if key not in row:
+                    continue
+                v = row[key]
+                cell = hsh.cell(i, j, int(v) if key == "_h" else float(v))
+                if key in ("pv_kwh", "price_eur", "batt_kw", "grid_kwh", "curtail_kwh"):
+                    cell.number_format = "0.0"
+                if key == "order_mwh":
+                    cell.number_format = "0.000"
+                if key == "soc_pct":
+                    cell.number_format = "0"
+        hlast = hr + len(g)
+        for j in range(1, len(hcols)+1):
+            hsh.column_dimensions[get_column_letter(j)].width = 15 if j > 1 else 6
+        # graf ako na hárku Plán
+        hch = LineChart(); hch.title = "Hodinovo: cena, batéria a SOC"
+        hch.height, hch.width = 8, 20
+        hch.y_axis.title = "€/MWh, kW"
+        hch.add_data(Reference(hsh, min_col=3, max_col=4, min_row=hr, max_row=hlast),
+                     titles_from_data=True)
+        hch.set_categories(Reference(hsh, min_col=1, min_row=hr+1, max_row=hlast))
+        hsoc = LineChart()
+        hsoc.add_data(Reference(hsh, min_col=8, max_col=8, min_row=hr, max_row=hlast),
+                      titles_from_data=True)
+        hsoc.y_axis.axId = 250; hsoc.y_axis.title = "SOC %"; hsoc.y_axis.crosses = "max"
+        hch += hsoc
+        hsh.add_chart(hch, f"A{hlast+3}")
+    except Exception as _e_h:
+        print(f"[report] hodinový hárok zlyhal: {_e_h}")
+
     wb.save(path)
     return path
