@@ -1909,8 +1909,13 @@ def _customer_label_for_profile(profile_name: str) -> str:
 
 
 def _collect_month_grid_kwh(profile: str, year: int, month: int):
-    """Za každý deň mesiaca vráti (date_iso, [96 hodnôt]) — hodnota = −grid_kwh z 15-min plánu
-    (dodávka do siete = záporné, odber = kladné), kWh/15-min slot. Chýbajúci plán → nuly."""
+    """Za každý deň mesiaca vráti (date_iso, [96 hodnôt]) — hodnota = NOMINÁCIA (to čo sa plánuje/
+    obchoduje), kWh/15-min slot. Dodávka do siete = záporné, odber = kladné.
+
+    Zdroj = `order_mwh` (×1000) zo 15-min plánu — to je DAM nominácia, ktorá rešpektuje nastavenia
+    plánu (trade_batt/trade_load/trade_ftv): napr. Coop/TBB nenominujú celú spotrebu, len batériu.
+    `grid_kwh` (celý netto na prahu vrátane neobchodovaného loadu) sa NEpoužíva. Fallback na
+    −grid_kwh len ak order_mwh v pláne chýba (staré plány). Chýbajúci plán → nuly."""
     import calendar as _cal
     ndays = _cal.monthrange(year, month)[1]
     out = []
@@ -1919,9 +1924,14 @@ def _collect_month_grid_kwh(profile: str, year: int, month: int):
         vals = [0.0] * 96
         try:
             p = ps.load_plan_safe(d_iso, 15, "dentrh") if ps is not None else None
-            g = (p or {}).get("schedule", {}).get("grid_kwh") if p else None
-            if g and len(g) >= 96:
-                vals = [(-float(g[i]) if g[i] is not None else 0.0) for i in range(96)]
+            sch = (p or {}).get("schedule", {}) if p else {}
+            om = sch.get("order_mwh")
+            if om and len(om) >= 96:
+                vals = [(-float(om[i]) * 1000.0 if om[i] is not None else 0.0) for i in range(96)]
+            else:
+                g = sch.get("grid_kwh")
+                if g and len(g) >= 96:
+                    vals = [(-float(g[i]) if g[i] is not None else 0.0) for i in range(96)]
         except Exception:
             pass
         out.append((d_iso, vals))
