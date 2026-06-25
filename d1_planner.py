@@ -121,10 +121,53 @@ def _build_pv_kwh(profile_params: Dict[str, Any], date: dt.date,
     return np.zeros(slots, dtype=float)
 
 
+def _forecast_prices_15m(pp: Dict[str, Any], date: dt.date) -> np.ndarray:
+    """96 × €/MWh PREDIKOVANÝCH cien pre daný deň — IDENTICKÝ forecast ako _gen_one_plan
+    (app.py): hodinová ISOT predikcia (core.caches._model na _isot_history + počasie) →
+    15-min tvar (price_model_15m). Poistka: flat upsample. NEČÍTA reálny DAM.
+    Profilovo parametrizované (žiadna väzba na aktívny profil ani cyklický import app)."""
+    from core.caches import _model, _isot_history, _fetch_pv_cached
+    d = date
+    price_scale = float(pp.get("price_scale", 1.0) or 1.0)
+    kwp = float(pp.get("kwp", 0) or 0)
+    if kwp > 0.01:
+        wx = _fetch_pv_cached(float(pp.get("lat", 48.7)), float(pp.get("lon", 19.1)), kwp,
+                              float(pp.get("tilt", 30.0)), float(pp.get("azimuth", 180.0)),
+                              float(pp.get("eff", 0.9)), start=d, end=d)
+        wx = wx.copy(); wx["time"] = pd.to_datetime(wx["time"]); wx = wx[wx.time.dt.date == d].copy()
+        if wx.empty:
+            raise RuntimeError(f"PV/počasie forecast nedostupné pre {d}")
+    else:
+        wx = pd.DataFrame({"time": pd.date_range(pd.Timestamp(d), periods=24, freq="h"),
+                           "gti": np.zeros(24), "temp": np.full(24, 15.0), "cloud": np.full(24, 50.0)})
+    _wx2 = wx[["time", "gti", "temp", "cloud"]].copy(); _wx2["isot_eur"] = np.nan
+    hist = _isot_history(d, days=8).copy()
+    for _c in ["gti", "temp", "cloud"]:
+        hist[_c] = np.nan
+    ctx = pd.concat([hist[["time", "isot_eur", "gti", "temp", "cloud"]], _wx2], ignore_index=True)
+    pred = _model().predict(ctx)
+    dayp = pred[pred.time.dt.date == d].sort_values("time")
+    ph = (np.asarray(dayp.pred_isot.values, float) * price_scale)[:24]
+    if len(ph) < 24:
+        raise RuntimeError(f"forecast predikcia neúplná pre {d} ({len(ph)}/24)")
+    try:
+        from price_model_15m import load_cached as _pm15_load
+        _m15 = _pm15_load("out/price_model_15m.joblib")
+        if _m15 is not None:
+            p96 = np.asarray(_m15.predict_shape(ph, d, _wx2[["time", "gti", "temp", "cloud"]]), float)[:96]
+            if len(p96) >= 96:
+                print(f"[15-MIN] {d.isoformat()}: PREDIKOVANÝ plán (autoplan) → 15-min MODEL na ISOT predikcii")
+                return p96
+    except Exception as _e15:
+        print(f"[15-MIN] {d.isoformat()}: 15-min model zlyhal ({_e15}) → flat upsample")
+    return np.repeat(ph, 4)
+
+
 def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
                      profile: Optional[str] = None,
                      save_to_store: bool = True,
                      dt_h: float = DEFAULT_DT,
+                     price_kind: str = "real",
                      max_export_kwh_day: Optional[float] = None,
                      max_import_kwh_day: Optional[float] = None) -> Dict[str, Any]:
     """Spočíta D-1 plán pre konkrétny deň + trh + profile.
@@ -183,56 +226,66 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
     else:
         max_import_kwh_day = _opt_float(max_import_kwh_day)
 
-    slots = int(round(24 / dt_h))   # 96 pre 15-min, 24 pre hodinový
-
-    # 2. DAM ceny pre daný deň + market
-    try:
-        df_dam = _mk.fetch_dam(date, market=m)
-    except Exception as e:
-        return {"ok": False,
-                "error": f"DAM fetch zlyhal pre {m} {date.isoformat()}: {e}",
-                "date": date.isoformat(), "market": m, "profile": prof}
-
-    if df_dam is None or df_dam.empty:
-        return {"ok": False,
-                "error": f"DAM pre {m} {date.isoformat()} je prázdny",
-                "date": date.isoformat(), "market": m, "profile": prof}
-
-    # Načítame ceny do array (96 alebo 24 podľa dt_h)
-    # df_dam má 'period' (1-based) a 'cena_EUR'. Pre 15-min je 96 slotov.
-    if len(df_dam) >= slots:
-        # 15-min ceny — jednoducho zoberieme prvých `slots`
-        prices = df_dam.sort_values("period")["cena_EUR"].values[:slots]
-    elif len(df_dam) == 24 and slots == 96:
-        # Hodinové ceny → 15-min. PRIORITA: dedikovaný 15-min MODEL (vnútrohodinový tvar,
-        # OOS +24 % vs plochá kópia) — rovnaká logika ako _gen_one_plan (app.py).
-        # Poistka: plochý upsample (cena rovnaká v rámci hodiny) ak model chýba/zlyhá.
-        _hourly = df_dam.sort_values("period")["cena_EUR"].values
-        prices = None
+    # 2. Ceny: PREDIKOVANÝ plán (price_kind="forecast") = VŽDY forecast (ISOT + 15-min model,
+    #    15-min, nečíta reálny DAM); DENNÝ TRH (price_kind="real") = reálny DAM (fetch_dam).
+    _forecast = (str(price_kind).lower() == "forecast")
+    if _forecast:
+        dt_h = 0.25
+        slots = 96
         try:
-            from price_model_15m import load_cached as _pm15_load
-            _m15 = _pm15_load("out/price_model_15m.joblib")
-            if _m15 is not None:
-                prices = np.asarray(_m15.predict_shape(_hourly, date, None), dtype=float)[:96]
-                if len(prices) >= 96:
-                    print(f"[15-MIN] {date.isoformat()}: hodinová DAM → 15-min MODEL (tvar)")
-                else:
-                    prices = None
-        except Exception as _e15:
-            print(f"[15-MIN] {date.isoformat()}: 15-min model zlyhal ({_e15}) → flat upsample")
-        if prices is None:
-            prices = np.repeat(_hourly, 4)
-            print(f"[15-MIN] {date.isoformat()}: hodinová DAM → flat upsample (poistka)")
+            prices = _forecast_prices_15m(pp, date)
+        except Exception as e:
+            return {"ok": False,
+                    "error": f"forecast cien zlyhal pre {date.isoformat()}: {e}",
+                    "date": date.isoformat(), "market": m, "profile": prof}
     else:
-        # Iný formát — preindex podľa period
-        prices = np.zeros(slots, dtype=float)
-        for _, r in df_dam.iterrows():
+        slots = int(round(24 / dt_h))   # 96 pre 15-min, 24 pre hodinový
+        try:
+            df_dam = _mk.fetch_dam(date, market=m)
+        except Exception as e:
+            return {"ok": False,
+                    "error": f"DAM fetch zlyhal pre {m} {date.isoformat()}: {e}",
+                    "date": date.isoformat(), "market": m, "profile": prof}
+
+        if df_dam is None or df_dam.empty:
+            return {"ok": False,
+                    "error": f"DAM pre {m} {date.isoformat()} je prázdny "
+                             f"(reálny denný trh ešte neexistuje)",
+                    "date": date.isoformat(), "market": m, "profile": prof}
+
+        # Načítame ceny do array (96 alebo 24 podľa dt_h)
+        # df_dam má 'period' (1-based) a 'cena_EUR'. Pre 15-min je 96 slotov.
+        if len(df_dam) >= slots:
+            # 15-min ceny — jednoducho zoberieme prvých `slots`
+            prices = df_dam.sort_values("period")["cena_EUR"].values[:slots]
+        elif len(df_dam) == 24 and slots == 96:
+            # Hodinové reálne ceny → 15-min: dedikovaný 15-min MODEL (tvar), poistka flat.
+            _hourly = df_dam.sort_values("period")["cena_EUR"].values
+            prices = None
             try:
-                p = int(r["period"]) - 1
-                if 0 <= p < slots:
-                    prices[p] = float(r["cena_EUR"])
-            except (ValueError, KeyError):
-                pass
+                from price_model_15m import load_cached as _pm15_load
+                _m15 = _pm15_load("out/price_model_15m.joblib")
+                if _m15 is not None:
+                    prices = np.asarray(_m15.predict_shape(_hourly, date, None), dtype=float)[:96]
+                    if len(prices) >= 96:
+                        print(f"[15-MIN] {date.isoformat()}: hodinová DAM → 15-min MODEL (tvar)")
+                    else:
+                        prices = None
+            except Exception as _e15:
+                print(f"[15-MIN] {date.isoformat()}: 15-min model zlyhal ({_e15}) → flat upsample")
+            if prices is None:
+                prices = np.repeat(_hourly, 4)
+                print(f"[15-MIN] {date.isoformat()}: hodinová DAM → flat upsample (poistka)")
+        else:
+            # Iný formát — preindex podľa period
+            prices = np.zeros(slots, dtype=float)
+            for _, r in df_dam.iterrows():
+                try:
+                    p = int(r["period"]) - 1
+                    if 0 <= p < slots:
+                        prices[p] = float(r["cena_EUR"])
+                except (ValueError, KeyError):
+                    pass
 
     # 3. PVF predikcia
     pv_kwh = _build_pv_kwh(pp, date, slots=slots)
@@ -318,7 +371,8 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
             # Ukladáme ako kind='dentrh' (15-min) — jednotný formát so stránkou /dentrh.
             # Tým VDT live advisor + /vdt/d1 viewer čítajú TEN ISTÝ plán cez cascade
             # (dentrh → plan). Scheduler autoplan_d1 ho cez tento path tiež produkuje.
-            save_kind = "dentrh" if step_min == 15 else "plan"
+            # PREDIKOVANÝ plán (forecast) = kind "plan"; reálny denný trh 15-min = "dentrh".
+            save_kind = "plan" if _forecast else ("dentrh" if step_min == 15 else "plan")
             _ps.save_plan(date.isoformat(), step_min, save_kind,
                           params=params,
                           schedule=sched_dict,

@@ -2138,7 +2138,10 @@ def plan_view(date: str, step: int = 60, kind: str = "plan"):
 <div><h2>Súhrn (ekonomika)</h2><table class="tbl-compact">{summary_rows or '<tr><td>(prázdne)</td></tr>'}</table></div>
 <div><h2>Parametre plánu</h2><table class="tbl-compact">{param_rows or '<tr><td>(prázdne)</td></tr>'}</table></div>
 </div>
-<p style="margin-top:14px"><a href="/plan_batch">← Späť na batch</a> &nbsp;|&nbsp; <a href="/livesim">Živá simulácia</a></p>
+<p style="margin-top:14px">
+<a class="btn" href="/download?date={date}&step={step}&kind={kind}">⬇ Stiahnuť Excel (plán D-1)</a>
+&nbsp;|&nbsp; <a href="/plan_batch">← Späť na batch</a>
+&nbsp;|&nbsp; <a href="/livesim">Živá simulácia</a></p>
 """
     return render_legacy_body(None, f"Plán {date} ({step}m, {kind})", body)
 
@@ -16646,6 +16649,7 @@ a{{color:#1F4E78}}</style></head><body>
 <h1 style="color:#2E7D32">✓ Plán D-1 vygenerovaný (15-min, predikovaný)</h1>
 <div class="ok">Plán pre <b>{date}</b> bol vytvorený ako <b>15-min predikovaný</b> (ceny z forecastu).
 {mult_msg if mult_msg else ""}</div>
+<p><a class="btn" href="/download?date={date}&step=15&kind=plan">⬇ Stiahnuť Excel (plán D-1)</a></p>
 <p>Otváram <a href="/plan_view?date={date}&step=15&kind=plan">zobrazenie plánu</a>…</p>
 </body></html>""")
     try:
@@ -18463,11 +18467,40 @@ mk('c3',L,[{label:'aFRR €/MWh',data:AFRRV,borderColor:'#7030A0',backgroundColo
 
 
 @app.get("/download")
-def download(date: str):
-    path = f"out/plan_{date}.xlsx"
-    if not os.path.exists(path):
-        return HTMLResponse(f"Súbor pre {date} neexistuje, vygeneruj plán znova.", status_code=404)
-    return FileResponse(path, filename=f"plan_D1_{date}.xlsx",
+def download(date: str, step: int = 15, kind: str = None):
+    """Per-deň Excel plánu (ako pôvodný Plán D-1) — generuje sa z plan_store ON-DEMAND.
+    Uprednostní PREDIKOVANÝ plán (kind=plan), fallback reálny dentrh, potom 60-min plan.
+    Stĺpce: hod, FTV, ISOT/cena, Batéria kW, Sieť kWh, Obchod MWh, Orezané, SOC %."""
+    if ps is None:
+        return HTMLResponse("plan_store nedostupný.", status_code=500)
+    plan = None
+    if kind:
+        plan = ps.load_plan_safe(date, int(step), kind)
+    if plan is None:
+        plan = (ps.load_plan_safe(date, 15, "plan")
+                or ps.load_plan_safe(date, 15, "dentrh")
+                or ps.load_plan_safe(date, 60, "plan"))
+    if plan is None:
+        return HTMLResponse(f"Plán pre {date} neexistuje, vygeneruj ho znova "
+                            f"cez <a href='/'>/Plán D-1</a>.", status_code=404)
+    sched = plan.get("schedule", {}) or {}
+    df = pd.DataFrame(sched)
+    n = len(df)
+    _stp = int(plan.get("step_min", step) or step)
+    if "hour" not in df.columns:
+        df["hour"] = [round(i * _stp / 60.0, 3) for i in range(n)]
+    for _c in ("pv_kwh", "price_eur", "batt_kw", "grid_kwh", "order_mwh", "curtail_kwh", "soc_pct"):
+        if _c not in df.columns:
+            df[_c] = 0.0
+    meta = dict(plan.get("params", {}) or {}); meta.setdefault("date", date)
+    _pk = plan.get("kind", kind or "plan")
+    try:
+        from report import build_plan_excel
+        path = f"out/plan_{date}_{_stp}_{_pk}.xlsx"
+        build_plan_excel(df, plan.get("summary", {}) or {}, meta, path)
+    except Exception as _e_xl:
+        return HTMLResponse(f"Export zlyhal: {_e_xl}", status_code=500)
+    return FileResponse(path, filename=f"plan_D1_{date}_{_stp}min_{_pk}.xlsx",
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 

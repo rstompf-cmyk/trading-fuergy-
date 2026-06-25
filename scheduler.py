@@ -648,6 +648,10 @@ def _run_autoplan(only_kind: Optional[str], job_id: str):
         _log(job_id, f"d1_planner/market import zlyhal: {e}", level="warn")
         return
     active_market = _mk.get_active_market()
+    # PRICE-SOURCE (2026-06-25): only_kind="plan" = PREDIKOVANÝ → forecast (ISOT + 15-min
+    # model, nečíta reálny DAM; funguje aj keď DAM ešte nie je publikovaný). only_kind=
+    # "dentrh" = DENNÝ TRH → reálny DAM (fetch_dam; bez reálneho DAM compute_d1_plan zlyhá).
+    _price_kind = "real" if only_kind == "dentrh" else "forecast"
     try:
         import plan_store as _ps_chk
     except Exception:
@@ -660,13 +664,15 @@ def _run_autoplan(only_kind: Optional[str], job_id: str):
             # Existujúci plán (obchod) sa NIKDY automaticky neprepíše — len explicitným
             # /plan_batch / /plan / /dentrh.
             if _ps_chk is not None and (
-                    _ps_chk.has_plan(_t_iso, 15, "dentrh", profile=prof)
+                    _ps_chk.has_plan(_t_iso, 15, "plan", profile=prof)
+                    or _ps_chk.has_plan(_t_iso, 15, "dentrh", profile=prof)
                     or _ps_chk.has_plan(_t_iso, 60, "plan", profile=prof)):
                 _log(job_id, f"  {prof}: plán pre {_t_iso} už existuje — preskakujem (immutable)")
                 skip_count += 1
                 continue
             res = _d1p.compute_d1_plan(tomorrow, market=active_market,
-                                          profile=prof, save_to_store=True)
+                                          profile=prof, save_to_store=True,
+                                          price_kind=_price_kind)
             if res.get("ok"):
                 zisk = res.get("summary", {}).get("ZISK_EUR", 0)
                 _log(job_id, f"  {prof}: OK · ZISK {zisk:+.2f} €")
