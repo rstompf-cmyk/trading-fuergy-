@@ -6634,7 +6634,7 @@ def livesim_table_xlsx(case: str = "plan_d1", day: str = None):
 @app.get("/livesim", response_class=HTMLResponse)
 def livesim_get(case: str = None, start: str = None, view: str = None, curtail: str = None,
                  use_rt: str = None, realio_overlay: str = None, profile: str = None,
-                 table_offset: int = 0, table_rows: int = 20):
+                 table_offset: int = 0, table_rows: int = 20, embed: str = ""):
     """Živá simulácia. Voliteľné parametre:
       • realio_overlay=1 — nahradí sim FTV/load/SOC/batt reálnym meraním z realio CSV
         (pre minúty kde máme záznam). Plány zostávajú simulované. Slúži pre tab
@@ -6713,7 +6713,7 @@ label{font-size:14px} input,select{padding:5px 8px;border:1px solid #ccc;border-
 table{border-collapse:collapse;width:100%;font-size:12px} th,td{border:1px solid #e3e3e3;padding:3px 7px;text-align:right}
 th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-height:300px;overflow:auto;border-radius:8px}</style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script></head><body>
-<h1>\U0001F7E2 Živá simulácia</h1>""" + _nav("/livesim"))
+<h1>\U0001F7E2 Živá simulácia</h1>""" + ("" if str(embed) == "1" else _nav("/livesim")))
         opts = "".join(f'<option value="{k}"{" selected" if k==case else ""}>{lbl}</option>'
                         for k, (lbl, _bc, _st) in MODES.items())
         cuopts = (f'<option value="1"{" selected" if cur_curtail else ""}>povolené</option>'
@@ -7417,13 +7417,34 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     _ccfg_ov = _cdc_ovm.load_system_config(_cdc_ov.get("country"))
                     _ccfg_ov["enabled"] = True
                     _ccfg_ov["timeout_s"] = min(int(_ccfg_ov.get("timeout_s", 15) or 15), 6)
-                    _hist_ov = _cdc_ovm.fetch_history_range(
-                        _cdc_ov.get("cdc_prefix"),
-                        _dt_ov.datetime.now() - _dt_ov.timedelta(days=2),
-                        _dt_ov.datetime.now(), step=60, cfg=_ccfg_ov,
-                        keys=["load_power_kw", "load_power_kw_15m", "ftv_power_kw", "ftv_power_kw_15m", "batt_power_kw", "batt_soc_pct"])
-                    rdf = (_hist_ov.reset_index()
-                           if _hist_ov is not None and not _hist_ov.empty else pd.DataFrame())
+                    _pfx_ov = _cdc_ov.get("cdc_prefix")
+                    _ov_keys = ["load_power_kw", "load_power_kw_15m", "ftv_power_kw",
+                                "ftv_power_kw_15m", "batt_power_kw", "batt_soc_pct"]
+                    # 1) lokálny archív (staré dni — /realio „Stiahnuť históriu" ho plní)
+                    try:
+                        _arch_ov = _cdc_ovm.read_history_csv(_pfx_ov, _cdc_ov.get("country"))
+                    except Exception:
+                        _arch_ov = pd.DataFrame()
+                    # 2) live posledné 2 dni (dnešok + včera, aj keď ešte nie sú v archíve)
+                    try:
+                        _hist_ov = _cdc_ovm.fetch_history_range(
+                            _pfx_ov,
+                            _dt_ov.datetime.now() - _dt_ov.timedelta(days=2),
+                            _dt_ov.datetime.now(), step=60, cfg=_ccfg_ov, keys=_ov_keys)
+                        _live_ov = (_hist_ov.reset_index()
+                                    if _hist_ov is not None and not _hist_ov.empty else pd.DataFrame())
+                    except Exception:
+                        _live_ov = pd.DataFrame()
+                    _parts_ov = [p for p in (_arch_ov, _live_ov)
+                                 if p is not None and not p.empty and "time" in p.columns]
+                    if _parts_ov:
+                        rdf = pd.concat(_parts_ov, ignore_index=True)
+                        rdf["time"] = pd.to_datetime(rdf["time"], errors="coerce")
+                        rdf = (rdf.dropna(subset=["time"])
+                                  .drop_duplicates(subset=["time"], keep="last")
+                                  .sort_values("time"))
+                    else:
+                        rdf = pd.DataFrame()
                 else:
                     import realio as _rio
                     rdf = _rio.read_recent(n_minutes=1440 * 2)  # 2 dni
@@ -8781,15 +8802,32 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"Pre dokončené dni reálna; pre dnešok provizórna (čo už ČEPS publikoval; tam kde ešte nie, krivka chýba).</p>")
         # — Plán a realita výkonu: nominácia + výkon na prahu (FTV+batéria) + výsledná odchýlka (1-min aj 15-min) —
         if realio_overlay:
-            _thr_desc = ("<b>🔴 Sieť 1-min</b> = ELM1_Aggregated_C_Power_1m "
-                          "(Bender 1-min priemer); <b>15-min</b> = ELM1_Aggregated_C_Power_15m "
-                          "(Bender 15-min priemer — fakturačné okno). "
-                          "<b>Znamienko otočené pre porovnanie s Plán Obchodu</b>: "
-                          "<u>kladné = export do grid</u> (zhoda s plánom), "
-                          "<u>záporné = import z grid</u>. "
-                          "(Vo Vizualizácii / KPI dlaždici je raw konvencia: kladné=import.) ")
-            _thr1_lbl = "🔴 Sieť 1-min (ELM1 1m, otočené pre porovnanie)"
-            _thr15_lbl = "🟢 Sieť 15-min (ELM1 15m — fakturačné okno)"
+            # Zdroj merania na prahu: CDC (prefix_I_EL1_Power_1m/15m) ak je profil CDC batéria,
+            # inak Bender (ELM1_Aggregated). Legenda dynamická — nech sedí so skutočným zdrojom.
+            _cdc_leg = None
+            try:
+                _cdc_leg = _cdc_battery_for_profile(_ps_ov.resolve_profile(profile))
+            except Exception:
+                _cdc_leg = None
+            if _cdc_leg and _cdc_leg.get("cdc_prefix"):
+                _pfx_leg = _cdc_leg["cdc_prefix"]
+                _thr_desc = (f"<b>🔴 Sieť 1-min</b> = {_pfx_leg}_I_EL1_Power_1m "
+                              f"(CDC 1-min, meranie na prahu); <b>15-min</b> = {_pfx_leg}_I_EL1_Power_15m "
+                              f"(CDC 15-min — fakturačné okno). "
+                              f"<b>Znamienko otočené pre porovnanie s Plán Obchodu</b>: "
+                              f"<u>kladné = export do grid</u>, <u>záporné = import z grid</u>.")
+                _thr1_lbl = "🔴 Sieť 1-min (CDC EL1 1m, otočené pre porovnanie)"
+                _thr15_lbl = "🟢 Sieť 15-min (CDC EL1 15m — fakturačné okno)"
+            else:
+                _thr_desc = ("<b>🔴 Sieť 1-min</b> = ELM1_Aggregated_C_Power_1m "
+                              "(Bender 1-min priemer); <b>15-min</b> = ELM1_Aggregated_C_Power_15m "
+                              "(Bender 15-min priemer — fakturačné okno). "
+                              "<b>Znamienko otočené pre porovnanie s Plán Obchodu</b>: "
+                              "<u>kladné = export do grid</u> (zhoda s plánom), "
+                              "<u>záporné = import z grid</u>. "
+                              "(Vo Vizualizácii / KPI dlaždici je raw konvencia: kladné=import.) ")
+                _thr1_lbl = "🔴 Sieť 1-min (ELM1 1m, otočené pre porovnanie)"
+                _thr15_lbl = "🟢 Sieť 15-min (ELM1 15m — fakturačné okno)"
             _thr1_color = "#C62828"
             _thr1_width = 2.0
         else:
@@ -10313,6 +10351,22 @@ def _realio_page(msg: str = "", msg_kind: str = "info",
     tab='riadenie'     → Reálne riadenie — embedded /livesim s realio overlay
     """
     _custs = _realio_customers()
+    # Odvodi zákazníka/batériu z AKTÍVNEHO profilu (napr. Coop_Krupina-r), ak nebol
+    # explicitne zvolený — inak by ostal natvrdo default (Trakany) pri inom profile.
+    if not cust:
+        try:
+            from core.profile_resolver import get_active as _ga_realio
+            _act_realio = profile or _ga_realio()
+            if _act_realio:
+                # mapuj profil → CDC batéria (meno batérie ≠ meno profilu, napr.
+                # profil 'Coop_Kripina-r' → batéria 'COOP Krupina')
+                _bat_realio = _cdc_battery_for_profile(_act_realio)
+                if _bat_realio and _bat_realio.get("name") in _custs:
+                    cust = _bat_realio["name"]
+                elif _act_realio in _custs:
+                    cust = _act_realio
+        except Exception:
+            pass
     if cust not in _custs:
         cust = _custs[0]
     if tab == "vizualizacia":
@@ -10350,7 +10404,7 @@ def _realio_riadenie_page(msg: str = "", msg_kind: str = "info",
                      '(plán a parametre sa berú z profilu).</div>')
         else:
             inner = (f'<div style="padding:10px 0">'
-                     f'<iframe src="/livesim?profile={_prof_name}" '
+                     f'<iframe src="/livesim?profile={_prof_name}&embed=1" '
                      f'style="width:100%;height:2600px;border:1px solid #e5e5e5;border-radius:8px"></iframe>'
                      f'</div>')
         return (f'<!doctype html><html><head><meta charset="utf-8">'
@@ -10461,7 +10515,7 @@ def _realio_riadenie_page(msg: str = "", msg_kind: str = "info",
 
     # iframe src — propaguj profile cez query
     from urllib.parse import urlencode
-    iframe_qs = urlencode({"realio_overlay": "1", "profile": selected_profile})
+    iframe_qs = urlencode({"realio_overlay": "1", "profile": selected_profile, "embed": "1"})
     iframe_src = f"/livesim?{iframe_qs}"
 
     # Hlavný obsah — buď iframe (selected je real) alebo warning
@@ -10616,7 +10670,7 @@ nechcene nepustil simulačné testy na živú batériu).</p>
 </div>
 </div>
 <details style="margin-top:14px"><summary style="cursor:pointer;color:#666;font-size:13px">Náhľad simulácie (read-only, nedá sa použiť na reálne riadenie)</summary>
-<iframe class="livesim" src="/livesim?profile={sel_lbl}" title="Živá simulácia — read-only náhľad"></iframe>
+<iframe class="livesim" src="/livesim?profile={sel_lbl}&embed=1" title="Živá simulácia — read-only náhľad"></iframe>
 </details>
 """
 
@@ -15202,7 +15256,7 @@ def vdt_probe_endpoint():
 
 
 @app.get("/realio", response_class=HTMLResponse)
-def realio_get(tab: str = "vizualizacia", cust: str = "Trakany", profile: str = ""):
+def realio_get(tab: str = "vizualizacia", cust: str = "", profile: str = ""):
     """Default landing → Vizualizácia dashboard.
     ?tab=nastavenie → config UI.
     ?tab=riadenie  → Reálne riadenie (embed /livesim s realio overlay)."""
@@ -15472,6 +15526,26 @@ def realio_backfill_range(from_date: str = Form(...), to_date: str = Form(...),
     except (ValueError, TypeError) as e:
         return _realio_page(f"⚠ Neplatný formát dátumu: {e}", "err", tab="riadenie")
     ow_flag = (str(overwrite) == "1")
+    # CDC-AWARE: ak je aktívny profil CDC batéria → archivuj MERANIE z CDC servera do
+    # lokálneho CSV (od dátumu štartu, bez 2-dňového stropu). Plán sa NEarchivuje.
+    try:
+        from core.profile_resolver import get_active as _ga_bf
+        _cdc_bf = _cdc_battery_for_profile(_ga_bf())
+    except Exception:
+        _cdc_bf = None
+    if _cdc_bf and _cdc_bf.get("cdc_prefix"):
+        try:
+            import cdc as _cdc_bfm
+            res = _cdc_bfm.backfill_history_to_csv(
+                _cdc_bf["cdc_prefix"], from_dt, to_dt,
+                market=_cdc_bf.get("country"), overwrite=ow_flag)
+        except Exception as e:
+            return _realio_page(f"⚠ CDC archív zlyhal: {e}", "err", tab="riadenie")
+        if res.get("ok"):
+            return _realio_page(
+                f"✓ CDC archív {_cdc_bf['cdc_prefix']}: pridaných <b>{res.get('rows_added',0)}</b> "
+                f"riadkov (spolu {res.get('rows_total',0)}) za {from_date}…{to_date}", "ok", tab="riadenie")
+        return _realio_page(f"⚠ {res.get('msg','CDC archív neprešiel')}", "err", tab="riadenie")
     try:
         res = _rio.backfill_range_to_csv(from_dt, to_dt, max_days=2.0, overwrite=ow_flag)
     except Exception as e:

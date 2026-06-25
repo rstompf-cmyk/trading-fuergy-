@@ -337,6 +337,83 @@ def fetch_history_range(prefix: str, from_dt: dt.datetime, to_dt: dt.datetime,
     return df
 
 
+# ─── Lokálny archív histórie (LEN meranie, NIE plán) ─────────────────────────
+# Default merané kľúče čo archivujeme + číta livesim overlay (load/ftv/batt/soc 1m+15m).
+HIST_KEYS = ["load_power_kw", "load_power_kw_15m", "ftv_power_kw", "ftv_power_kw_15m",
+             "batt_power_kw", "batt_soc_pct"]
+
+
+def hist_csv_path(prefix: str, market: Optional[str] = None) -> str:
+    """Cesta k lokálnemu archívu CDC merania pre danú batériu (per prefix).
+    Vedľa cdc_system.json: out/<market>/cdc_hist_<prefix>.csv."""
+    import re as _re
+    safe = _re.sub(r"[^A-Za-z0-9._-]", "_", str(prefix or "batt"))
+    d = os.path.dirname(_config_path(market))
+    return os.path.join(d, f"cdc_hist_{safe}.csv")
+
+
+def backfill_history_to_csv(prefix: str, from_dt: "dt.datetime", to_dt: "dt.datetime",
+                            market: Optional[str] = None, cfg: Optional[Dict[str, Any]] = None,
+                            keys: Optional[list] = None, chunk_days: int = 1,
+                            overwrite: bool = False) -> Dict[str, Any]:
+    """Stiahne CDC MERANIE (load/ftv/batt/soc) za rozsah po dňoch a appendne do lokálneho
+    CSV archívu (dedup podľa času). Plán sa NEarchivuje — ten ostáva z lokálneho generátora.
+    Vracia {ok, rows_added, rows_total, path}."""
+    if pd is None:
+        return {"ok": False, "msg": "pandas nedostupné", "rows_added": 0}
+    cfg = cfg or load_system_config(market)
+    cfg = dict(cfg); cfg["enabled"] = True
+    keys = keys or HIST_KEYS
+    path = hist_csv_path(prefix, market)
+    frames = []
+    cur = from_dt
+    while cur < to_dt:
+        nxt = min(cur + dt.timedelta(days=int(chunk_days)), to_dt)
+        try:
+            df = fetch_history_range(prefix, cur, nxt, cfg=cfg, keys=keys)
+            if df is not None and not df.empty:
+                frames.append(df)
+        except Exception as e:
+            print(f"[cdc.backfill_history_to_csv] {cur}..{nxt}: {e}")
+        cur = nxt
+    if not frames:
+        return {"ok": False, "msg": "CDC vrátil 0 záznamov pre rozsah", "rows_added": 0, "path": path}
+    new = pd.concat(frames)
+    new = new[~new.index.duplicated(keep="last")].sort_index()
+    rows_before = 0
+    if os.path.exists(path) and not overwrite:
+        try:
+            old = pd.read_csv(path, parse_dates=["time"]).set_index("time")
+            rows_before = len(old)
+            merged = pd.concat([old, new])
+            merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        except Exception:
+            merged = new
+    else:
+        merged = new
+    merged.index.name = "time"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except Exception:
+        pass
+    merged.reset_index().to_csv(path, index=False)
+    return {"ok": True, "rows_added": max(0, len(merged) - rows_before),
+            "rows_total": len(merged), "path": path}
+
+
+def read_history_csv(prefix: str, market: Optional[str] = None):
+    """Načíta lokálny archív CDC merania (DataFrame so stĺpcom 'time') alebo prázdny."""
+    if pd is None:
+        return None
+    path = hist_csv_path(prefix, market)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, parse_dates=["time"])
+    except Exception:
+        return pd.DataFrame()
+
+
 # ─── Verejné WRITE API ───────────────────────────────────────────────────────
 def _minute_aligned(now: Optional[dt.datetime] = None) -> dt.datetime:
     n = now or dt.datetime.now()
