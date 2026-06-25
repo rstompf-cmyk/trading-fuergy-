@@ -2367,6 +2367,8 @@ def form_page(msg=""):
     f = _ui_load("plan", DEF)
     _vdt_eng = str(f.get("vdt_engine", "lp") or "lp").lower()
     _vdt_prio = str(f.get("vdt_pair_priority", "closest") or "closest").lower()
+    _ex_col = str(f.get("export_col", "order_mwh") or "order_mwh")
+    _ex_mult = f.get("export_mult", 1000)
     def _sel(v, opt):
         return " selected" if v == opt else ""
     # Joint LP flags (per-profil) — defaults DEF + override z profilu aktívneho
@@ -2724,6 +2726,19 @@ button{{background:#1F4E78;color:#fff;border:0;padding:10px 18px;border-radius:8
   </select></label>
 </div>
 <p style="color:#666;font-size:13px;margin:6px 0 0"><b>Párový matcher</b>: VDT nákup sa uzavrie LEN spolu so ziskovým predajom (spread ≥ breakeven + min_spread, poplatok len na nabíjaní). Žiadne nepárové nákupy → koniec stratových večerných nákupov. Oba smery (nákup→predaj aj predaj→spätný nákup).</p></fieldset>
+<fieldset><legend>Export plánu (stĺpec + násobiteľ)</legend><div class="cols">
+<label>Stĺpec na export
+  <select name="export_col">
+    <option value="order_mwh"{_sel(_ex_col,"order_mwh")}>order_mwh — nominácia (len obchodované)</option>
+    <option value="grid_kwh"{_sel(_ex_col,"grid_kwh")}>grid_kwh — celý netto na prahu</option>
+    <option value="batt_kw"{_sel(_ex_col,"batt_kw")}>batt_kw — výkon batérie (kW)</option>
+    <option value="load_kwh"{_sel(_ex_col,"load_kwh")}>load_kwh — spotreba</option>
+    <option value="pv_kwh"{_sel(_ex_col,"pv_kwh")}>pv_kwh — FTV výroba</option>
+  </select></label>
+<label>Násobiteľ (prepočtová konštanta)
+  <input name="export_mult" type="number" step="any" value="{_ex_mult}"></label>
+</div>
+<p style="color:#666;font-size:13px;margin:6px 0 0">Export berie <b>zvolený stĺpec × násobiteľ</b> (znamienka ako v pláne). Napr. <b>order_mwh × 1000</b> = nominácia v kWh. Pre opačnú konvenciu znamienok daj záporný násobiteľ.</p></fieldset>
 <fieldset class="tpl-editor"><legend>× a RT šablóna (pre celý profil)</legend>
 <p style="color:#666;font-size:13px;margin:0 0 6px">Hodnoty per hodinu sa uložia ako <b>globálna šablóna pre aktívny profil</b> pri každom <b>Generuj plán D-1</b>. Šablóna platí pre VŠETKY dni — nie je rozdielna v rôznych dňoch.<br>
 <b>×</b> = násobiteľ návrhu optimizéra (1.00 = bez zmeny, 0 = zablokovať slot, 0.5 = polovičný výkon, 1.5 = posilniť 50 %). <b>RT</b> = ✓ povolí odchýlkovú regulácia v slote, ✗ ju zablokuje.</p>
@@ -16382,6 +16397,8 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          vdt_capacity_reserve_kw: float = Form(default=0.0),
          vdt_engine: str = Form(default="lp"),
          vdt_pair_priority: str = Form(default="closest"),
+         export_col: str = Form(default="order_mwh"),
+         export_mult: float = Form(default=1000.0),
          rt_engine: str = Form(default="v1"),
          rt2_margin_min_eur: float = Form(default=10.0),
          rt2_margin_full_eur: float = Form(default=60.0),
@@ -16522,6 +16539,8 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
                           vdt_breakeven_auto=vba,
                           vdt_capacity_reserve_kw=vcr,
                           vdt_engine=_vdt_engine_p, vdt_pair_priority=_vdt_pair_priority_p,
+                          export_col=str(export_col or "order_mwh"),
+                          export_mult=float(export_mult if export_mult is not None else 1000.0),
                           ftv_persistence_throttle=fpth,
                           rt_no_worsen_dev=rnwd, ftv_strict_plan=fsp,
                           ftv_strict_deadband_kw=fsdb,
