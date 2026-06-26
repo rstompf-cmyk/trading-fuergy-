@@ -1481,32 +1481,19 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             vdt_per_min = [float(vdt_arr_kw[j] or 0.0) for j in pidx15]
                 except Exception:
                     pass
+                # VDT-CONSISTENT (2026-06-26, úloha #59): nominácia aj display VDT vrstva sa
+                # odvodí z FEASIBILNÉHO plánu (sch.batt_kw po grid+SOC clipe VDT, r.~1320), NIE
+                # z raw _vdt_batt_kw_for/_vdt_kwh_view_for. Predtým: sch (čo riadi realizáciu) bol
+                # orezaný na grid/SOC → real ~4000, ale plan_batt_kw sa staval z raw VDT → 6000 →
+                # odchýlka real(4000) vs nominácia(6000) = pokuta. Teraz plan_batt_kw = sch =
+                # presne to, čo realita dodá → odchýlka VDT ≈ 0. DAM ostáva, VDT = sch − čistý DAM.
+                _sch_per_min = [float(sch["batt_kw"].values[i]) for i in tr["pidx"]]
+                vdt_per_min = [s - dpm for s, dpm in zip(_sch_per_min, dam_per_min)]
+                _dt_vc = max(int(step), 1) / 60.0
+                vdt_kwh_per_min = [v * _dt_vc for v in vdt_per_min]
                 tr["plan_batt_dam_kw"] = dam_per_min
                 tr["plan_batt_vdt_kw"] = vdt_per_min
-                # Bug #625-A (2026-06-09): plan_batt_kw = D-1 + VDT clipnuté na ±batt_kw_max.
-                _bkw_max_pb = float(getattr(cfg, "batt_kw", 0.0) or 0.0)
-                _plan_batt_raw = [d + v for d, v in zip(dam_per_min, vdt_per_min)]
-                if _bkw_max_pb > 0:
-                    tr["plan_batt_kw"] = [max(-_bkw_max_pb, min(_bkw_max_pb, x)) for x in _plan_batt_raw]
-                else:
-                    tr["plan_batt_kw"] = _plan_batt_raw
-                vdt_kwh_per_min = [0.0] * len(dam_per_min)
-                try:
-                    import vdt_state as _vs2
-                    _ga2 = None
-                    try:
-                        from core.profile_resolver import get_active as _ga2
-                    except Exception:
-                        pass
-                    if _ga2 is not None:
-                        _prof2 = _ga2(profile)
-                        if _prof2:
-                            _vdt_kwh_arr = _vdt_kwh_view_for(_prof2, d.isoformat())   # #27: closed pre históriu v rozsahu
-                            pidx15_grid = [min(95, max(0, _period_index(t, day, 15)))
-                                            for t in tr["ts15"]]
-                            vdt_kwh_per_min = [float(_vdt_kwh_arr[j] or 0.0) for j in pidx15_grid]
-                except Exception:
-                    pass
+                tr["plan_batt_kw"] = _sch_per_min                       # = feasibilný plán (grid+SOC), zhodný s realitou
                 _dam_grid = [float(sch["grid_kwh"].values[i]) for i in tr["pidx"]]
                 tr["plan_grid_dam_kwh"] = _dam_grid
                 tr["plan_grid_vdt_kwh"] = vdt_kwh_per_min
