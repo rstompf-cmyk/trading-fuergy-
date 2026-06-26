@@ -1321,14 +1321,39 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     if isinstance(_vdt_kw_96, list) and len(_vdt_kw_96) >= 96 and any(_vdt_kw_96):
                         _clipped_slots = 0
                         if step == 15 and len(sch) >= 96:
-                            # 1:1 mapping — slot i v sch zodpovedá slot i vo VDT
-                            for _i in range(min(96, len(sch))):
-                                _new = float(sch.at[_i, "batt_kw"]) + float(_vdt_kw_96[_i] or 0.0)
-                                # Bug #625-A: hard clip na fyzický limit batérie
-                                if _bkw_max_clip > 0 and abs(_new) > _bkw_max_clip:
-                                    _clipped_slots += 1
-                                    _new = max(-_bkw_max_clip, min(_bkw_max_clip, _new))
-                                sch.at[_i, "batt_kw"] = _new
+                            # VDT-FEASIBLE (2026-06-26, úloha #59): VDT sa pridáva cez SOC+GRID
+                            # feasibility (DAM priorita) — nie raw s výkonovým clipom. Tým plán
+                            # batérie NEprekročí grid prípojku ani SOC → realita ho dodá → žiadna
+                            # falošná odchýlka/pokuta. Orezáva sa LEN nedodateľná časť VDT
+                            # (feasibilný VDT, vrátane dneška a opačného smeru, ostáva).
+                            from vdt_soc_feasible import soc_feasible_vdt as _soc_feas_vdt
+                            _dam96 = [float(_sch_batt_dam_pure.values[_i]) for _i in range(min(96, len(sch)))]
+                            _vdt96 = [float(_vdt_kw_96[_i] or 0.0) for _i in range(len(_dam96))]
+                            # net_base = grid_dam_kw − dam_batt (batt-only → 0; shared-meter → FTV−load)
+                            try:
+                                _nb = [float(sch["grid_kwh"].values[_i]) / 0.25 - _dam96[_i]
+                                       for _i in range(len(_dam96))]
+                            except Exception:
+                                _nb = None
+                            try:
+                                _vdt_allowed, _socpath_vf, _clipped_slots = _soc_feas_vdt(
+                                    _dam96, _vdt96, soc_init_kwh=float(soc),
+                                    batt_kwh=float(getattr(cfg, "batt_kwh", 0) or 1.0),
+                                    soc_min_frac=float(getattr(cfg, "soc_min", 0.05) or 0.0),
+                                    soc_max_frac=float(getattr(cfg, "soc_max", 1.0) or 1.0),
+                                    eff_c=float(getattr(cfg, "eff_c", 0.95) or 0.95),
+                                    eff_d=float(getattr(cfg, "eff_d", 0.95) or 0.95),
+                                    dt_h=0.25, grid_export_kw=_gke, grid_import_kw=_gki, net_base_kw=_nb)
+                                for _i in range(len(_dam96)):
+                                    sch.at[_i, "batt_kw"] = _dam96[_i] + _vdt_allowed[_i]
+                            except Exception as _e_vf:
+                                print(f"[livesim VDT-FEASIBLE] zlyhalo ({_e_vf}) → fallback raw+power-clip")
+                                for _i in range(min(96, len(sch))):
+                                    _new = float(sch.at[_i, "batt_kw"]) + float(_vdt_kw_96[_i] or 0.0)
+                                    if _bkw_max_clip > 0 and abs(_new) > _bkw_max_clip:
+                                        _clipped_slots += 1
+                                        _new = max(-_bkw_max_clip, min(_bkw_max_clip, _new))
+                                    sch.at[_i, "batt_kw"] = _new
                         elif step == 60 and len(sch) >= 24:
                             # 60-min: každá hodina = priemer 4 VDT 15-min slotov
                             for _h in range(min(24, len(sch))):
