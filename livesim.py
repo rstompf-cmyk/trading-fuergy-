@@ -492,16 +492,16 @@ def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
     Vracia: sch, dtprof_per_period, period_step_min, d1_cycles, price_per_period, pv_per_period."""
     step_min = int(getattr(cfg, "d1_step_min", 60))
     date_iso = pd.Timestamp(date).date().isoformat()
-    # KIND-SELECT (2026-06-25): simulácia = poctivý backtest → uprednostni PREDIKOVANÝ plán
-    # (kind="plan", ceny z forecastu, postavený ako v čase D-1). Reálny DENNÝ TRH
-    # (kind="dentrh") sa použije len ak predikovaný plán pre daný deň neexistuje.
+    # KOMPROMIS (2026-06-25): HISTÓRIA = reálny DENNÝ TRH (dentrh, záväzná DAM nominácia →
+    # správne účtovanie odchýlky/RT). BUDÚCNOSŤ (D+1, reálny DAM ešte nezverejnený) = PREDIKOVANÝ
+    # plán (kind="plan"). Teda dentrh má prioritu; predikovaný je fallback len keď dentrh chýba.
     if step_min == 15:
-        plan = (ps.load_plan_safe(date_iso, 15, "plan")
-                or ps.load_plan_safe(date_iso, 15, "dentrh"))
+        plan = (ps.load_plan_safe(date_iso, 15, "dentrh")
+                or ps.load_plan_safe(date_iso, 15, "plan"))
         if plan is None:
-            plan = ps.load_plan(date_iso, 15, "plan")       # vyhodí PlanMissingError (kind=plan)
+            plan = ps.load_plan(date_iso, 15, "dentrh")       # PlanMissingError (kind=dentrh)
     else:
-        plan = ps.load_plan(date_iso, step_min, "plan")     # PlanMissingError ak chýba
+        plan = ps.load_plan(date_iso, step_min, "plan")
     schedule = plan["schedule"]
     n = 96 if step_min == 15 else 24
     # rekonštrukcia DataFrame so správnym poradím stĺpcov

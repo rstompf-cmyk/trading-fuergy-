@@ -185,8 +185,8 @@ def run_combined(dparams=None, rt_margin=None, max_cycles=MAX_CYCLES,
         if _ps is None:
             sch_disk = None
         elif step_min_now == 15:
-            sch_disk = (_ps.load_plan_safe(d_iso, 15, "plan")
-                        or _ps.load_plan_safe(d_iso, 15, "dentrh"))
+            sch_disk = (_ps.load_plan_safe(d_iso, 15, "dentrh")
+                        or _ps.load_plan_safe(d_iso, 15, "plan"))
         else:
             sch_disk = _ps.load_plan_safe(d_iso, 60, "plan")
         if sch_disk is None:

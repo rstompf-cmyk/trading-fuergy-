@@ -199,9 +199,9 @@ def _load_ftv_per_slot(profile: Optional[str], date_iso: str) -> Dict[int, float
     except Exception:
         return {}
     try:
-        # Cascade: PREDIKOVANÝ (15 plan) → reálny DENNÝ TRH (15 dentrh) → legacy 60 plan.
-        plan = (_ps.load_plan_safe(date_iso, step_min=15, kind="plan", profile=profile)
-                or _ps.load_plan_safe(date_iso, step_min=15, kind="dentrh", profile=profile)
+        # Cascade: reálny DENNÝ TRH (15 dentrh) → PREDIKOVANÝ (15 plan) → legacy 60 plan.
+        plan = (_ps.load_plan_safe(date_iso, step_min=15, kind="dentrh", profile=profile)
+                or _ps.load_plan_safe(date_iso, step_min=15, kind="plan", profile=profile)
                 or _ps.load_plan_safe(date_iso, step_min=60, kind="plan", profile=profile))
         if plan is None:
             return {}

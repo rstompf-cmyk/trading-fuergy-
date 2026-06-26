@@ -198,10 +198,10 @@ def _load_plan_for_today(profile: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     today_iso = dt.date.today().isoformat()
-    # Cascade (2026-06-25): PREDIKOVANÝ plán (15-min, kind=plan) má prioritu, potom reálny
-    # DENNÝ TRH (15-min dentrh), nakoniec legacy 60-min plan. Rovnaké poradie ako livesim.
-    plan = (_ps.load_plan_safe(today_iso, step_min=15, kind="plan", profile=profile)
-            or _ps.load_plan_safe(today_iso, step_min=15, kind="dentrh", profile=profile)
+    # Cascade (2026-06-25): reálny DENNÝ TRH (15-min dentrh) má prioritu, potom PREDIKOVANÝ
+    # (15-min plan, fallback pre budúcnosť), nakoniec legacy 60-min plan. Ako livesim.
+    plan = (_ps.load_plan_safe(today_iso, step_min=15, kind="dentrh", profile=profile)
+            or _ps.load_plan_safe(today_iso, step_min=15, kind="plan", profile=profile)
             or _ps.load_plan_safe(today_iso, step_min=60, kind="plan", profile=profile))
     return plan
 

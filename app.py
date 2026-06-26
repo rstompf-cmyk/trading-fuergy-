@@ -630,10 +630,10 @@ def _resolve_soc_init_carryover(date_iso: str, fp: dict,
         import datetime as _dt
         _prev_day = (_dt.date.fromisoformat(date_iso) - _dt.timedelta(days=1)).isoformat()
         _step_min = 60 if case == "plan_d1" else 15
-        # Cascade: 15-min → PREDIKOVANÝ (plan) → reálny DENNÝ TRH (dentrh); 60 → plan.
+        # Cascade: 15-min → reálny DENNÝ TRH (dentrh, prioritne) → PREDIKOVANÝ (plan); 60 → plan.
         if _step_min == 15:
-            _prev_plan = (_ps_carry.load_plan_safe(_prev_day, 15, kind="plan")
-                          or _ps_carry.load_plan_safe(_prev_day, 15, kind="dentrh"))
+            _prev_plan = (_ps_carry.load_plan_safe(_prev_day, 15, kind="dentrh")
+                          or _ps_carry.load_plan_safe(_prev_day, 15, kind="plan"))
         else:
             _prev_plan = _ps_carry.load_plan_safe(_prev_day, 60, kind="plan")
         if _prev_plan and isinstance(_prev_plan, dict):
@@ -3269,7 +3269,7 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
             try:
                 _plan = None
                 if _ps:
-                    for _step, _kind in ((15, "plan"), (15, "dentrh"), (60, "plan")):
+                    for _step, _kind in ((15, "dentrh"), (15, "plan"), (60, "plan")):
                         try:
                             _plan = _ps.load_plan_safe(day_iso, _step, kind=_kind, profile=name)
                         except TypeError:
@@ -7565,8 +7565,8 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         try:
             if view_day and (dview is None or dview.empty):
                 _has_plan = (ps is not None and (
-                    ps.has_plan(view_day, _st, "plan")
-                    or (int(_st) == 15 and ps.has_plan(view_day, 15, "dentrh"))))
+                    ps.has_plan(view_day, _st, "dentrh" if int(_st) == 15 else "plan")
+                    or (int(_st) == 15 and ps.has_plan(view_day, 15, "plan"))))
                 _is_future = dt.date.fromisoformat(view_day) > dt.date.today()
                 if _has_plan:
                     _label = "budúci" if _is_future else "minulý"
@@ -7595,8 +7595,8 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         zero_plan_warn = ""
         try:
             if ps is not None and view_day:
-                _pdat = (ps.load_plan_safe(view_day, _st, "plan")
-                         or (ps.load_plan_safe(view_day, 15, "dentrh") if int(_st) == 15 else None))
+                _pdat = (ps.load_plan_safe(view_day, _st, "dentrh" if int(_st) == 15 else "plan")
+                         or (ps.load_plan_safe(view_day, 15, "plan") if int(_st) == 15 else None))
                 if _pdat:
                     _mlts = _pdat.get("mults") or []
                     _rtmm = _pdat.get("rt_mask") or []
@@ -12627,7 +12627,7 @@ def vdt_d1_page(date: str = "", profile: str = ""):
     params = None
     source_kind = None
     source_step = None
-    for _ck in ("plan", "dentrh"):
+    for _ck in ("dentrh", "plan"):
         try:
             plan_15 = _ps.load_plan(date_obj.isoformat(), step_min=15, kind=_ck,
                                       profile=profile)
