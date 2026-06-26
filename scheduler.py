@@ -59,7 +59,7 @@ _DEFAULT_CRONS = {
     "vdt_advisor":         "*/15 * * * *",      # každých 15 min — rolling MPC re-optimization pre VDT (cache do JSON)
     "joint_mpc_tick":      "* * * * *",         # každú min — joint MPC kontrolér (Bug CC2): SOC + DAM + VDT + FTV + Load → joint LP
     "zco_profile_rebuild": "0 2 * * 0",         # nedeľa 02:00 — prebuilduj SK deviation_profile (PV+weekday split)
-    "price_model_15m_retrain": "30 2 * * 0",    # nedeľa 02:30 — pretrénuj 15-min cenový model z čerstvého historiánu
+    "price_model_15m_retrain": "30 2 * * *",    # DENNE 02:30 — pretrénuj 15-min tvarový model z čerstvého historiánu (vždy keď príde nový deň)
     "price_model_retrain":     "0 3 * * *",     # DENNE 03:00 — pretrénuj hodinové modely (CZ/SK) z čerstvých dát (vždy keď príde nový deň)
     "auto_control_apply":  "0,15,30,45 * * * *", # každú 15-minútovku — paper trading sim apply D-1 plánu (Fáza A.5)
 }

@@ -1,0 +1,234 @@
+{
+ "Amico": {
+  "read_load": "Amico_I_EL1_Power_1h",
+  "read_batt": "Amico_C_BAT_StoragePower_15m",
+  "read_threshold": "Amico_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Amico_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Amico_U_Regulation_LimitPlan"
+ },
+ "Amico2": {
+  "read_batt": "Amico2_C_BAT_StoragePower_15m",
+  "read_threshold": "Amico2_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Amico2_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Amico2_U_Regulation_LimitPlan"
+ },
+ "AudiaPlastics": {
+  "read_load": "AudiaPlastics_I_EL1_Power_1h",
+  "read_batt": "AudiaPlastics_C_BAT_StoragePower_15m",
+  "read_threshold": "AudiaPlastics_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "AudiaPlastics_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "AudiaPlastics_U_Regulation_LimitPlan"
+ },
+ "AudiaPlastics2": {
+  "read_batt": "AudiaPlastics2_C_BAT_StoragePower_15m",
+  "read_threshold": "AudiaPlastics2_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "AudiaPlastics2_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "AudiaPlastics2_U_Regulation_LimitPlan"
+ },
+ "BILLA-KOMARNO": {
+  "read_load": "BILLA-KOMARNO_I_EL1_Power_1h",
+  "read_batt": "BILLA-KOMARNO_C_BAT_StoragePower_15m",
+  "read_threshold": "BILLA-KOMARNO_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "BILLA-KOMARNO_U_REG_ConsumptionPlan_Manual_1h"
+ },
+ "Delika-SE": {
+  "read_batt": "Delika-SE_C_BAT_StoragePower_15m",
+  "read_threshold": "Delika-SE_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Delika-SE_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Delika-SE_U_Regulation_LimitPlan"
+ },
+ "EPG": {
+  "read_threshold": "EPG_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "EPG_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "EPG_U_Regulation_LimitPlan"
+ },
+ "Eissmann": {
+  "read_batt": "Eissmann_C_BAT_StoragePower_15m",
+  "read_threshold": "Eissmann_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Eissmann_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Eissmann_U_Regulation_LimitPlan"
+ },
+ "Eissmann2": {
+  "read_batt": "Eissmann2_C_BAT_StoragePower_15m",
+  "write_cons_plan": "Eissmann2_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Eissmann2_U_Regulation_LimitPlan"
+ },
+ "Embraco": {
+  "read_load": "Embraco_I_EL1_Power_1h",
+  "read_batt": "Embraco_C_BAT_StoragePower_15m",
+  "read_threshold": "Embraco_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Embraco_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Embraco_U_Regulation_LimitPlan"
+ },
+ "Embraco2": {
+  "read_batt": "Embraco2_C_BAT_StoragePower_15m",
+  "read_threshold": "Embraco2_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Embraco2_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Embraco2_U_Regulation_LimitPlan"
+ },
+ "Gevorkyan": {
+  "read_load": "Gevorkyan_I_EL1_Power_1h",
+  "read_batt": "Gevorkyan_C_BAT_StoragePower_15m",
+  "read_threshold": "Gevorkyan_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Gevorkyan_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Gevorkyan_U_Regulation_LimitPlan"
+ },
+ "HU-BillaBajkalska": {
+  "read_batt": "HU-BillaBajkalska_C_BAT_StoragePower_15m",
+  "read_threshold": "HU-BillaBajkalska_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "HU-BillaBajkalska_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "HU-BillaBajkalska_U_Regulation_LimitPlan"
+ },
+ "HU-LindMobler": {
+  "read_load": "HU-LindMobler_I_EL1_Power_1h",
+  "read_batt": "HU-LindMobler_C_BAT_StoragePower_15m",
+  "read_threshold": "HU-LindMobler_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "HU-LindMobler_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "HU-LindMobler_U_Regulation_LimitPlan"
+ },
+ "HU-Nimnica": {
+  "read_load": "HU-Nimnica_I_EL1_Power_1h",
+  "read_batt": "HU-Nimnica_C_BAT_StoragePower_15m",
+  "read_threshold": "HU-Nimnica_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "HU-Nimnica_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "HU-Nimnica_U_Regulation_LimitPlan"
+ },
+ "HU-Stavokov": {
+  "read_load": "HU-Stavokov_I_EL1_Power_1h",
+  "read_batt": "HU-Stavokov_C_BAT_StoragePower_15m",
+  "read_threshold": "HU-Stavokov_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "HU-Stavokov_U_REG_ConsumptionPlan_Manual_1h"
+ },
+ "HU_Hrbaty": {
+  "read_load": "HU_Hrbaty_I_EL1_Power_1h",
+  "read_ftv": "HU_Hrbaty_I_SOL_Power_1h",
+  "read_batt": "HU_Hrbaty_C_BAT_StoragePower_15m",
+  "read_threshold": "HU_Hrbaty_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "HU_Hrbaty_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "HU_Hrbaty_U_Regulation_LimitPlan"
+ },
+ "HU_Jakab": {
+  "read_load": "HU_Jakab_I_EL1_Power_1h",
+  "read_ftv": "HU_Jakab_I_SOL_Power_1h",
+  "read_batt": "HU_Jakab_C_BAT_StoragePower_15m",
+  "read_threshold": "HU_Jakab_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "HU_Jakab_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "HU_Jakab_U_Regulation_LimitPlan"
+ },
+ "HU_Klucar": {
+  "read_load": "HU_Klucar_I_EL1_Power_1h",
+  "read_ftv": "HU_Klucar_I_SOL_Power_1h",
+  "read_batt": "HU_Klucar_C_BAT_StoragePower_15m",
+  "read_threshold": "HU_Klucar_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "HU_Klucar_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "HU_Klucar_U_Regulation_LimitPlan"
+ },
+ "HU_Stavokov": {
+  "write_limit_plan": "HU_Stavokov_U_Regulation_LimitPlan"
+ },
+ "HU_VDZVSFinancie": {
+  "read_load": "HU_VDZVSFinancie_I_EL1_Power_1h",
+  "read_batt": "HU_VDZVSFinancie_C_BAT_StoragePower_15m",
+  "read_threshold": "HU_VDZVSFinancie_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "HU_VDZVSFinancie_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "HU_VDZVSFinancie_U_Regulation_LimitPlan"
+ },
+ "Hanon": {
+  "read_load": "Hanon_I_EL1_Power_1h",
+  "read_ftv": "Hanon_I_SOL_Power_1h",
+  "read_batt": "Hanon_C_BAT_StoragePower_15m",
+  "read_threshold": "Hanon_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Hanon_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Hanon_U_Regulation_LimitPlan"
+ },
+ "Hanon2": {
+  "read_load": "Hanon2_I_EL1_Power_1h",
+  "read_ftv": "Hanon2_I_SOL_Power_1h",
+  "read_batt": "Hanon2_C_BAT_StoragePower_15m",
+  "read_threshold": "Hanon2_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Hanon2_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Hanon2_U_Regulation_LimitPlan"
+ },
+ "Laugaricio": {
+  "read_load": "Laugaricio_I_EL1_Power_1h",
+  "read_batt": "Laugaricio_C_BAT_StoragePower_15m",
+  "read_threshold": "Laugaricio_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Laugaricio_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Laugaricio_U_Regulation_LimitPlan"
+ },
+ "Medeko": {
+  "read_batt": "Medeko_C_BAT_StoragePower_15m",
+  "read_threshold": "Medeko_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Medeko_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Medeko_U_Regulation_LimitPlan"
+ },
+ "Mincovna": {
+  "read_batt": "Mincovna_C_BAT_StoragePower_15m",
+  "read_threshold": "Mincovna_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Mincovna_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Mincovna_U_Regulation_LimitPlan"
+ },
+ "Muller-SE": {
+  "read_load": "Muller-SE_I_EL1_Power_1h",
+  "read_ftv": "Muller-SE_I_SOL_Power_1h",
+  "read_batt": "Muller-SE_C_BAT_StoragePower_15m",
+  "read_threshold": "Muller-SE_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Muller-SE_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Muller-SE_U_Regulation_LimitPlan"
+ },
+ "Muller2-SE": {
+  "read_batt": "Muller2-SE_C_BAT_StoragePower_15m",
+  "read_threshold": "Muller2-SE_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Muller2-SE_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Muller2-SE_U_Regulation_LimitPlan"
+ },
+ "NFS": {
+  "read_load": "NFS_I_EL1_Power_1h",
+  "read_batt": "NFS_C_BAT_StoragePower_15m",
+  "read_threshold": "NFS_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "NFS_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "NFS_U_Regulation_LimitPlan"
+ },
+ "OC-GaleriaMartin": {
+  "read_batt": "OC-GaleriaMartin_C_BAT_StoragePower_15m",
+  "read_threshold": "OC-GaleriaMartin_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "OC-GaleriaMartin_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "OC-GaleriaMartin_U_Regulation_LimitPlan"
+ },
+ "Osram": {
+  "read_load": "Osram_I_EL1_Power_1h",
+  "read_ftv": "Osram_I_SOL_Power_1h",
+  "read_batt": "Osram_C_BAT_StoragePower_15m",
+  "read_threshold": "Osram_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Osram_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Osram_U_Regulation_LimitPlan"
+ },
+ "RD2-Piestany": {
+  "read_load": "RD2-Piestany_I_EL1_Power_1h",
+  "read_ftv": "RD2-Piestany_I_SOL_Power_1h",
+  "read_batt": "RD2-Piestany_C_BAT_StoragePower_15m",
+  "read_threshold": "RD2-Piestany_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "RD2-Piestany_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "RD2-Piestany_U_Regulation_LimitPlan"
+ },
+ "Tower115": {
+  "read_load": "Tower115_I_EL1_Power_1h",
+  "read_batt": "Tower115_C_BAT_StoragePower_15m",
+  "read_threshold": "Tower115_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Tower115_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Tower115_U_Regulation_LimitPlan"
+ },
+ "VW-BA": {
+  "read_load": "VW-BA_I_EL1_Power_1h",
+  "read_batt": "VW-BA_C_BAT_StoragePower_15m",
+  "read_threshold": "VW-BA_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "VW-BA_U_REG_ConsumptionPlan_Manual_1h"
+ },
+ "Vertiv": {
+  "read_load": "Vertiv_I_EL1_Power_1h",
+  "read_batt": "Vertiv_C_BAT_StoragePower_15m",
+  "read_threshold": "Vertiv_C_POW_ThresholdPowerWithoutInv_Actual_1h",
+  "write_cons_plan": "Vertiv_U_REG_ConsumptionPlan_Manual_1h",
+  "write_limit_plan": "Vertiv_U_Regulation_LimitPlan"
+ }
+}

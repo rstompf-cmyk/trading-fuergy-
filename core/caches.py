@@ -88,7 +88,7 @@ def _model(market=None):
     except Exception:
         pm = None
     if pm is None:
-        pm = PriceModel().fit(_train_df_for_market(key))
+        pm = PriceModel().fit(_train_df_for_market(key), market=key)
         try:
             pm.save(path)
         except Exception:
@@ -116,7 +116,7 @@ def retrain_price_models() -> str:
             if n < 200:
                 msgs.append(f"{key}: málo dát ({n}h) — preskočené")
                 continue
-            PriceModel().fit(df).save(path)
+            PriceModel().fit(df, market=key).save(path)
             _MODEL_CACHE[key] = None
             msgs.append(f"{key}: OK ({n}h → {path})")
         except Exception as e:

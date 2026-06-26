@@ -18,11 +18,14 @@ from sklearn.ensemble import HistGradientBoostingRegressor, HistGradientBoosting
 from sklearn.metrics import mean_absolute_error, r2_score, roc_auc_score
 
 FEATURES = ["gti", "temp", "cloud", "hour", "dow", "month", "hour_sin", "hour_cos",
-            "is_weekend", "lag1d", "lag2d", "lag7d", "roll7d"]
+            "is_weekend", "is_holiday", "lag1d", "lag2d", "lag7d", "roll7d"]
+# Spätná kompatibilita: starý joblib (bez is_holiday) → tento zoznam (n_features sa zhoduje).
+LEGACY_FEATURES = [f for f in FEATURES if f != "is_holiday"]
 
 
-def build_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Zo súvislého hodinového radu vytvorí príznaky vrátane histórie cien."""
+def build_features(df: pd.DataFrame, market: str = "sk") -> pd.DataFrame:
+    """Zo súvislého hodinového radu vytvorí príznaky vrátane histórie cien.
+    `market` (sk/cz) určuje sviatkový kalendár pre is_holiday."""
     d = df.copy()
     d["time"] = pd.to_datetime(d["time"])
     d = d.sort_values("time").set_index("time").asfreq("h")
@@ -37,6 +40,11 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     d["roll7d"] = d["isot_eur"].shift(24).rolling(168, min_periods=24).mean()
     d["hour"] = d.index.hour; d["dow"] = d.index.dayofweek; d["month"] = d.index.month
     d["is_weekend"] = (d.index.dayofweek >= 5).astype(int)
+    try:
+        from core.holidays_skcz import is_holiday_series
+        d["is_holiday"] = is_holiday_series(d.index.normalize(), market)
+    except Exception:
+        d["is_holiday"] = 0
     d["hour_sin"] = np.sin(2*np.pi*d["hour"]/24); d["hour_cos"] = np.cos(2*np.pi*d["hour"]/24)
     return d.reset_index()
 
@@ -44,11 +52,14 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 class PriceModel:
     def __init__(self):
         self.reg = None; self.clf = None
+        self.feat = list(FEATURES); self.market = "sk"
 
-    def fit(self, df: pd.DataFrame) -> "PriceModel":
-        F = build_features(df)
+    def fit(self, df: pd.DataFrame, market: str = "sk") -> "PriceModel":
+        self.market = (market or "sk").lower()
+        self.feat = list(FEATURES)
+        F = build_features(df, self.market)
         m = F["isot_eur"].notna()
-        X, y = F.loc[m, FEATURES], F.loc[m, "isot_eur"].values
+        X, y = F.loc[m, self.feat], F.loc[m, "isot_eur"].values
         self.reg = HistGradientBoostingRegressor(max_iter=400, learning_rate=0.05,
                    max_leaf_nodes=31, l2_regularization=1.0, random_state=0).fit(X, y)
         yneg = (y < 0).astype(int)
@@ -59,17 +70,27 @@ class PriceModel:
         return self
 
     def predict(self, df_context: pd.DataFrame) -> pd.DataFrame:
-        F = build_features(df_context)
-        F["pred_isot"] = self.reg.predict(F[FEATURES])
-        F["p_neg"] = self.clf.predict_proba(F[FEATURES])[:, 1] if self.clf else 0.0
+        feat = getattr(self, "feat", None) or list(FEATURES)
+        F = build_features(df_context, getattr(self, "market", "sk"))
+        F["pred_isot"] = self.reg.predict(F[feat])
+        F["p_neg"] = self.clf.predict_proba(F[feat])[:, 1] if self.clf else 0.0
         return F
 
     def save(self, path):
-        import joblib; joblib.dump({"reg": self.reg, "clf": self.clf}, path)
+        import joblib
+        joblib.dump({"reg": self.reg, "clf": self.clf,
+                     "feat": getattr(self, "feat", list(FEATURES)),
+                     "market": getattr(self, "market", "sk")}, path)
 
     @classmethod
     def load(cls, path):
-        import joblib; o = cls(); m = joblib.load(path); o.reg, o.clf = m["reg"], m["clf"]; return o
+        import joblib; o = cls(); m = joblib.load(path)
+        o.reg, o.clf = m["reg"], m["clf"]
+        # starý joblib bez feat → odvod z počtu features (LEGACY = bez is_holiday)
+        n = getattr(o.reg, "n_features_in_", len(FEATURES))
+        o.feat = m.get("feat") or (list(FEATURES) if n == len(FEATURES) else list(LEGACY_FEATURES))
+        o.market = m.get("market", "sk")
+        return o
 
 
 def evaluate(df, test_days=14):

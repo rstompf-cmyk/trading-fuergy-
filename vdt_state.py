@@ -59,8 +59,15 @@ def _engine_plan_order() -> tuple:
     (60→'plan', 15→'dentrh'). Bez tohto advisor VŽDY preferoval 'dentrh' → ak engine
     bežal na 'plan' (hodinový), advisor čítal INÝ plán než graf → iná SOC trajektória
     → VDT navrhoval nákupy do batérie, ktorá je v engine už plná ("nemá sa kam uložiť").
-    Fallback (meta chýba): pôvodné poradie (dentrh, plan)."""
-    default = ((15, "dentrh"), (60, "plan"))
+    Fallback (meta chýba): poradie (15 dentrh, 15 plan, 60 plan).
+
+    Bug VDT-DAM-TODAY (2026-06-26): po prechode na IMMUTABLE 15-min plány auto-plán ukladá
+    kind=(15,"plan") (PREDIKOVANÝ); reálny DAM (15,"dentrh") existuje len keď príde DAM.
+    Stará kaskáda ((15,"dentrh"),(60,"plan")) nikdy neskúšala (15,"plan") → DAM nominácia na
+    dnes sa nenašla → compute_current_state vrátil data_completeness=False ("dam_today") →
+    VDT advisor ok=False → NULA obchodov (VW_simulacia_2/3/4). Fix: do kaskády pridať
+    (15,"plan"). Poradie: reálny DAM (dentrh, ak je) → predikovaný 15-min plán → legacy 60-min."""
+    default = ((15, "dentrh"), (15, "plan"), (60, "plan"))
     try:
         import livesim as _ls
         port = os.environ.get("PORT") or os.environ.get("APP_PORT") or "8000"
@@ -78,9 +85,9 @@ def _engine_plan_order() -> tuple:
             except Exception:
                 continue
         if best_step == 60:
-            return ((60, "plan"), (15, "dentrh"))
+            return ((60, "plan"), (15, "dentrh"), (15, "plan"))
         if best_step == 15:
-            return ((15, "dentrh"), (60, "plan"))
+            return ((15, "dentrh"), (15, "plan"), (60, "plan"))
     except Exception:
         pass
     return default

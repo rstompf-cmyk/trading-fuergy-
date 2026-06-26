@@ -21,7 +21,9 @@ import numpy as np, pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 
 FEAT = ["qoh", "qoh_sin", "qoh_cos", "hour", "hour_sin", "hour_cos",
-        "dow", "month", "gti", "temp", "cloud"]
+        "dow", "month", "is_holiday", "gti", "temp", "cloud"]
+# Spätná kompatibilita: starý joblib (bez is_holiday) → tento zoznam.
+LEGACY_FEAT = [f for f in FEAT if f != "is_holiday"]
 
 
 def _to_local(series) -> pd.Series:
@@ -41,12 +43,23 @@ def _calendar_feats(d: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
+def _is_holiday_vec(dates, market):
+    try:
+        from core.holidays_skcz import is_holiday_series
+        return is_holiday_series(dates, market)
+    except Exception:
+        return [0] * len(list(dates))
+
+
 class PriceModel15:
     def __init__(self):
         self.reg = None
+        self.feat = list(FEAT); self.market = "sk"
 
-    def fit(self, hist15: pd.DataFrame, weather: pd.DataFrame) -> "PriceModel15":
+    def fit(self, hist15: pd.DataFrame, weather: pd.DataFrame, market: str = "sk") -> "PriceModel15":
         """hist15: stĺpce time_utc, value (15-min ISOT). weather: time, gti, temp, cloud (hodinové)."""
+        self.market = (market or "sk").lower()
+        self.feat = list(FEAT)
         h = hist15.copy()
         h["t"] = _to_local(h["time_utc"]) if "time_utc" in h else pd.to_datetime(h["time"])
         h = h[["t", ("value" if "value" in h else "price15")]].copy()
@@ -57,6 +70,7 @@ class PriceModel15:
         h["date"] = ts.dt.date; h["hour"] = ts.dt.hour
         h["qoh"] = (ts.dt.minute // 15).astype(int)
         h["dow"] = ts.dt.dayofweek; h["month"] = ts.dt.month
+        h["is_holiday"] = _is_holiday_vec(ts.dt.normalize(), self.market)
         hm = h.groupby(["date", "hour"]).price15.mean().reset_index().rename(
             columns={"price15": "hourmean"})
         h = h.merge(hm, on=["date", "hour"])
@@ -70,16 +84,18 @@ class PriceModel15:
         h = _calendar_feats(h).dropna(subset=["dev"])
         self.reg = HistGradientBoostingRegressor(
             max_iter=400, learning_rate=0.05, max_leaf_nodes=31,
-            l2_regularization=1.0, random_state=0).fit(h[FEAT], h["dev"])
+            l2_regularization=1.0, random_state=0).fit(h[self.feat], h["dev"])
         return self
 
     def predict_shape(self, hourly_price24, date, weather_hourly: pd.DataFrame) -> np.ndarray:
         """Vráti 96 × €/MWh: hodinový level + naučená vnútrohodinová odchýlka (mean-0 per hodina)."""
+        feat = getattr(self, "feat", None) or list(FEAT)
         hp = np.asarray(hourly_price24, dtype=float).reshape(-1)[:24]
         if hp.size < 24:
             hp = np.concatenate([hp, np.full(24 - hp.size, hp[-1] if hp.size else 0.0)])
         d = pd.to_datetime(date)
         wk = d.dayofweek; mo = d.month
+        hol = 1 if (_is_holiday_vec([d.normalize()], getattr(self, "market", "sk"))[0]) else 0
         # počasie po hodinách (gti/temp/cloud) — ak chýba, neutrálne
         w = weather_hourly.copy() if weather_hourly is not None else pd.DataFrame()
         if len(w):
@@ -92,20 +108,27 @@ class PriceModel15:
         for hh in range(24):
             gti, temp, cloud = wmap.get(hh, (0.0, 15.0, 50.0))
             for q in range(4):
-                rows.append(dict(qoh=q, hour=hh, dow=wk, month=mo,
+                rows.append(dict(qoh=q, hour=hh, dow=wk, month=mo, is_holiday=hol,
                                  gti=gti, temp=temp, cloud=cloud))
         F = _calendar_feats(pd.DataFrame(rows))
-        dev = self.reg.predict(F[FEAT]).reshape(24, 4)
+        dev = self.reg.predict(F[feat]).reshape(24, 4)
         dev = dev - dev.mean(axis=1, keepdims=True)        # mean-0 per hodina → level sa nemení
         out = (hp.reshape(24, 1) + dev).reshape(96)
         return out
 
     def save(self, path):
-        import joblib; joblib.dump({"reg": self.reg, "feat": FEAT}, path)
+        import joblib
+        joblib.dump({"reg": self.reg, "feat": getattr(self, "feat", list(FEAT)),
+                     "market": getattr(self, "market", "sk")}, path)
 
     @classmethod
     def load(cls, path):
-        import joblib; o = cls(); m = joblib.load(path); o.reg = m["reg"]; return o
+        import joblib; o = cls(); m = joblib.load(path)
+        o.reg = m["reg"]
+        n = getattr(o.reg, "n_features_in_", len(FEAT))
+        o.feat = m.get("feat") or (list(FEAT) if n == len(FEAT) else list(LEGACY_FEAT))
+        o.market = m.get("market", "sk")
+        return o
 
 
 _M15_CACHE = {}
@@ -131,6 +154,7 @@ def _oos_eval(hist, weather, test_days=14):
     ts = h["t"] - pd.Timedelta(minutes=15)
     h["price15"] = h["value"]; h["date"] = ts.dt.date; h["hour"] = ts.dt.hour
     h["qoh"] = (ts.dt.minute // 15).astype(int); h["dow"] = ts.dt.dayofweek; h["month"] = ts.dt.month
+    h["is_holiday"] = _is_holiday_vec(ts.dt.normalize(), "sk")
     hm = h.groupby(["date","hour"]).price15.mean().reset_index().rename(columns={"price15":"hourmean"})
     h = h.merge(hm, on=["date","hour"]); h["dev"] = h["price15"] - h["hourmean"]
     w = weather.copy(); w["time"] = pd.to_datetime(w["time"]); w["date"]=w["time"].dt.date; w["hour"]=w["time"].dt.hour
