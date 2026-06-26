@@ -1470,23 +1470,15 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 # Bug V (2026-06-07): VDT trade ide cez sieť (predaj batt→grid = export +;
                 # nákup grid→batt = import −). Plus VDT kWh má rovnakú konvenciu ako plan_grid_kwh
                 # (+ export, − import). Pripočítame VDT kWh per 15-min slot ku každej minúte slotu.
-                vdt_kwh_per_min = [0.0] * len(dam_per_min)
-                try:
-                    import vdt_state as _vs2
-                    _ga2 = None
-                    try:
-                        from core.profile_resolver import get_active as _ga2
-                    except Exception:
-                        pass
-                    if _ga2 is not None:
-                        _prof2 = _ga2(profile)
-                        if _prof2:
-                            _vdt_kwh_arr = _vdt_kwh_view_for(_prof2, d.isoformat())   # #27: closed pre históriu v rozsahu
-                            pidx15_grid = [min(95, max(0, _period_index(t, day, 15)))
-                                            for t in tr["ts15"]]
-                            vdt_kwh_per_min = [float(_vdt_kwh_arr[j] or 0.0) for j in pidx15_grid]
-                except Exception:
-                    pass
+                # Bug VDT-NOM-CONSISTENCY (2026-06-26): nominačná VDT vrstva (plan_grid_vdt) MUSÍ
+                # vychádzať z TOHO ISTÉHO zdroja ako batériová VDT vrstva (plan_batt_vdt =
+                # vdt_per_min, cez _vdt_batt_kw_for). Predtým brala _vdt_kwh_view_for (kwh_batt_view),
+                # ktorý pri simuláciách vracal 0 (paper trades prázdne), kým batt VDT bol nenulový
+                # → realita robila VDT, ale nominácia ho neobsahovala → falošná RT odchýlka
+                # (dvojité účtovanie: VDT sa pripísalo ako zisk a tá istá aktivita sa zároveň
+                # odpočítala ako pokuta). Batt VDT (kW) × 0.25 = grid VDT (kWh/15-min); znamienko
+                # zhodné (vybíjanie = +batt = +export do siete).
+                vdt_kwh_per_min = [float(v) * 0.25 for v in vdt_per_min]
                 _dam_grid = [float(sch["grid_kwh"].values[i]) for i in tr["pidx"]]
                 tr["plan_grid_dam_kwh"] = _dam_grid
                 tr["plan_grid_vdt_kwh"] = vdt_kwh_per_min
