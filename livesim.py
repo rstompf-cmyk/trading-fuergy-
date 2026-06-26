@@ -2362,6 +2362,40 @@ def _trace_from_db(profile, day):
         _df["plan_grid_dam_kwh"] = 0.0
         _df["plan_grid_vdt_kwh"] = 0.0
         _df["plan_curtail_kwh"] = 0.0
+        # REKONŠTRUKCIA NOMINÁCIE (2026-06-26): effect_minute neukladá plánové grid krivky →
+        # bez tohto má historický graf plochú DAM nomináciu (=0) a NEvidno odchýlku. Doplníme
+        # plan_grid_dam_kwh / plan_grid_kwh / plan_curtail_kwh z uloženého plánu (rovnaké
+        # per-perióda kWh ako živý trace: sch["grid_kwh"][slot]). DISPLAY-only (€ z DB ostávajú).
+        try:
+            import plan_store as _ps_rec
+            _gd = np.zeros(len(_df), dtype=float)
+            _cu = np.zeros(len(_df), dtype=float)
+            _hh = _t.dt.hour.values
+            _mm = _t.dt.minute.values
+            _dts = _df["date"].values
+            for _d_iso in pd.unique(_dts):
+                _pl = (_ps_rec.load_plan_safe(_d_iso, 15, "dentrh")
+                       or _ps_rec.load_plan_safe(_d_iso, 15, "plan"))
+                if not _pl:
+                    continue
+                _sch = _pl.get("schedule", {}) or {}
+                _gk = _sch.get("grid_kwh") or []
+                _ck = (_sch.get("curtail_kwh") or _sch.get("plan_curtail_kwh")
+                       or _sch.get("cu_kwh") or [])
+                if not _gk:
+                    continue
+                _sel = np.where(_dts == _d_iso)[0]
+                for _ii in _sel:
+                    _slot = min(95, (int(_hh[_ii]) * 60 + int(_mm[_ii])) // 15)
+                    if _slot < len(_gk) and _gk[_slot] is not None:
+                        _gd[_ii] = float(_gk[_slot])
+                    if _slot < len(_ck) and _ck[_slot] is not None:
+                        _cu[_ii] = float(_ck[_slot])
+            _df["plan_grid_dam_kwh"] = _gd
+            _df["plan_grid_kwh"] = _gd          # história: nominácia = čistý DAM grid (VDT vrstva sa nerekonštruuje)
+            _df["plan_curtail_kwh"] = _cu
+        except Exception as _e_rec:
+            print(f"[_trace_from_db] rekonštrukcia nominácie z plánu zlyhala: {_e_rec}")
         _df["soc_pct"] = _col("soc_pct")
         _df["soc_kwh"] = 0.0
         _df["budget_left_kwh"] = 0.0
