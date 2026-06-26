@@ -1350,6 +1350,46 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
             except Exception as _e_sch_vdt:
                 print(f"[livesim Bug BB] aplikácia VDT do sch zlyhala: {_e_sch_vdt}")
 
+            # SOC-FEASIBILITY DAM+VDT (2026-06-26, úloha #28): optimize_day spraví SOC
+            # forward-sweep clip → čistý DAM plán je feasibilný. ALE VDT pridané vyššie
+            # (sch.batt_kw += VDT, len výkonový clip ±batt_kw) tento SOC clip OBCHÁDZA →
+            # kombinovaný DAM+VDT plán môže kázať vybíjať prázdnu / nabíjať plnú batériu →
+            # realita to fyzicky nedodá → falošná odchýlka + pokuta. Zopakujeme TEN ISTÝ
+            # forward-sweep (konvencia optimizer.py r.437-459: di/eff_d, ch*eff_c) na
+            # sch.batt_kw, aby plán mal platnú SOC trajektóriu v [soc_min, soc_max] kWh.
+            try:
+                _bkwh_sf = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
+                if _bkwh_sf > 0 and "batt_kw" in sch.columns:
+                    _smin_sf = _bkwh_sf * float(getattr(cfg, "soc_min", 0.05) or 0.0)
+                    _smax_sf = _bkwh_sf * float(getattr(cfg, "soc_max", 1.0) or 1.0)
+                    _effc_sf = float(getattr(cfg, "eff_c", 0.95) or 0.95)
+                    _effd_sf = float(getattr(cfg, "eff_d", 0.95) or 0.95)
+                    _dt_sf = max(int(step), 1) / 60.0
+                    _soc_sf = float(soc)                       # kWh na začiatku dňa (carried)
+                    _clip_sf = 0
+                    for _i in range(len(sch)):
+                        _bk = float(sch.at[_i, "batt_kw"])
+                        if _bk > 0:                            # vybíjanie: SOC −= di/eff_d
+                            _di = _bk * _dt_sf
+                            _cap = max(0.0, (_soc_sf - _smin_sf)) * _effd_sf
+                            if _di > _cap + 1e-9:
+                                _di = _cap; _clip_sf += 1
+                            _soc_sf -= _di / _effd_sf
+                            sch.at[_i, "batt_kw"] = _di / _dt_sf
+                        elif _bk < 0:                          # nabíjanie: SOC += ch*eff_c
+                            _ch = (-_bk) * _dt_sf
+                            _cap = max(0.0, (_smax_sf - _soc_sf)) / _effc_sf
+                            if _ch > _cap + 1e-9:
+                                _ch = _cap; _clip_sf += 1
+                            _soc_sf += _ch * _effc_sf
+                            sch.at[_i, "batt_kw"] = -_ch / _dt_sf
+                    if _clip_sf:
+                        print(f"[livesim SOC-FEAS] {d.isoformat()}: clip {_clip_sf} slotov — "
+                              f"DAM+VDT plán prekročil SOC [{_smin_sf:.0f},{_smax_sf:.0f}] kWh "
+                              f"(plán už nekáže vybíjať prázdnu/nabíjať plnú).")
+            except Exception as _e_sf:
+                print(f"[livesim SOC-FEAS] zlyhalo: {_e_sf}")
+
             # Bug RT-INLINE-AUDIT (2026-06-11): zostav audit_today_state pre rt_controller
             # per-minute audit_capacity. Audit chráni SOC pre budúce zazmluvnené sloty
             # (D-1 plán + VDT realized) tak, aby RT nevyčerpal kapacitu predčasne.
@@ -1470,15 +1510,23 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 # Bug V (2026-06-07): VDT trade ide cez sieť (predaj batt→grid = export +;
                 # nákup grid→batt = import −). Plus VDT kWh má rovnakú konvenciu ako plan_grid_kwh
                 # (+ export, − import). Pripočítame VDT kWh per 15-min slot ku každej minúte slotu.
-                # Bug VDT-NOM-CONSISTENCY (2026-06-26): nominačná VDT vrstva (plan_grid_vdt) MUSÍ
-                # vychádzať z TOHO ISTÉHO zdroja ako batériová VDT vrstva (plan_batt_vdt =
-                # vdt_per_min, cez _vdt_batt_kw_for). Predtým brala _vdt_kwh_view_for (kwh_batt_view),
-                # ktorý pri simuláciách vracal 0 (paper trades prázdne), kým batt VDT bol nenulový
-                # → realita robila VDT, ale nominácia ho neobsahovala → falošná RT odchýlka
-                # (dvojité účtovanie: VDT sa pripísalo ako zisk a tá istá aktivita sa zároveň
-                # odpočítala ako pokuta). Batt VDT (kW) × 0.25 = grid VDT (kWh/15-min); znamienko
-                # zhodné (vybíjanie = +batt = +export do siete).
-                vdt_kwh_per_min = [float(v) * 0.25 for v in vdt_per_min]
+                vdt_kwh_per_min = [0.0] * len(dam_per_min)
+                try:
+                    import vdt_state as _vs2
+                    _ga2 = None
+                    try:
+                        from core.profile_resolver import get_active as _ga2
+                    except Exception:
+                        pass
+                    if _ga2 is not None:
+                        _prof2 = _ga2(profile)
+                        if _prof2:
+                            _vdt_kwh_arr = _vdt_kwh_view_for(_prof2, d.isoformat())   # #27: closed pre históriu v rozsahu
+                            pidx15_grid = [min(95, max(0, _period_index(t, day, 15)))
+                                            for t in tr["ts15"]]
+                            vdt_kwh_per_min = [float(_vdt_kwh_arr[j] or 0.0) for j in pidx15_grid]
+                except Exception:
+                    pass
                 _dam_grid = [float(sch["grid_kwh"].values[i]) for i in tr["pidx"]]
                 tr["plan_grid_dam_kwh"] = _dam_grid
                 tr["plan_grid_vdt_kwh"] = vdt_kwh_per_min
