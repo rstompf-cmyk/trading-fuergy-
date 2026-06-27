@@ -1875,8 +1875,12 @@ def plans_browse(request: Request, date_from: str = None, date_to: str = None,
     if ps is None:
         return HTMLResponse("<p>plan_store modul nedostupný.</p>", status_code=503)
     today = dt.date.today()
-    df = date_from or (today - dt.timedelta(days=30)).isoformat()
-    dt_ = date_to or (today + dt.timedelta(days=7)).isoformat()
+    # Default = AKTUÁLNY MESIAC (1. … posledný deň). ±mesiac tlačidlá v šablóne posúvajú interval.
+    import calendar as _cal_pl
+    _m_first = today.replace(day=1)
+    _m_last = today.replace(day=_cal_pl.monthrange(today.year, today.month)[1])
+    df = date_from or _m_first.isoformat()
+    dt_ = date_to or _m_last.isoformat()
     active_profile = ps.resolve_profile(profile)
     all_profiles = ps.list_profiles_with_plans() or [active_profile]
     all_plans = ps.list_plans(profile=active_profile)
@@ -1942,9 +1946,13 @@ def _customer_label_for_profile(profile_name: str) -> str:
 
 def _export_params_for_profile(profile: str):
     """Vráti (export_col, export_mult) z plán šablóny profilu (dentrh→plan). Konfigurovateľné
-    v pláne: KTORÝ stĺpec rozvrhu exportovať + NÁSOBITEĽ (prepočtová konštanta). Default
-    order_mwh × 1000 (MWh→kWh). Znamienka sa NEotáčajú — sú ako v pláne (násobiteľ ich vie otočiť)."""
-    col, mult = "order_mwh", 1000.0
+    v pláne: KTORÝ stĺpec rozvrhu exportovať + NÁSOBITEĽ (prepočtová konštanta).
+
+    Default `batt_kw` × 1.0 = výkon batérie v kW (+vybíjanie / −nabíjanie). Bug EXPORT-BATT-KW
+    (2026-06-27): predtým default `order_mwh`×1000 — lenže v PREDIKOVANÝCH plánoch je order_mwh/
+    grid_kwh jednosmerný (kladný), nabíjanie je LEN v batt_kw → mesačný export strácal záporné
+    (nabíjanie). batt_kw má obe znamienka vždy. Znamienka sa NEotáčajú (násobiteľ ich vie otočiť)."""
+    col, mult = "batt_kw", 1.0
     try:
         import profiles as _pr_ex
         pt = _pr_ex.load_profile(profile) or {}
@@ -1971,9 +1979,13 @@ def _collect_month_grid_kwh(profile: str, year: int, month: int):
         vals = [0.0] * 96
         try:
             # Reálny DENNÝ TRH (dentrh) má prioritu ak existuje, inak PREDIKOVANÝ plán (plan).
+            # Bug EXPORT-PROFILE (2026-06-27): load_plan_safe sa volal BEZ profile → bral
+            # per-port aktívny profil, nie vybraný (export Coop ťahal iný profil → nabíjanie/
+            # záporné hodnoty chýbali). Odovzdávame vybraný `profile` explicitne.
             p = None
             if ps is not None:
-                p = ps.load_plan_safe(d_iso, 15, "dentrh") or ps.load_plan_safe(d_iso, 15, "plan")
+                p = (ps.load_plan_safe(d_iso, 15, "dentrh", profile=profile)
+                     or ps.load_plan_safe(d_iso, 15, "plan", profile=profile))
             sch = (p or {}).get("schedule", {}) if p else {}
             arr = sch.get(col)
             if arr and len(arr) >= 96:
@@ -1993,9 +2005,18 @@ def _resolve_export_my(profile, month):
     return prof, y, m, _customer_label_for_profile(prof)
 
 
-def _agg_hourly_kwh(vals96):
-    """96 × 15-min kWh → 24 hodinových kWh (súčet 4 slotov; energia je aditívna)."""
+def _agg_hourly_kwh(vals96, power=False):
+    """96 × 15-min → 24 hodinových. power=False: kWh = SÚČET 4 slotov (energia aditívna).
+    power=True (kW, napr. batt_kw): PRIEMER 4 slotov (výkon sa nesčítava)."""
+    if power:
+        return [round(sum(vals96[h * 4:h * 4 + 4]) / 4.0, 6) for h in range(24)]
     return [round(sum(vals96[h * 4:h * 4 + 4]), 6) for h in range(24)]
+
+
+def _export_is_power(profile: str) -> bool:
+    """Exportovaný stĺpec je výkon (kW) → hodinová agregácia = priemer, jednotka kW."""
+    col, _ = _export_params_for_profile(profile)
+    return str(col).endswith("_kw")
 
 
 @app.get("/plan_export_matrix")
@@ -2008,8 +2029,10 @@ def plan_export_matrix(profile: str = None, month: str = None, step: str = "15")
     import io as _io
     hourly = (str(step) == "60")
     prof, y, m, label = _resolve_export_my(profile, month)
+    _power = _export_is_power(prof)
+    _unit = "kW" if _power else "kWh"
     days = _collect_month_grid_kwh(prof, y, m)
-    wb = Workbook(); ws = wb.active; ws.title = (f"{label} -kWh")[:31]
+    wb = Workbook(); ws = wb.active; ws.title = (f"{label} -{_unit}")[:31]
     _bold = Font(bold=True); _ctr = Alignment(horizontal="center")
     ws.cell(row=2, column=1, value="Dátum").font = _bold
     if hourly:
@@ -2025,7 +2048,7 @@ def plan_export_matrix(profile: str = None, month: str = None, step: str = "15")
                 ws.cell(row=2, column=c0 + j, value=_slots[j]).font = _bold
     r = 3
     for d_iso, vals in days:
-        row_vals = _agg_hourly_kwh(vals) if hourly else vals
+        row_vals = _agg_hourly_kwh(vals, power=_power) if hourly else vals
         dc = ws.cell(row=r, column=1, value=dt.date.fromisoformat(d_iso)); dc.number_format = "DD.MM.YYYY"
         for i, v in enumerate(row_vals):
             ws.cell(row=r, column=2 + i, value=round(v, 3))
@@ -2047,15 +2070,17 @@ def plan_export_long(profile: str = None, month: str = None, step: str = "15"):
     import io as _io
     hourly = (str(step) == "60")
     prof, y, m, label = _resolve_export_my(profile, month)
+    _power = _export_is_power(prof)
+    _unit = "kW" if _power else "kWh"
     days = _collect_month_grid_kwh(prof, y, m)
-    wb = Workbook(); ws = wb.active; ws.title = (f"{label} -kWh")[:31]
+    wb = Workbook(); ws = wb.active; ws.title = (f"{label} -{_unit}")[:31]
     ws.cell(row=1, column=1, value="Dátum a čas").font = Font(bold=True)
-    ws.cell(row=1, column=2, value="kWh").font = Font(bold=True)
+    ws.cell(row=1, column=2, value=_unit).font = Font(bold=True)
     step_min = 60 if hourly else 15
     r = 2
     for d_iso, vals in days:
         base = dt.datetime.fromisoformat(d_iso)
-        row_vals = _agg_hourly_kwh(vals) if hourly else vals
+        row_vals = _agg_hourly_kwh(vals, power=_power) if hourly else vals
         for i, v in enumerate(row_vals):
             ts = base + dt.timedelta(minutes=step_min * i)
             tc = ws.cell(row=r, column=1, value=ts); tc.number_format = "DD.MM.YYYY HH:MM"
@@ -7629,7 +7654,13 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     _eff_prof_ov = _ps_ov.resolve_profile(profile)
                 except Exception:
                     _eff_prof_ov = profile
-                _cdc_ov = _cdc_battery_for_profile(_eff_prof_ov)
+                # Bug CDC-OVERLAY-PROFILE (2026-06-27): chart overlay rozpoznával CDC batériu
+                # podľa resolve_profile(profile), ale karta používa RAW `profile`. Ak
+                # resolve_profile vráti iné meno (get_active per-port), CDC sa nenašiel →
+                # chart spadol do realio (Bender/Trakany) vetvy → SOC úplne INEJ batérie
+                # (napr. Coop Krupina zobrazoval Trakany 16/28 % namiesto reálnych 8 %).
+                # Fallback na RAW profile = rovnaký zdroj ako karta.
+                _cdc_ov = _cdc_battery_for_profile(_eff_prof_ov) or _cdc_battery_for_profile(profile)
                 if _cdc_ov:
                     import cdc as _cdc_ovm
                     import datetime as _dt_ov

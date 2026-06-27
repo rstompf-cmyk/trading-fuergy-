@@ -37,8 +37,23 @@
       </select>
     </label>
     <button type="submit" class="btn">Filtrovať</button>
+    <button type="button" class="btn" onclick="shiftMonth(-1)" title="Predchádzajúci mesiac">◀ mesiac</button>
+    <button type="button" class="btn" onclick="shiftMonth(1)" title="Nasledujúci mesiac">mesiac ▶</button>
     <span class="muted" style="font-size:12px;margin-left:auto">{{ rows|length }} plánov</span>
   </form>
+  <script>
+  // ±mesiac: posunie interval Od/Do na prvý/posledný deň susedného mesiaca a odošle filter.
+  function shiftMonth(delta){
+    var f=document.querySelector('input[name=date_from]');
+    var t=document.querySelector('input[name=date_to]');
+    var base = (f && f.value) ? new Date(f.value+'T00:00:00') : new Date();
+    var y=base.getFullYear(), m=base.getMonth()+delta;
+    var first=new Date(y, m, 1), last=new Date(y, m+1, 0);
+    function iso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+    f.value=iso(first); t.value=iso(last);
+    f.form.submit();
+  }
+  </script>
 
   <div class="card card-green flex gap-12 items-center flex-wrap mt-8">
     <b style="color:#1F4E78">📤 Export plánu (mesiac, kWh)</b>
