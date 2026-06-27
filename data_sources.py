@@ -56,6 +56,11 @@ def fetch_pv_forecast(lat: float, lon: float, kwp: float = 99.0, tilt: float = 3
     if not frames:
         return pd.DataFrame(columns=["time", "gti", "temp", "cloud", "kw", "kwh"])
     df = pd.concat(frames).drop_duplicates("time").sort_values("time").reset_index(drop=True)
+    # FTV-TZ-ALIGN (2026-06-27): open-meteo hodinová radiácia (GTI) je priemer za PREDCHÁDZAJÚCU
+    # hodinu — hodnota pri čase T ≈ priemer [T−1h, T]. Použitie ako produkcia hodiny T ju posúva
+    # o +1 h DOPREDU oproti realite (merač). Overené: predikcia vrchol 13:00 vs realita 12:00.
+    # Realign −1 h: hodnota patrí hodine, ktorú reálne reprezentuje. Globálne pre všetky FTV.
+    df["time"] = pd.to_datetime(df["time"]) - pd.Timedelta(hours=1)
     df["gti"] = df["gti"].fillna(0).clip(lower=0)
     df["temp"] = df["temp"].fillna(25)
     df["kw"] = ((df["gti"]/1000.0)*kwp*eff*(1-0.004*(df["temp"]-25))).clip(lower=0)
