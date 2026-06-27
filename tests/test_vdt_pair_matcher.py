@@ -121,3 +121,20 @@ def test_allow_buyback_default_true_keeps_normal_arbitrage():
     r = match_pairs([10.0, 100.0], **_COMMON)  # buy@0 sell@1
     assert len(r["cycles"]) == 1
     assert r["cycles"][0]["charge_slot"] < r["cycles"][0]["discharge_slot"]
+
+
+def test_cross_midnight_buy_evening_sell_next_morning():
+    """Bod 2 (cez-polnočný horizont): 2-dňový rad slotov. Deň1 večer (slot 3) lacno=10,
+    deň2 (sloty 4-7) draho=200. S allow_buyback=False MUSÍ vzniknúť večer-nákup → ráno-predaj
+    (c<d = nákup pred predajom), lebo horizont siaha do ďalšieho dňa. Toto je legitímna
+    arbitráž, NIE buyback — bod 1 ju nesmie zablokovať."""
+    prices = [200.0, 200.0, 200.0, 10.0,   200.0, 200.0, 200.0, 200.0]   # 2 "dni" po 4 slotoch
+    common = dict(soc0_kwh=0.0, soc_lo_kwh=0.0, soc_hi_kwh=4000.0,
+                  batt_kwh_per_slot=1000.0, eff_c=0.95, eff_d=0.95,
+                  cycle_cost=0.0, grid_fee=0.0, min_spread=5.0)
+    r = match_pairs(prices, prices, allow_buyback=False, **common)
+    assert len(r["cycles"]) >= 1, "cez-polnočný nákup→predaj mal vzniknúť"
+    cy = r["cycles"][0]
+    assert cy["charge_slot"] == 3 and cy["discharge_slot"] >= 4, "večer (3) nákup → ďalší deň (>=4) predaj"
+    assert cy["charge_slot"] < cy["discharge_slot"], "musí byť nákup PRED predajom (nie buyback)"
+    assert r["profit_eur"] > 0
