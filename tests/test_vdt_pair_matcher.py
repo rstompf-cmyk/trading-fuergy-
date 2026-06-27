@@ -98,3 +98,26 @@ def test_priority_profit_vs_closest():
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_allow_buyback_false_forbids_sell_then_buy():
+    """allow_buyback=False (user 2026-06-27): KAŽDÝ nákup musí mať NESKORŠÍ predaj.
+    Scenár: drahé sloty 0-2 (predaj), lacný LEN posledný slot 3 (nákup) → jediný ziskový
+    pár je buyback (predaj skôr, nákup neskôr). S povolením vznikne, so zákazom NIE."""
+    prices = [200.0, 200.0, 200.0, 10.0]
+    common = dict(soc0_kwh=2000.0, soc_lo_kwh=0.0, soc_hi_kwh=4000.0,
+                  batt_kwh_per_slot=1000.0, eff_c=0.95, eff_d=0.95,
+                  cycle_cost=0.0, grid_fee=0.0, min_spread=5.0)
+    r_on = match_pairs(prices, prices, allow_buyback=True, **common)
+    assert len(r_on["cycles"]) >= 1
+    assert any(c["charge_slot"] > c["discharge_slot"] for c in r_on["cycles"]), "buyback mal vzniknúť"
+    r_off = match_pairs(prices, prices, allow_buyback=False, **common)
+    assert all(c["charge_slot"] < c["discharge_slot"] for c in r_off["cycles"]), "žiadny buyback povolený"
+    assert len(r_off["cycles"]) == 0, "lacný nákup bez neskoršieho predaja → žiadny cyklus"
+
+
+def test_allow_buyback_default_true_keeps_normal_arbitrage():
+    """Default allow_buyback=True nesmie pokaziť bežnú buy→sell arbitráž."""
+    r = match_pairs([10.0, 100.0], **_COMMON)  # buy@0 sell@1
+    assert len(r["cycles"]) == 1
+    assert r["cycles"][0]["charge_slot"] < r["cycles"][0]["discharge_slot"]

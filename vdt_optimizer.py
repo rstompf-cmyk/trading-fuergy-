@@ -134,7 +134,8 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
                        soc_neutral_tol_pct: float = 1.0,
                        residual_cost_basis_eur: Optional[float] = None,
                        engine: str = "lp",
-                       pair_priority: str = "closest") -> Dict[str, Any]:
+                       pair_priority: str = "closest",
+                       allow_buyback: bool = True) -> Dict[str, Any]:
     """LP optimalizácia denného obchodovania.
 
     Args:
@@ -296,6 +297,7 @@ def optimize_vdt_day(snapshot: pd.DataFrame, *,
             batt_kwh_per_slot=float(batt_kw) * dt_h,
             eff_c=float(eff_c), eff_d=float(eff_d), cycle_cost=float(cycle_cost),
             grid_fee=float(grid_fee), min_spread=float(min_spread), priority=str(pair_priority),
+            allow_buyback=bool(allow_buyback),
             base_soc_delta=_base, cap_charge_soc=_cap_chg, cap_discharge_soc=_cap_dis,
         )
         _vdt = _mr["vdt_soc_delta"]

@@ -576,6 +576,10 @@ def get_live_recommendation(*,
     # nepárové nákupy); vdt_pair_priority = closest/profit/balanced.
     _vdt_engine = str(_pl.get("vdt_engine", "lp") or "lp").lower()
     _vdt_pair_priority = str(_pl.get("vdt_pair_priority", "closest") or "closest").lower()
+    # allow_buyback (user 2026-06-27): default FALSE — KAŽDÝ nákup musí mať NESKORŠÍ predaj.
+    # Zakáže „predaj→spätný nákup" (koncové stratové nákupy bez neskoršieho predaja v rámci dňa).
+    # Profil môže povoliť späť (vdt_allow_buyback:true) — relevantné až s cez-polnočným horizontom.
+    _vdt_allow_buyback = bool(_pl.get("vdt_allow_buyback", False))
     try:
         result = _opt.optimize_vdt_day(
             snapshot,
@@ -594,6 +598,7 @@ def get_live_recommendation(*,
             residual_cost_basis_eur=_residual_cb,
             engine=_vdt_engine,
             pair_priority=_vdt_pair_priority,
+            allow_buyback=_vdt_allow_buyback,
         )
     except Exception as e:
         return {"ok": False, "error": f"optimizer zlyhal: {e}",

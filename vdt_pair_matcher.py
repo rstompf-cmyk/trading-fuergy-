@@ -52,6 +52,7 @@ def match_pairs(
     cap_charge_soc: Optional[List[float]] = None,
     cap_discharge_soc: Optional[List[float]] = None,
     max_cycles: int = 500,
+    allow_buyback: bool = True,
 ) -> Dict[str, Any]:
     """Greedy párový matcher. Ceny v EUR/MWh, energie v kWh.
 
@@ -114,6 +115,11 @@ def match_pairs(
                 continue
             for d in range(n):
                 if d == c or used_dis[d] >= cap_dis[d] - 1e-9:
+                    continue
+                # allow_buyback=False (user 2026-06-27): KAŽDÝ nákup musí mať NESKORŠÍ predaj
+                # → povolené len nákup-pred-predajom (c < d). Zakázané „predaj→spätný nákup"
+                # (d < c) = koncové nezmyselné nákupy bez neskoršieho predaja.
+                if (not allow_buyback) and d <= c:
                     continue
                 if (c, d) in _blocked:
                     continue
