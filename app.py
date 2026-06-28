@@ -6877,6 +6877,12 @@ def livesim_get(case: str = None, start: str = None, view: str = None, curtail: 
         os.environ["FTV_PROFILE"] = profile
     else:
         os.environ.pop("FTV_PROFILE", None)
+    # PROFILE-ISOLATION (user 2026-06-28): vyrieš VYBRANÝ profil RAZ (rešpektuje ?profile= override
+    # aj per-port active) a používaj ho VŠADE (advance cache key + load_series). Inak render ukazoval
+    # dáta INÉHO profilu — get_active() bez param + load_series bez profile=brali per-port active a
+    # ?profile= ignorovali (env FTV_PROFILE resolver nečíta) → krížili sa profily (napr. VW_4 ukázal
+    # Coop FTV). _eff_prof je single source of truth pre tento render.
+    _eff_prof = (ps.resolve_profile(profile) if ps is not None else (profile or None))
     # Realio overlay flag — explicitne cez query alebo automaticky ak je aktívny profile typu 'real'
     realio_on = (str(realio_overlay or "") == "1")
     if not realio_on:
@@ -7079,11 +7085,9 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         try:
             # Bug W: cached_advance vráti cachované r ak meta.json nezmenila od BG ticku.
             # Žiadne zbytočné výpočty pri opakovanom otváraní dashboardu.
-            try:
-                from core.profile_resolver import get_active as _ga_w
-                _profile_key = str(_ga_w() or "")
-            except Exception:
-                _profile_key = ""
+            # PROFILE-ISOLATION: cache key + advance MUSÍ použiť VYBRANÝ profil (_eff_prof),
+            # nie get_active() bez param (ten ignoruje ?profile= → krížil profily).
+            _profile_key = str(_eff_prof or "")
             r = _livesim_cached_advance(
                 case, start, _PORT, _bc, _st,
                 live_min, rtp, plan_pp, cur_use_rt,
@@ -7207,7 +7211,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         view_day = view or (prov if prov else (days[-1].isoformat() if days else None))
         import time as _t_rt
         _t_render_ls = _t_rt.perf_counter()
-        dfull = lsim.load_series(case, port=_PORT)
+        dfull = lsim.load_series(case, port=_PORT, profile=_eff_prof)
         # `trace_full` drží plnú minútovú resolution (predtým decimovanú do dview),
         # aby denné agregáty (FTV výroba, Zisk za deň) neboli podhodnotené 2-3×.
         trace_full = None
@@ -7225,7 +7229,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                 tdf = dec
             dview = tdf
         else:
-            dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=2000) if view_day else dfull
+            dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=2000, profile=_eff_prof) if view_day else dfull
         if os.environ.get("LIVESIM_TIMING") == "1":
             print(f"[RENDER-TIMING] {case} load_series = {(_t_rt.perf_counter()-_t_render_ls)*1000:.0f}ms "
                   f"dfull_rows={len(dfull) if dfull is not None else 0}")
@@ -7831,7 +7835,7 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
                     f"<div style='background:#ffeaea;border-left:6px solid #C0392B;padding:10px;border-radius:8px;"
                     f"margin:10px 0;font-size:13px'><b>⚠ Realio overlay zlyhal:</b> {_ovl_err}</div>")
         body = _livesim_body(r, dfull, dview, view_day, days, realio_overlay=realio_on, trace_full=trace_full,
-                              table_offset=table_offset, table_rows=table_rows, profile=profile)
+                              table_offset=table_offset, table_rows=table_rows, profile=_eff_prof)
         # Bug COMPUTE-WORKER: stale dáta (background prepočet beží) → banner + rýchlejší refresh
         stale_banner = ""
         _refresh_s = "60"
@@ -8230,7 +8234,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     if dfull is not None and not dfull.empty:
         try:
             _case_local = r.get("case", "plan_d1") if isinstance(r, dict) else "plan_d1"
-            dfull_full = lsim.load_series(_case_local, port=_PORT, max_points=10**9)
+            dfull_full = lsim.load_series(_case_local, port=_PORT, max_points=10**9, profile=profile)
         except Exception:
             dfull_full = dfull
 
@@ -8249,7 +8253,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # histórie cez dfull_full. Súčasť "netahať kompletnu historiu — staci jeden den".
         try:
             _case_agg = r.get("case", "plan_d1") if isinstance(r, dict) else "plan_d1"
-            _df_day = lsim.load_series(_case_agg, port=_PORT, day=view_day, max_points=10**9)
+            _df_day = lsim.load_series(_case_agg, port=_PORT, day=view_day, max_points=10**9, profile=profile)
             if _df_day is not None and not _df_day.empty:
                 _agg_src = _df_day
         except Exception:
