@@ -150,6 +150,10 @@ services:
       # TRACE-DB (2026-06-21): livesim trace pre grafy/compute_current_state z effect_minute (DB),
       # nie z 27 MB CSV. LEN DEV na test (prod bez flagu = CSV, nulové riziko). CSV fallback.
       LIVESIM_TRACE_DB: "1"
+      # FEASIBILITY-UNIFY KROK 3 (2026-06-28): VDT clip cez core.feasibility.gate_extras
+      # (1 brána SOC∧grid∧výkon z 1 reálneho SOC) namiesto 3 prekrývajúcich poistiek.
+      # LEN DEV na A/B test (prod bez flagu = pôvodné 3 clipy). Po overení re-simom = default.
+      VDT_FEASIBILITY_UNIFIED: "1"
 
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/me"]
