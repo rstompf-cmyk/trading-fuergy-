@@ -492,14 +492,23 @@ def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
     Vracia: sch, dtprof_per_period, period_step_min, d1_cycles, price_per_period, pv_per_period."""
     step_min = int(getattr(cfg, "d1_step_min", 60))
     date_iso = pd.Timestamp(date).date().isoformat()
-    # KOMPROMIS (2026-06-25): HISTÓRIA = reálny DENNÝ TRH (dentrh, záväzná DAM nominácia →
-    # správne účtovanie odchýlky/RT). BUDÚCNOSŤ (D+1, reálny DAM ešte nezverejnený) = PREDIKOVANÝ
-    # plán (kind="plan"). Teda dentrh má prioritu; predikovaný je fallback len keď dentrh chýba.
+    # PLAN-SOURCE (user 2026-06-28): batéria sleduje D-1 plán podľa PROFILOVEJ voľby plan_source
+    # (pevná, ako mode real/sim): 'predicted' → predikovaný (kind=plan); 'dentrh' → reálny denný
+    # trh (kind=dentrh). FTV (výroba) je v oboch rovnaká — nezávislá od cenového zdroja (denného
+    # trhu). Fallback na druhý kind len ak primárny chýba. (Predtým fixne dentrh-first.)
     if step_min == 15:
-        plan = (ps.load_plan_safe(date_iso, 15, "dentrh")
-                or ps.load_plan_safe(date_iso, 15, "plan"))
+        try:
+            import profiles as _pr_ps
+            from core.profile_resolver import get_active as _ga_ps
+            _src = str(((_pr_ps.load_profile(_ga_ps()) or {}).get("plan_source", "predicted"))
+                       or "predicted").lower()
+        except Exception:
+            _src = "predicted"
+        _primary, _secondary = (("dentrh", "plan") if _src == "dentrh" else ("plan", "dentrh"))
+        plan = (ps.load_plan_safe(date_iso, 15, _primary)
+                or ps.load_plan_safe(date_iso, 15, _secondary))
         if plan is None:
-            plan = ps.load_plan(date_iso, 15, "dentrh")       # PlanMissingError (kind=dentrh)
+            plan = ps.load_plan(date_iso, 15, _primary)       # PlanMissingError (primárny kind)
     else:
         plan = ps.load_plan(date_iso, step_min, "plan")
     schedule = plan["schedule"]
