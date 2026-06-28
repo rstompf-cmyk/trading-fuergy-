@@ -41,64 +41,25 @@ def soc_feasible_vdt(dam_batt_kw: Sequence[float],
     (kW; net export +). Clip: net ∈ [−grid_import, +grid_export]. DAM ostáva, orezáva sa LEN VDT.
 
     Vracia: (vdt_allowed_kw[N], soc_path_kwh[N+1], clipped_slots).
+
+    KROK 1 (2026-06-28): táto funkcia je teraz TENKÝ WRAPPER nad core.feasibility.gate
+    (single source of truth). Správanie bit-exact (parity: tests/test_feasibility_parity.py).
     """
-    n = min(len(dam_batt_kw), len(vdt_batt_kw))
-    smin = float(batt_kwh) * float(soc_min_frac)
-    smax = float(batt_kwh) * float(soc_max_frac)
-    eff_c = max(1e-6, float(eff_c)); eff_d = max(1e-6, float(eff_d))
-    dt_h = max(1e-6, float(dt_h))
-    _ge = float(grid_export_kw) if (grid_export_kw is not None and grid_export_kw > 0) else None
-    _gi = float(grid_import_kw) if (grid_import_kw is not None and grid_import_kw > 0) else None
-    soc = float(soc_init_kwh)
-    vdt_allowed: List[float] = []
-    soc_path: List[float] = [soc]
-    clipped = 0
-    for i in range(n):
-        d = float(dam_batt_kw[i] or 0.0)
-        v = float(vdt_batt_kw[i] or 0.0)
-        target = d + v                                    # kombinovaný batt kW (+vybíja/−nabíja)
-        # 1) GRID limit: net cez prah = net_base + batt ∈ [−grid_import, +grid_export].
-        #    Konvencia: batt +vybíja → +export; +import = nabíjanie. net export = +.
-        nb = float(net_base_kw[i]) if (net_base_kw is not None and i < len(net_base_kw)) else 0.0
-        net = nb + target
-        if _ge is not None and net > _ge:                 # príliš veľký export → zníž vybíjanie
-            target -= (net - _ge)
-        net = nb + target
-        if _gi is not None and net < -_gi:                # príliš veľký import → zníž nabíjanie
-            target += (-_gi - net)
-        # 2) SOC limit
-        if target > 0:                                    # vybíjanie
-            max_dis_kw = max(0.0, (soc - smin)) * eff_d / dt_h
-            target_f = min(target, max_dis_kw)
-        elif target < 0:                                  # nabíjanie
-            max_chg_kw = max(0.0, (smax - soc)) / (dt_h * eff_c)
-            target_f = max(target, -max_chg_kw)
-        else:
-            target_f = 0.0
-        # DAM ostáva; VDT = zvyšok do feasibilného targetu
-        v_eff = target_f - d
-        if abs(v_eff - v) > 1e-6:
-            clipped += 1
-        if target_f > 0:
-            soc -= (target_f * dt_h) / eff_d
-        elif target_f < 0:
-            soc += (-target_f * dt_h) * eff_c
-        soc = min(smax, max(smin, soc))                   # numerická poistka
-        vdt_allowed.append(v_eff)
-        soc_path.append(soc)
-    return vdt_allowed, soc_path, clipped
+    from core.feasibility import gate as _gate
+    return _gate(dam_batt_kw, vdt_batt_kw,
+                 soc_init_kwh=soc_init_kwh, batt_kwh=batt_kwh,
+                 soc_min_frac=soc_min_frac, soc_max_frac=soc_max_frac,
+                 eff_c=eff_c, eff_d=eff_d, dt_h=dt_h,
+                 grid_export_kw=grid_export_kw, grid_import_kw=grid_import_kw,
+                 net_base_kw=net_base_kw)
 
 
 def soc_trajectory(batt_kw: Sequence[float], *, soc_init_kwh: float, batt_kwh: float,
                    eff_c: float = 0.95, eff_d: float = 0.95, dt_h: float = 0.25) -> List[float]:
-    """Pomocná: SOC trajektória (kWh, N+1) pre daný batt plán BEZ clipu (na detekciu porušenia)."""
-    eff_c = max(1e-6, float(eff_c)); eff_d = max(1e-6, float(eff_d)); dt_h = max(1e-6, float(dt_h))
-    soc = float(soc_init_kwh); path = [soc]
-    for b in batt_kw:
-        b = float(b or 0.0)
-        if b > 0:
-            soc -= (b * dt_h) / eff_d
-        elif b < 0:
-            soc += (-b * dt_h) * eff_c
-        path.append(soc)
-    return path
+    """Pomocná: SOC trajektória (kWh, N+1) pre daný batt plán BEZ clipu (na detekciu porušenia).
+
+    KROK 1: wrapper nad core.feasibility.soc_trajectory.
+    """
+    from core.feasibility import soc_trajectory as _st
+    return _st(batt_kw, soc_init_kwh=soc_init_kwh, batt_kwh=batt_kwh,
+               eff_c=eff_c, eff_d=eff_d, dt_h=dt_h)
