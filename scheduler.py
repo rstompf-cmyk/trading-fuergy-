@@ -599,24 +599,17 @@ def job_seps_cookies():
 
 
 def _profile_d1_kind(name: str) -> str:
-    """Kind posledného uloženého plánu profilu: 'plan' (predikované ceny, gen. 09:00)
-    alebo 'dentrh' (reálny denný trh, gen. 14:00). Default 'dentrh'.
-
-    Toto je klasifikátor pre rozdelenie autoplan 09:00 vs 14:00 — odvodené z toho,
-    aký kind profil naposledy generoval (to čo užívateľ nastavil pri generovaní plánov),
-    žiadny nový prepínač. Súbory: out/profiles/<name>/plans/<date>_<step>min_<kind>.json
-    """
+    """Typ D-1 plánu profilu podľa EXPLICITNEJ voľby `plan_source` (user 2026-06-28):
+    'predicted' → 'plan' (D-1 predikcia, autoplan 09:00); 'dentrh' → 'dentrh' (reálny denný
+    trh, autoplan 14:00). Voľba je pevná (ako mode real/sim), nemení sa. Default 'predicted'
+    (= 'plan'). Fallback (chýbajúci profil/pole): 'plan'."""
     try:
-        import plan_store as _ps
-        import glob as _glob
-        d = _ps._dir_for(name)
-        files = _glob.glob(os.path.join(d, "*.json"))
-        if not files:
-            return "dentrh"
-        newest = max(files, key=os.path.getmtime)
-        return "plan" if os.path.basename(newest).endswith("_plan.json") else "dentrh"
+        import profiles as _pr
+        pc = _pr.load_profile(name) or {}
+        src = str(pc.get("plan_source", "predicted") or "predicted").lower()
+        return "dentrh" if src == "dentrh" else "plan"
     except Exception:
-        return "dentrh"
+        return "plan"
 
 
 def _run_autoplan(only_kind: Optional[str], job_id: str):
@@ -637,6 +630,9 @@ def _run_autoplan(only_kind: Optional[str], job_id: str):
     except Exception as e:
         _log(job_id, f"list_profiles zlyhalo: {e}", level="warn")
         return
+    # POLITIKA (user 2026-06-28): každý profil má PEVNE zvolený druh D-1 plánu (plan_source) —
+    # predikovaný (09:00) ALEBO dentrh (14:00), nie oboje. Filter podľa _profile_d1_kind
+    # (číta explicitný plan_source). Profil generuje len svoj druh → žiadny prepis, žiadny konflikt.
     if only_kind:
         profile_names = [n for n in profile_names if _profile_d1_kind(n) == only_kind]
     if not profile_names:
@@ -658,17 +654,16 @@ def _run_autoplan(only_kind: Optional[str], job_id: str):
     except Exception:
         _ps_chk = None
     _t_iso = tomorrow.isoformat()
+    # Skip-if-exists PER-KIND (user 2026-06-28): predikovaný (forecast) kontroluje len 15/plan,
+    # dentrh (real) len 15/dentrh → dva druhy koexistujú a NIKDY sa navzájom neprepíšu.
+    _gen_kind = "dentrh" if _price_kind == "real" else "plan"
     ok_count = fail_count = skip_count = 0
     for prof in profile_names:
         try:
-            # IMMUTABLE-PLANS (2026-06-25): auto-gen vytvorí plán LEN ak ešte neexistuje.
-            # Existujúci plán (obchod) sa NIKDY automaticky neprepíše — len explicitným
-            # /plan_batch / /plan / /dentrh.
-            if _ps_chk is not None and (
-                    _ps_chk.has_plan(_t_iso, 15, "plan", profile=prof)
-                    or _ps_chk.has_plan(_t_iso, 15, "dentrh", profile=prof)
-                    or _ps_chk.has_plan(_t_iso, 60, "plan", profile=prof)):
-                _log(job_id, f"  {prof}: plán pre {_t_iso} už existuje — preskakujem (immutable)")
+            # IMMUTABLE: auto-gen vytvorí plán daného druhu LEN ak ešte neexistuje. Existujúci
+            # plán sa NIKDY automaticky neprepíše — len explicitným /plan_batch / /plan / /dentrh.
+            if _ps_chk is not None and _ps_chk.has_plan(_t_iso, 15, _gen_kind, profile=prof):
+                _log(job_id, f"  {prof}: {_gen_kind} pre {_t_iso} už existuje — preskakujem (immutable)")
                 skip_count += 1
                 continue
             res = _d1p.compute_d1_plan(tomorrow, market=active_market,
@@ -689,13 +684,17 @@ def _run_autoplan(only_kind: Optional[str], job_id: str):
 
 @_safe("autoplan_forecast")
 def job_autoplan_forecast():
-    """09:00 — D-1 plán pre profily s kind='plan' (predikované ceny, pred DAM cleare)."""
+    """09:00 — D-1 PREDIKOVANÝ plán (kind=plan) pre profily s plan_source='predicted'. Vzniká len
+    ak ešte neexistuje (skip-if-exists per-kind) a NIKDY sa neprepíše. Jediná zmena = zmazanie."""
     _run_autoplan("plan", "autoplan_forecast")
 
 
 @_safe("autoplan_realdam")
 def job_autoplan_realdam():
-    """14:00 — D-1 plán pre profily s kind='dentrh' (reálny denný trh, po DAM cleare)."""
+    """14:00 — DENNÝ TRH 15-min (dentrh = reálny DAM) pre VŠETKY profily ako SAMOSTATNÝ druh
+    plánu (user 2026-06-28). Koexistuje s predikovaným D-1 plánom, NIKDY ho neprepíše a naopak
+    (skip-if-exists per-kind: dentrh kontroluje len 15/dentrh). Bez reálneho DAM compute_d1_plan
+    pre tento profil zlyhá (preskočí sa) — to je v poriadku, dentrh vzniká len keď DAM existuje."""
     _run_autoplan("dentrh", "autoplan_realdam")
 
 

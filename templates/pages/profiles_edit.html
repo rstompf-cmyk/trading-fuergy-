@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block container_class %}container-form{% endblock %}
+{% block container_class %}container-wide{% endblock %}
 {% block title %}{{ title }} — {{ app_name }}{% endblock %}
 
 {% block head_extra %}
@@ -73,6 +73,38 @@
                     style="width:14px;height:14px;cursor:pointer;margin:0">
             ⚙️ Beží na pozadí
           </label>
+        </div>
+      {% endif %}
+
+      <div class="mt-16"><b>Typ D-1 plánu:</b></div>
+      {% if is_new %}
+        <div class="flex gap-12 items-center mt-8">
+          <label style="cursor:pointer;display:flex;gap:8px;align-items:center;background:#e3f2fd;
+                  padding:8px 14px;border-radius:8px;border:2px solid #1565C0;font-weight:600">
+            <input type="radio" name="plan_source" value="predicted"
+                    {% if plan_source != "dentrh" %}checked{% endif %}>
+            📈 D-1 predikcia
+            <span style="font-weight:400;color:#666;font-size:12px">(forecast, autoplan 09:00)</span>
+          </label>
+          <label style="cursor:pointer;display:flex;gap:8px;align-items:center;background:#fff3e0;
+                  padding:8px 14px;border-radius:8px;border:2px solid #E65100;font-weight:600">
+            <input type="radio" name="plan_source" value="dentrh"
+                    {% if plan_source == "dentrh" %}checked{% endif %}>
+            🏛 Reálny denný trh 15-min
+            <span style="font-weight:400;color:#666;font-size:12px">(reálny DAM, autoplan 14:00)</span>
+          </label>
+        </div>
+        <p style="color:#7a3500;font-size:12px;margin:6px 0 0">
+          ⚠ <b>Typ plánu sa po vytvorení nedá zmeniť</b> (ako mód). Jedna voľba na profil —
+          buď D-1 predikcia alebo reálny denný trh; nikdy sa neprepíšu.
+        </p>
+      {% else %}
+        <div class="mt-8" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+          <span class="chip" style="font-size:14px;padding:6px 12px;background:#e3f2fd;color:#1565C0">
+            {% if plan_source == "dentrh" %}🏛 Reálny denný trh 15-min{% else %}📈 D-1 predikcia{% endif %}
+          </span>
+          <span style="color:#666;font-size:12px">🔒 fixované pri vzniku</span>
+          <input type="hidden" name="plan_source" value="{{ plan_source }}">
         </div>
       {% endif %}
     </fieldset>
@@ -178,11 +210,11 @@
         </label>
       </div>
 
-      <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px 16px;margin-top:10px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px 16px;margin-top:10px;align-items:end">
         <label>Hodiny VT (zoznam 0..23, oddelené čiarkou)
           <input type="text" id="dist_tou_high_hours" placeholder="6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21">
         </label>
-        <label style="display:flex;align-items:center;gap:8px;padding-top:18px">
+        <label style="display:flex;align-items:center;gap:8px;padding-bottom:6px">
           <input type="checkbox" id="dist_tou_weekend"> Víkend = NT (celodenne)
         </label>
       </div>

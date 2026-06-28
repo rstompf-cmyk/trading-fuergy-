@@ -1508,6 +1508,9 @@ def profiles_edit(request: Request, name: str = "__new__",
     profile_mode = (data.get("mode") or "simulation").lower()
     if profile_mode not in ("simulation", "real"):
         profile_mode = "simulation"
+    plan_source = (data.get("plan_source") or "predicted").lower()
+    if plan_source not in ("predicted", "dentrh"):
+        plan_source = "predicted"
 
     # Background scheduler enabled flag (per aktuálny market) — toggle "Beží na pozadí"
     bg_enabled = False
@@ -1523,6 +1526,7 @@ def profiles_edit(request: Request, name: str = "__new__",
                    name=("" if is_new else name),
                    preset_mode=preset_mode,
                    profile_mode=profile_mode,
+                   plan_source=plan_source,
                    note_val=note_val,
                    bg_enabled=bg_enabled,
                    plan_json=plan_json,
@@ -1541,6 +1545,7 @@ def profiles_save(name: str = Form(...), note: str = Form(default=""),
                    rt_json: str = Form(default="{}"),
                    distribution_json: str = Form(default="{}"),
                    mode: str = Form(default="simulation"),
+                   plan_source: str = Form(default="predicted"),
                    bg_enabled: str = Form(default="")):
     """Uloží profile zo zaslaných JSON polí. Pri novom profile sa zapamätá mode
     (simulation/real), pri existujúcom je ignorovaný (mode je immutable v save_profile)."""
@@ -1572,7 +1577,7 @@ def profiles_save(name: str = Form(...), note: str = Form(default=""),
             pass
     path = pr.save_profile(name, {"plan": plan_d, "dentrh": dentrh_d, "rt": rt_d,
                                     "mult96": mult96, "rt_on96": rt_on96,
-                                    "note": note, "mode": mode,
+                                    "note": note, "mode": mode, "plan_source": plan_source,
                                     "distribution": dist_d})
     # Background scheduler enabled toggle (per aktuálny market) — best-effort, neblokujeme save
     bg_was_on = False

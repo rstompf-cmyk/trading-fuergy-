@@ -222,9 +222,18 @@ def save_profile(name: str, data: Dict[str, Any]) -> str:
     else:
         m = str(data.get("mode") or "").strip().lower()
         mode = m if m in VALID_MODES else MODE_SIM
+    # plan_source: rovnaká IMMUTABLE logika ako mode (user 2026-06-28) — pevné pri vzniku profilu,
+    # potom sa nemení. 'predicted' = D-1 predikcia, 'dentrh' = reálny denný trh 15-min.
+    _VALID_SRC = ("predicted", "dentrh")
+    if existing.get("plan_source") in _VALID_SRC:
+        plan_source = existing["plan_source"]
+    else:
+        _s = str(data.get("plan_source") or "").strip().lower()
+        plan_source = _s if _s in _VALID_SRC else "predicted"
     body = {
         "name": _safe_name(name),
         "mode": mode,
+        "plan_source": plan_source,
         "created_at": existing.get("created_at", datetime.now().isoformat(timespec="seconds")),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "plan": dict(data.get("plan") or {}),

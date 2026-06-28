@@ -250,6 +250,11 @@ class ProfileConfig(BaseModel):
 
     name: str = Field(min_length=1, max_length=64)
     mode: Literal["simulation", "real"] = "simulation"
+    # PLAN-SOURCE (user 2026-06-28): pevná voľba typu D-1 plánu profilu, ako mode (real/sim) —
+    # po nastavení sa NEMENÍ. "predicted" = D-1 predikcia (autoplan 09:00, kind=plan);
+    # "dentrh" = reálny denný trh 15-min (autoplan 14:00, kind=dentrh). Každý profil má LEN
+    # jeden druh → žiadny konflikt kaskády, žiadny prepis predikovaného reálnym.
+    plan_source: Literal["predicted", "dentrh"] = "predicted"
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     note: str = ""

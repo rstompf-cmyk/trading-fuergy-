@@ -328,4 +328,11 @@ tr:hover td { background: #f8fafc; }
 /* Mobil: menu skupiny zalomené, dropdown na plnú šírku */
 @media (max-width: 640px) {
   .nav-menu { left: 0; right: 0; min-width: 0; }
+  /* Responzívnosť formulárov/dashboardov: viacstĺpcové gridy → 1 stĺpec na úzkych obrazovkách. */
+  .row, .row3, .cols, .cols3 { grid-template-columns: 1fr; }
+  .container { padding: 0 12px; }
+}
+/* Stredné šírky: 3-stĺpcové gridy → 2 stĺpce (nech sa polia nestláčajú). */
+@media (min-width: 641px) and (max-width: 980px) {
+  .row3, .cols3 { grid-template-columns: 1fr 1fr; }
 }
