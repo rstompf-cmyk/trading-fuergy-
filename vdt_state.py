@@ -176,71 +176,12 @@ def _get_current_soc_from_livesim_today(profile: str, today: dt.date,
     VDT advisor, auto_control aj zobrazenie mali identický SOC — všetci ho
     dostanú cez compute_current_state. Vracia {"soc_pct", "source"} alebo None
     ak dnešný trace ešte neexistuje (vtedy fallback na plán projekciu).
+
+    KROK 2 (2026-06-28): TENKÝ WRAPPER nad core.soc_source.current_engine_soc
+    (single source of truth pre aktuálny SOC). Logika nezmenená (čistý presun).
     """
-    try:
-        import livesim as _ls
-        import pandas as _pd
-    except Exception:
-        return None
-    port = os.environ.get("PORT") or os.environ.get("APP_PORT") or "8000"
-    day_iso = today.isoformat()
-    _cases = ["dt_15min", "plan_d1"]
-    try:
-        def _meta_mtime(_c):
-            try:
-                _, _mp = _ls.paths(_c, port, profile)
-                return os.path.getmtime(_mp)
-            except OSError:
-                return 0.0
-        _cases.sort(key=_meta_mtime, reverse=True)
-    except Exception:
-        pass
-    for case in _cases:
-        try:
-            df = _ls.load_series(case, port=port, day=day_iso, max_points=10**9, profile=profile)
-        except Exception:
-            continue
-        if (df is None or df.empty or "soc_pct" not in df.columns
-                or "time" not in df.columns):
-            continue
-        sub = df[df["soc_pct"].notna()]
-        if sub.empty:
-            continue
-        # Iba realizované minúty <= now (nie projekcia budúcnosti).
-        try:
-            _t = _pd.to_datetime(sub["time"], errors="coerce")
-            sub = sub[_t <= _pd.Timestamp(now)]
-        except Exception:
-            pass
-        if sub.empty:
-            continue
-        soc = float(sub["soc_pct"].iloc[-1])
-        ts = str(sub["time"].iloc[-1])[:19]
-        return {"soc_pct": soc,
-                "source": f"livesim dnešok trace ({case}, profile={profile}, ts={ts})"}
-    # Bug SOC-UNIFY-TODAY (2026-06-14): dnešok sa do CSV neukladá (provizórny), ale
-    # livesim.advance ukladá engine dnešný SOC (RT+DT+VDT) do meta (today_soc_pct/ts).
-    # Prečítaj ho ako jediný zdroj — tým má /vdt, /rt aj advisor ROVNAKÝ SOC ako engine
-    # graf na /livesim (vrátane RT), nie vlastnú integráciu bez RT.
-    for case in _cases:
-        try:
-            _, _mp = _ls.paths(case, port, profile)
-            _meta = _ls._load_meta(_mp) or {}
-        except Exception:
-            continue
-        _tsoc = _meta.get("today_soc_pct")
-        _tts = _meta.get("today_soc_ts")
-        if _tsoc is None or not _tts:
-            continue
-        try:
-            _tts_ts = _pd.Timestamp(_tts)
-        except Exception:
-            continue
-        # platí len ak je to dnešok a nie z budúcnosti voči now
-        if _tts_ts.date() == today and _tts_ts <= _pd.Timestamp(now):
-            return {"soc_pct": float(_tsoc),
-                    "source": f"livesim dnešok engine meta ({case}, profile={profile}, ts={str(_tts)[:19]})"}
-    return None
+    from core.soc_source import current_engine_soc as _ces
+    return _ces(profile, today, now)
 
 
 def _get_start_soc_from_d1_yesterday(profile: str) -> Optional[Dict[str, Any]]:
