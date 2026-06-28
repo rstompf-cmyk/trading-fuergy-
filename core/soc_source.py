@@ -58,21 +58,33 @@ def current_engine_soc(profile: str, today: dt.date,
         if (df is None or df.empty or "soc_pct" not in df.columns
                 or "time" not in df.columns):
             continue
-        sub = df[df["soc_pct"].notna()]
+        sub = df[df["soc_pct"].notna()].copy()
         if sub.empty:
             continue
-        # Iba realizované minúty <= now (nie projekcia budúcnosti).
+        # Iba minúty <= now (nie budúcnosť).
         try:
-            _t = _pd.to_datetime(sub["time"], errors="coerce")
-            sub = sub[_t <= _pd.Timestamp(now)]
+            sub["_t"] = _pd.to_datetime(sub["time"], errors="coerce")
+            sub = sub[sub["_t"] <= _pd.Timestamp(now)]
         except Exception:
-            pass
+            sub["_t"] = range(len(sub))
         if sub.empty:
             continue
-        soc = float(sub["soc_pct"].iloc[-1])
-        ts = str(sub["time"].iloc[-1])[:19]
+        # REALIZED-FIRST (2026-06-28, Bug SOC-CURRENT-VS-PROJECTION): „aktuálny SOC" MUSÍ
+        # byť z REÁLNE odsimulovaných minút, nie z plánovej projekcie. Trace dnešok obsahuje
+        # realizované minúty (batt_kw_realistic != NaN) AJ budúcu/plánovú projekciu
+        # (batt_kw_realistic = NaN, nesie plánový SOC napr. 100%). „Posledný <= now" chytal
+        # projekciu → trade-control dostal phantom 100% (reálne ~5%). Preto: ak existujú
+        # realizované riadky, ber LEN z nich; zoradiť podľa času a vziať POSLEDNÝ realizovaný.
+        _realized = sub
+        if "batt_kw_realistic" in sub.columns:
+            _rz = sub[_pd.to_numeric(sub["batt_kw_realistic"], errors="coerce").notna()]
+            if not _rz.empty:
+                _realized = _rz
+        _realized = _realized.sort_values("_t")
+        soc = float(_realized["soc_pct"].iloc[-1])
+        ts = str(_realized["time"].iloc[-1])[:19]
         return {"soc_pct": soc,
-                "source": f"livesim dnešok trace ({case}, profile={profile}, ts={ts})"}
+                "source": f"livesim REALIZED ({case}, profile={profile}, ts={ts})"}
     # Dnešok sa do CSV neukladá (provizórny), ale livesim.advance ukladá engine dnešný
     # SOC (RT+DT+VDT) do meta (today_soc_pct/ts). Prečítaj ho ako jediný zdroj.
     for case in _cases:

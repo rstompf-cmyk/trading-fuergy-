@@ -19,7 +19,7 @@ git add app.py livesim.py vdt_state.py vdt_optimizer.py vdt_live_advisor.py vdt_
         tools/diag_trades.py tools/export_livesim_xlsx.py tests/test_vdt_pair_matcher.py \
         scripts/upgrade_dev.ps1 deploy_dev.sh 2>/dev/null || true
 git add -f out/price_model_15m.joblib 2>/dev/null || true
-git commit -m "dev: FEASIBILITY-UNIFY KROK 1+2+3 - core/feasibility.py (battery_step+gate+gate_extras, single source fyziky) + core/soc_source.py (kanonicky SOC reader, vdt_state deleguje). KROK 3: advisor VDT clip cez gate_extras za feature-flag VDT_FEASIBILITY_UNIFIED (default OFF = povodne spravanie 1:1, nahradza 4 prekryvajuce poistky jednym volanim z 1 realneho SOC). Golden 5/5 + 122 testov zelene. Zapnut + over re-simom na DEV." || echo "(nic nove)"
+git commit -m "dev: SOC-CURRENT-FIX (kriticke) - current_engine_soc berie POSLEDNY REALIZOVANY SOC (batt_kw_realistic not NaN, zoradene casom), nie 'posledny <= now' co chytal PLANOVU PROJEKCIU (100%) -> trade-control phantom plna baterka pri realnych ~5% -> advisor idle/zle. + feasibility-unify KROK 1/2/3 (gate+gate_extras default ON). Golden 5/5 + testy. POZOR: dnesny trace WV_4 poskodeny (75 realiz + konfliktna projekcia) -> po deploy CLEAN re-sim." || echo "(nic nove)"
 echo "=== HEAD po ==="; git log --oneline -1
 git push origin dev
 echo "=== origin/dev ==="; git log --oneline -1 origin/dev
