@@ -8744,6 +8744,31 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             FT = "[" + ",".join(_js(_nz(x) * _kwh_to_kw) for x in dview["ftv_kw"]) + "]"
         # FT_ORIG = pôvodný PVF plán (z dview["ftv_kw"]). Konverzia len v realio_overlay.
         FT_ORIG = "[" + ",".join(_js(_nz(x) * _kwh_to_kw) for x in dview["ftv_kw"]) + "]"
+        # FTV-PRED-FALLBACK (2026-06-27): ak plán FTV ≈ 0 (napr. deň poškodený starým bugom),
+        # ale profil má kwp>0 → dopočítaj ŽIVÚ PVGIS predikciu a zobraz ju ako predikciu.
+        # DISPLAY-ONLY: NEMENÍ uložený plán. Len mimo realio_overlay (tam je červené meranie).
+        try:
+            _ft_chk = (dview["ftv_hour_plan_kw"] if "ftv_hour_plan_kw" in dview.columns else dview["ftv_kw"])
+            if (not realio_overlay) and abs(sum(_nz(x) for x in _ft_chk)) < 1e-6:
+                from core.profile_resolver import get_active as _ga_ftv
+                _prof_ftv = _ga_ftv()
+                _pl_ftv = ((pr.load_profile(_prof_ftv) or {}).get("plan", {}) if (pr and _prof_ftv) else {})
+                _kwp_ftv = float(_pl_ftv.get("kwp", 0) or 0)
+                if _kwp_ftv > 0.01:
+                    _d_ftv = dt.date.fromisoformat(str(view_day)[:10])
+                    _wxp = _fetch_pv_cached(float(_pl_ftv.get("lat", DEF["lat"])), float(_pl_ftv.get("lon", DEF["lon"])),
+                                            _kwp_ftv, float(_pl_ftv.get("tilt", DEF["tilt"])),
+                                            float(_pl_ftv.get("azimuth", DEF["azimuth"])),
+                                            float(_pl_ftv.get("eff", DEF["eff"])), start=_d_ftv, end=_d_ftv)
+                    _wxp = _wxp.copy(); _wxp["time"] = pd.to_datetime(_wxp["time"])
+                    _hmap = {int(_r["time"].hour): float(_r["kw"]) for _, _r in _wxp.iterrows()
+                             if _r["time"].date() == _d_ftv}
+                    _predkw = [_hmap.get(int(pd.to_datetime(_t).hour), 0.0) for _t in dview["time"]]
+                    if any(v > 0 for v in _predkw):
+                        FT = "[" + ",".join(_js(v) for v in _predkw) + "]"
+                        FT_ORIG = FT
+        except Exception:
+            pass
         # FT_REAL_MIN = minútová realita (zo scenára / ftv_minute generator) — už v kW
         _ftv_real_src = dview["ftv_min_real_kw"] if "ftv_min_real_kw" in dview.columns else dview["ftv_kw"]
         FTM_FROM_TRACE = "[" + ",".join(_js(x) for x in _ftv_real_src) + "]"
