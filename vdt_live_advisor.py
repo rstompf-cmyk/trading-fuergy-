@@ -655,11 +655,13 @@ def get_live_recommendation(*,
 
     trades = result["trades"]
 
-    # KROK 3 feature-flag (2026-06-28): ak VDT_FEASIBILITY_UNIFIED=1, reťaz poistiek
-    # (clip_extras_to_grid + 2× clip_extras_to_capacity, rôzne baseline = baseline-mismatch)
-    # sa nahradí JEDNÝM volaním core.feasibility.gate_extras (SOC ∧ grid ∧ výkon naraz,
-    # z JEDNÉHO reálneho SOC baseline). Default VYPNUTÉ = pôvodné správanie 1:1.
-    _FEAS_UNIFIED = os.environ.get("VDT_FEASIBILITY_UNIFIED", "0").strip() in ("1", "true", "True", "yes")
+    # KROK 3 (2026-06-28): zjednotená feasibility brána je teraz DEFAULT (overené na DEV
+    # VW_simulacia_3/4). Reťaz poistiek (clip_extras_to_grid + 2× clip_extras_to_capacity,
+    # rôzne baseline = baseline-mismatch) je nahradená JEDNÝM volaním core.feasibility.gate_extras
+    # (SOC ∧ grid ∧ výkon naraz, z JEDNÉHO reálneho SOC baseline).
+    # KILL-SWITCH: VDT_FEASIBILITY_UNIFIED=0 → návrat k starej reťazi bez redeployu (1 release,
+    # potom sa stará vetva zmaže). Default "1".
+    _FEAS_UNIFIED = os.environ.get("VDT_FEASIBILITY_UNIFIED", "1").strip() in ("1", "true", "True", "yes")
 
     # Bug VDT-CAPACITY (2026-06-13, user: "pred uzavretím nákupu a predaja musí
     # prebehnúť simulácia SOC aj s rezervou; ak niekde prekročí, musí sa upraviť
