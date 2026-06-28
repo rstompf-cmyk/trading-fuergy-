@@ -19,7 +19,7 @@ git add app.py livesim.py vdt_state.py vdt_optimizer.py vdt_live_advisor.py vdt_
         tools/diag_trades.py tools/export_livesim_xlsx.py tests/test_vdt_pair_matcher.py \
         scripts/upgrade_dev.ps1 deploy_dev.sh 2>/dev/null || true
 git add -f out/price_model_15m.joblib 2>/dev/null || true
-git commit -m "dev: SOC-CURRENT-FIX (A) + SOC-PROJ-SEED (B2) - (A) current_engine_soc berie POSLEDNY REALIZOVANY SOC (batt_kw_realistic not NaN, zoradene casom), nie 'posledny <= now' (chytal planovu projekciu). (B2) livesim projekcia SOC seeduje z posledneho REALIZOVANEHO SOC, nie z day-start -> koniec skoku na hranici realiz<->projekcia. + feasibility-unify KROK1/2/3. Golden 5/5 + testy. Po deploy CLEAN re-sim WV_4. Zostava B1: sim realizuje len po 14:44, nie po teraz." || echo "(nic nove)"
+git commit -m "dev: SOC-DISPLAY-FIX - (A) current_engine_soc berie PRVE engine meta today_soc_pct (autoritativny aktualny real SOC), az potom trace (batt_kw_realistic je riedke/zastarava). (B2) livesim projekcia SOC seeduje z posledneho REALIZOVANEHO soc_pct -> koniec 5% skoku v hlavicke. Realny SOC bol 100% (plna), 5% v hlavicke bol display bug (projekcia z day-start). Trade-control bol spravny. + feasibility-unify KROK1/2/3. Golden 5/5. Po deploy CLEAN re-sim WV_4." || echo "(nic nove)"
 echo "=== HEAD po ==="; git log --oneline -1
 git push origin dev
 echo "=== origin/dev ==="; git log --oneline -1 origin/dev

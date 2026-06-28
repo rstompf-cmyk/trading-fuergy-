@@ -50,6 +50,31 @@ def current_engine_soc(profile: str, today: dt.date,
         _cases.sort(key=_meta_mtime, reverse=True)
     except Exception:
         pass
+    # META-FIRST (2026-06-28): engine meta `today_soc_pct` je AUTORITATÍVNY aktuálny
+    # realizovaný SOC (zapisuje livesim.advance s engine SOC vrátane RT). Berie sa PRED
+    # trace, lebo `batt_kw_realistic` v trace je riedko vyplnené a posledný taký riadok
+    # môže byť zastaraný (napr. 14:44) hoci engine dobehol ďalej (meta ts 17:43). Tým
+    # má trade-control vždy posledný ZNÁMY reálny SOC, nie zastaraný riadok ani projekciu.
+    try:
+        for case in _cases:
+            try:
+                _, _mp = _ls.paths(case, port, profile)
+                _meta = _ls._load_meta(_mp) or {}
+            except Exception:
+                continue
+            _tsoc = _meta.get("today_soc_pct")
+            _tts = _meta.get("today_soc_ts")
+            if _tsoc is None or not _tts:
+                continue
+            try:
+                _tts_ts = _pd.Timestamp(_tts)
+            except Exception:
+                continue
+            if _tts_ts.date() == today and _tts_ts <= _pd.Timestamp(now):
+                return {"soc_pct": float(_tsoc),
+                        "source": f"engine meta today_soc_pct ({case}, profile={profile}, ts={str(_tts)[:19]})"}
+    except Exception:
+        pass
     for case in _cases:
         try:
             df = _ls.load_series(case, port=port, day=day_iso, max_points=10**9, profile=profile)
