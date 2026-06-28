@@ -2069,7 +2069,18 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                             if _bkw_max_socpre > 0:
                                 _fut_plan_batt_socpre = [max(-_bkw_max_socpre, min(_bkw_max_socpre, x))
                                                           for x in _fut_plan_batt_socpre]
-                            soc_proj = soc; socs = []; socs_kwh = []
+                            # SOC-PROJ-SEED (2026-06-28, Bug B): projekcia MUSÍ pokračovať z
+                            # POSLEDNÉHO REALIZOVANÉHO SOC (koniec realizovaných minút), nie z
+                            # day-start `soc`. Inak na hranici realizované↔projekcia vznikne SKOK
+                            # (realiz napr. 100% vs projekcia seedovaná z 5%). Princíp: jeden SOC,
+                            # projekcia len pokračuje dopredu z reality.
+                            try:
+                                _last_real_soc = pd.to_numeric(tr["soc_pct"], errors="coerce").dropna()
+                                soc_proj = (float(_last_real_soc.iloc[-1]) / 100.0 * bkwh
+                                            if len(_last_real_soc) else soc)
+                            except Exception:
+                                soc_proj = soc
+                            socs = []; socs_kwh = []
                             for k, _eff_batt_kw in enumerate(_fut_plan_batt_socpre):
                                 soc_proj = min(bkwh, max(0.0, soc_proj - _eff_batt_kw / 60.0))
                                 socs.append(soc_proj/bkwh*100.0); socs_kwh.append(soc_proj)
