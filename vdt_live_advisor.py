@@ -655,6 +655,12 @@ def get_live_recommendation(*,
 
     trades = result["trades"]
 
+    # KROK 3 feature-flag (2026-06-28): ak VDT_FEASIBILITY_UNIFIED=1, reťaz poistiek
+    # (clip_extras_to_grid + 2× clip_extras_to_capacity, rôzne baseline = baseline-mismatch)
+    # sa nahradí JEDNÝM volaním core.feasibility.gate_extras (SOC ∧ grid ∧ výkon naraz,
+    # z JEDNÉHO reálneho SOC baseline). Default VYPNUTÉ = pôvodné správanie 1:1.
+    _FEAS_UNIFIED = os.environ.get("VDT_FEASIBILITY_UNIFIED", "0").strip() in ("1", "true", "True", "yes")
+
     # Bug VDT-CAPACITY (2026-06-13, user: "pred uzavretím nákupu a predaja musí
     # prebehnúť simulácia SOC aj s rezervou; ak niekde prekročí, musí sa upraviť
     # a až potom uzavrieť"). LP optimalizátor plánuje future-only z aktuálnej SOC
@@ -698,53 +704,82 @@ def get_live_recommendation(*,
                     _ex[_si] = ("SELL", _extra)
                 elif _extra < -0.5:
                     _ex[_si] = ("BUY", -_extra)
-            # Bug VDT-PENALTY (Koreň 2, 2026-06-15): GRID feasibility clip — nominácia nesmie
-            # presiahnuť prípojku, inak engine (GRID-LIMIT-REALITY) reálnu dodávku oreže →
-            # nominované > dodané → pokuta cez ZCO. DAM grid pozícia (ex−im, + export) už
-            # zahŕňa FTV/load; VDT extra ju len posúva o batt delta.
-            _grep = []
-            try:
-                from core.vdt_capacity_guard import clip_extras_to_grid as _clip_grid
-                _dam_grid = _d1c.get_dam_commitments(today, profile=active_profile, basis="grid")
-                if _dam_grid and len(_dam_grid) == 96:
-                    _gimp = float(_pl.get("grid_kw_import") or _pl.get("grid_kw") or batt_kw) * 0.25
-                    _gexp = float(_pl.get("grid_kw_export") or _pl.get("grid_kw") or batt_kw) * 0.25
-                    _ex, _grep = _clip_grid(_ex, _dam_grid, _gimp, _gexp)
-                    if _grep:
-                        print(f"[VDT-PENALTY/grid] {active_profile}: orezanych {len(_grep)} slotov "
-                              f"na grid limit (imp {_gimp/0.25:.0f}/exp {_gexp/0.25:.0f} kW): {_grep[:4]}")
-            except Exception as _e_grid:
-                print(f"[VDT-PENALTY/grid] poistka preskocena ({_e_grid})")
-            _clipped, _rep = _clip_cap(_soc0, _dam_chg, _dam_dis, _ex, _bk,
-                                       eff_c, eff_d, soc_min_pct, soc_max_pct,
-                                       reserve_pct=float(_pl.get("soc_reserve_pct") or 0.0))
-            # Bug VDT-PENALTY (SOC-REAL, 2026-06-15): druhý clip z REÁLNEHO aktuálneho SOC cez
-            # BUDÚCE sloty. Prvý clip ráta z idealizovaného soc_init+DAM (od 00:00, kvôli zhode
-            # s grafom); ak reálny SOC drifol (RT, realizované VDT), budúce nominácie boli
-            # SOC-nepokryteľné → "obchod nepokrytý SOC" → pokuta (VW_simulacia_3: grid=batt, čiže
-            # úzke hrdlo je SOC nie grid). Forward od reálneho SOC orež extras → vždy dodateľné.
-            _rep2 = []
-            try:
-                _now_si = max(0, min(95, int((pd.Timestamp.now().hour * 60
-                                              + pd.Timestamp.now().minute) // 15)))
-                _soc_real0 = float(soc_pct) / 100.0 * _bk
-                _fut_ex = {t - _now_si: v for t, v in _clipped.items() if t >= _now_si}
-                _clipped_fut, _rep2 = _clip_cap(_soc_real0, _dam_chg[_now_si:], _dam_dis[_now_si:],
-                                                _fut_ex, _bk, eff_c, eff_d,
-                                                soc_min_pct, soc_max_pct,
-                                                reserve_pct=float(_pl.get("soc_reserve_pct") or 0.0))
-                if _rep2:
-                    for _t2 in list(_clipped.keys()):
-                        if _t2 >= _now_si:
-                            _nv = _clipped_fut.get(_t2 - _now_si)
-                            if _nv is None:
-                                _clipped.pop(_t2, None)
-                            else:
-                                _clipped[_t2] = _nv
-                    print(f"[VDT-PENALTY/soc-real] {active_profile}: orezanych {len(_rep2)} buducich "
-                          f"slotov z realneho SOC {float(soc_pct):.1f}%: {_rep2[:4]}")
-            except Exception as _e_socr:
-                print(f"[VDT-PENALTY/soc-real] poistka preskocena ({_e_socr})")
+            _grep = []; _rep2 = []
+            if _FEAS_UNIFIED:
+                # KROK 3: JEDNA brána (SOC ∧ grid ∧ výkon) z JEDNÉHO reálneho SOC baseline
+                # od aktuálneho slotu. Nahrádza clip_extras_to_grid + 2× clip_extras_to_capacity.
+                try:
+                    from core.feasibility import gate_extras as _gx
+                    _now_si = max(0, min(95, int((pd.Timestamp.now().hour * 60
+                                                  + pd.Timestamp.now().minute) // 15)))
+                    _damkw = [float(_dam_net[i]) / 0.25 for i in range(96)]
+                    _nb = None
+                    try:
+                        _dam_grid = _d1c.get_dam_commitments(today, profile=active_profile, basis="grid")
+                        if _dam_grid and len(_dam_grid) == 96:
+                            _nb = [(float(_dam_grid[i]) - float(_dam_net[i])) / 0.25 for i in range(96)]
+                    except Exception:
+                        _nb = None
+                    _clipped, _rep = _gx(
+                        _damkw, _ex, soc_start_kwh=float(soc_pct) / 100.0 * _bk, batt_kwh=_bk,
+                        soc_min_frac=soc_min_pct / 100.0, soc_max_frac=soc_max_pct / 100.0,
+                        eff_c=eff_c, eff_d=eff_d, dt_h=0.25, start_slot=_now_si,
+                        grid_export_kw=float(_pl.get("grid_kw_export") or _pl.get("grid_kw") or batt_kw),
+                        grid_import_kw=float(_pl.get("grid_kw_import") or _pl.get("grid_kw") or batt_kw),
+                        net_base_kw=_nb,
+                        reserve_frac=float(_pl.get("soc_reserve_pct") or 0.0) / 100.0)
+                    if _rep:
+                        print(f"[VDT-FEASIBILITY-UNIFIED] {active_profile}: gate_extras orezal "
+                              f"{len(_rep)} slotov (SOC∧grid∧vykon, 1 baseline): {_rep[:4]}")
+                except Exception as _e_uni:
+                    print(f"[VDT-FEASIBILITY-UNIFIED] zlyhalo ({_e_uni}) → bez clipu (matcher je SOC-aware)")
+                    _clipped, _rep = dict(_ex), []
+            else:
+                # Bug VDT-PENALTY (Koreň 2, 2026-06-15): GRID feasibility clip — nominácia nesmie
+                # presiahnuť prípojku, inak engine (GRID-LIMIT-REALITY) reálnu dodávku oreže →
+                # nominované > dodané → pokuta cez ZCO. DAM grid pozícia (ex−im, + export) už
+                # zahŕňa FTV/load; VDT extra ju len posúva o batt delta.
+                try:
+                    from core.vdt_capacity_guard import clip_extras_to_grid as _clip_grid
+                    _dam_grid = _d1c.get_dam_commitments(today, profile=active_profile, basis="grid")
+                    if _dam_grid and len(_dam_grid) == 96:
+                        _gimp = float(_pl.get("grid_kw_import") or _pl.get("grid_kw") or batt_kw) * 0.25
+                        _gexp = float(_pl.get("grid_kw_export") or _pl.get("grid_kw") or batt_kw) * 0.25
+                        _ex, _grep = _clip_grid(_ex, _dam_grid, _gimp, _gexp)
+                        if _grep:
+                            print(f"[VDT-PENALTY/grid] {active_profile}: orezanych {len(_grep)} slotov "
+                                  f"na grid limit (imp {_gimp/0.25:.0f}/exp {_gexp/0.25:.0f} kW): {_grep[:4]}")
+                except Exception as _e_grid:
+                    print(f"[VDT-PENALTY/grid] poistka preskocena ({_e_grid})")
+                _clipped, _rep = _clip_cap(_soc0, _dam_chg, _dam_dis, _ex, _bk,
+                                           eff_c, eff_d, soc_min_pct, soc_max_pct,
+                                           reserve_pct=float(_pl.get("soc_reserve_pct") or 0.0))
+                # Bug VDT-PENALTY (SOC-REAL, 2026-06-15): druhý clip z REÁLNEHO aktuálneho SOC cez
+                # BUDÚCE sloty. Prvý clip ráta z idealizovaného soc_init+DAM (od 00:00, kvôli zhode
+                # s grafom); ak reálny SOC drifol (RT, realizované VDT), budúce nominácie boli
+                # SOC-nepokryteľné → "obchod nepokrytý SOC" → pokuta (VW_simulacia_3: grid=batt, čiže
+                # úzke hrdlo je SOC nie grid). Forward od reálneho SOC orež extras → vždy dodateľné.
+                try:
+                    _now_si = max(0, min(95, int((pd.Timestamp.now().hour * 60
+                                                  + pd.Timestamp.now().minute) // 15)))
+                    _soc_real0 = float(soc_pct) / 100.0 * _bk
+                    _fut_ex = {t - _now_si: v for t, v in _clipped.items() if t >= _now_si}
+                    _clipped_fut, _rep2 = _clip_cap(_soc_real0, _dam_chg[_now_si:], _dam_dis[_now_si:],
+                                                    _fut_ex, _bk, eff_c, eff_d,
+                                                    soc_min_pct, soc_max_pct,
+                                                    reserve_pct=float(_pl.get("soc_reserve_pct") or 0.0))
+                    if _rep2:
+                        for _t2 in list(_clipped.keys()):
+                            if _t2 >= _now_si:
+                                _nv = _clipped_fut.get(_t2 - _now_si)
+                                if _nv is None:
+                                    _clipped.pop(_t2, None)
+                                else:
+                                    _clipped[_t2] = _nv
+                        print(f"[VDT-PENALTY/soc-real] {active_profile}: orezanych {len(_rep2)} buducich "
+                              f"slotov z realneho SOC {float(soc_pct):.1f}%: {_rep2[:4]}")
+                except Exception as _e_socr:
+                    print(f"[VDT-PENALTY/soc-real] poistka preskocena ({_e_socr})")
             if _rep or _grep or _rep2:
                 # zapíš orezané extras späť do trades (trade = DAM + orezaný extra)
                 for _tr in trades:

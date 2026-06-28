@@ -113,4 +113,75 @@ def gate(dam_batt_kw: Sequence[float],
     return vdt_allowed, soc_path, clipped
 
 
-__all__ = ["battery_step", "soc_trajectory", "gate"]
+def gate_extras(dam_batt_kw: Sequence[float],
+                extras: dict,
+                *,
+                soc_start_kwh: float,
+                batt_kwh: float,
+                soc_min_frac: float = 0.05,
+                soc_max_frac: float = 1.0,
+                eff_c: float = 0.95,
+                eff_d: float = 0.95,
+                dt_h: float = 0.25,
+                start_slot: int = 0,
+                grid_export_kw: float = None,
+                grid_import_kw: float = None,
+                net_base_kw: Sequence[float] = None,
+                reserve_frac: float = 0.0):
+    """Adaptér: oreže VDT `extras` (dict {slot:('BUY'|'SELL', kwh)}) cez JEDNU bránu `gate`
+    z JEDNÉHO baseline (reálny SOC v štartovacom slote). Nahrádza reťaz
+    clip_extras_to_grid + 2× clip_extras_to_capacity (rôzne baseline = baseline-mismatch).
+
+    Konvencia: SELL = vybíjanie (+ na batt), BUY = nabíjanie (− na batt). DAM ostáva,
+    orezáva sa LEN VDT. Iteruje sloty [start_slot .. 95]; extras mimo tohto okna ostávajú.
+
+    Vracia (clipped_extras, report).
+    """
+    n = len(dam_batt_kw)
+    s0 = max(0, int(start_slot))
+    # rezerva zúži pásmo (zhodné s clip_extras_to_capacity reserve_pct)
+    smin_f = float(soc_min_frac) + float(reserve_frac)
+    smax_f = float(soc_max_frac) - float(reserve_frac)
+    # extras → vdt_batt_kw (kW): SELL = +vybíja, BUY = −nabíja
+    vdt_kw = [0.0] * n
+    for t, ev in (extras or {}).items():
+        if t is None or not (s0 <= int(t) < n):
+            continue
+        direction, kwh = ev
+        kw = float(kwh) / max(1e-6, dt_h)
+        vdt_kw[int(t)] = kw if str(direction).upper() in ("SELL", "DISCHARGE") else -kw
+    dam_win = [float(dam_batt_kw[i] or 0.0) for i in range(s0, n)]
+    vdt_win = [vdt_kw[i] for i in range(s0, n)]
+    nb_win = None
+    if net_base_kw is not None:
+        nb_win = [float(net_base_kw[i]) if i < len(net_base_kw) else 0.0 for i in range(s0, n)]
+    vdt_allowed, _soc_path, _clip = gate(
+        dam_win, vdt_win, soc_init_kwh=soc_start_kwh, batt_kwh=batt_kwh,
+        soc_min_frac=smin_f, soc_max_frac=smax_f, eff_c=eff_c, eff_d=eff_d, dt_h=dt_h,
+        grid_export_kw=grid_export_kw, grid_import_kw=grid_import_kw, net_base_kw=nb_win)
+    # vdt_allowed (kW) → extras dict (kWh)
+    out = {}
+    report = []
+    for j, va in enumerate(vdt_allowed):
+        t = s0 + j
+        kwh = abs(va) * dt_h
+        if kwh <= 1e-6:
+            new_ev = None
+        elif va > 0:
+            new_ev = ("SELL", kwh)
+        else:
+            new_ev = ("BUY", kwh)
+        old_ev = (extras or {}).get(t)
+        if new_ev is not None:
+            out[t] = new_ev
+        # report ak sa zmenilo (orezané/zmazané) oproti pôvodnému
+        if old_ev is not None:
+            old_kwh = float(old_ev[1])
+            new_kwh = (new_ev[1] if new_ev else 0.0)
+            if new_kwh < old_kwh - 1e-6 or (new_ev and new_ev[0] != old_ev[0]):
+                report.append({"slot": t, "orig": old_ev,
+                               "clip": new_ev, "reason": "gate(soc∧grid∧vykon)"})
+    return out, report
+
+
+__all__ = ["battery_step", "soc_trajectory", "gate", "gate_extras"]
