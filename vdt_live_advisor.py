@@ -404,8 +404,12 @@ def get_live_recommendation(*,
     # 1. SOC — z state (kumulatívny výpočet) alebo manuálny override
     if soc_start_pct is None:
         soc_pct = float(state["current_soc_pct"])
+        # SOC-SOURCE-LABEL (2026-06-30): ukáž SKUTOČNÝ zdroj SOC (engine meta / REALIZED /
+        # carryover / projekcia) z compute_current_state, NIE napevno „kumulatívny". Predtým
+        # to maskovalo, či obchodník berie realitu alebo projekciu (mýlilo diagnostiku).
+        _real_src = state.get("current_soc_source") or "?"
         soc_source = {"ok": True, "soc_pct": soc_pct,
-                      "source": (f"vdt_state kumulatívny (start={state['start_soc_pct']:.1f}%, "
+                      "source": (f"{_real_src} | vdt_state (start={state['start_soc_pct']:.1f}%, "
                                     f"VDT trades={state['vdt_realized_count']}, slot={state['current_slot_idx']})"),
                       "ts": state["now"], "age_minutes": 0.0, "error": "",
                       "start_soc_source": state["start_soc_source"]}
