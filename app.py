@@ -889,8 +889,34 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         if _predicted:
             price15 = None                       # vynúť forecast — preskoč reálny DAM
         else:
-            ote = _fetch_ote_cached(d)
-            price15 = _dt15_from_ote(ote)
+            # DENTRH = REÁLNY DAM podľa TRHU profilu (user 2026-06-30: „všade reálny DAM, nie
+            # predikcia; predikcia LEN pre D-1 plán"). SK → OKTE (seps_sk.load_okte_dt_for_day),
+            # CZ → OTE (fetch_ote_dayahead). Predtým sa pre VŠETKY trhy ťahal český OTE →
+            # SK profil (Trakany) dostal CZ ceny (162/480) namiesto SK OKTE (205/755).
+            # Žiadny forecast fallback — ak reálny DAM nie je, price15 ostane NaN → guard nižšie
+            # plán nevytvorí.
+            _mkt_dt = (mk.get_active_market() if mk is not None else "cz")
+            if str(_mkt_dt).lower() == "sk":
+                try:
+                    import seps_sk as _ss_dt
+                    _okte_dt = _ss_dt.load_okte_dt_for_day(date_iso) or {}
+                    _arr_dt = np.full(96, np.nan)
+                    for _k_dt, _v_dt in _okte_dt.items():
+                        try:
+                            _t_dt = pd.Timestamp(_k_dt)
+                            if _t_dt.date().isoformat() == date_iso:
+                                _idx_dt = _t_dt.hour * 4 + _t_dt.minute // 15
+                                if 0 <= _idx_dt < 96:
+                                    _arr_dt[_idx_dt] = float(_v_dt)
+                        except Exception:
+                            continue
+                    price15 = pd.Series(_arr_dt).ffill().bfill().values if np.isfinite(_arr_dt).any() else None
+                except Exception as _e_okte_dt:
+                    print(f"[DENTRH-SK] {date_iso}: OKTE DAM load zlyhal: {_e_okte_dt}")
+                    price15 = None
+            else:
+                ote = _fetch_ote_cached(d)
+                price15 = _dt15_from_ote(ote)
         # Ak profil nemá FTV (kwp=0), netreba volať PVF
         _kwp15 = float(fp.get("kwp", DEF["kwp"]))
         if _kwp15 > 0.01:
