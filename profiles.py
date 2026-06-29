@@ -276,14 +276,19 @@ def save_profile(name: str, data: Dict[str, Any]) -> str:
                     existing_db.distribution = body["distribution"]
                     existing_db.mult96 = body["mult96"]
                     existing_db.rt_on96 = body["rt_on96"]
+                    if hasattr(existing_db, "plan_source"):   # PLAN-SOURCE-DB (guard ak stĺpec existuje)
+                        existing_db.plan_source = body["plan_source"]
                 else:
-                    s.add(_DbProfile(
+                    _new_db = _DbProfile(
                         name=body["name"], mode=body["mode"], note=body["note"],
                         created_at=body["created_at"], updated_at=body["updated_at"],
                         plan=body["plan"], dentrh=body["dentrh"], rt=body["rt"],
                         distribution=body["distribution"],
                         mult96=body["mult96"], rt_on96=body["rt_on96"],
-                    ))
+                    )
+                    if hasattr(_new_db, "plan_source"):
+                        _new_db.plan_source = body["plan_source"]
+                    s.add(_new_db)
         except Exception as e:
             print(f"[profiles.save_profile {body['name']}] DB write zlyhal: {e}")
     # Audit log — profile_save je relevantný write event (Fáza B.4)
@@ -331,8 +336,15 @@ def load_profile(name: str) -> Optional[Dict[str, Any]]:
             with get_session() as s:
                 p = s.query(_DbProfile).filter_by(name=safe).one_or_none()
                 if p is not None:
+                    # PLAN-SOURCE-DB (2026-06-30): DB nemusí mať stĺpec plan_source (starý
+                    # model) → odvoď z mode: real → 'dentrh' (reálny Denný trh), sim → 'predicted'.
+                    # Ak stĺpec existuje a má hodnotu, použije sa; real ho aj tak zafixuje na dentrh.
+                    _ps_db = getattr(p, "plan_source", None)
+                    _ps_val = ("dentrh" if str(p.mode).lower() == "real"
+                               else (_ps_db if _ps_db in ("predicted", "dentrh") else "predicted"))
                     return {
                         "name": p.name, "mode": p.mode, "note": p.note,
+                        "plan_source": _ps_val,
                         "created_at": p.created_at, "updated_at": p.updated_at,
                         "plan": _ensure_plan_vdt_defaults(dict(p.plan or {})),
                         "dentrh": dict(p.dentrh or {}),
