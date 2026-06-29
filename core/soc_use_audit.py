@@ -479,10 +479,19 @@ def audit_action(profile: str,
         ([0.0]*_sim_offset + list(scheduled_kwh[_sim_offset:])) if _sim_offset > 0 else list(scheduled_kwh),
         cap, eff_c=eff_c, eff_d=eff_d)
     _base_dirs = _scheduled_to_direction(scheduled_kwh)
-    _base_viols_set = {(v[0], v[1]) for v in check_violations(
-        _base_path, _base_dirs,
-        soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
-        from_slot=si)}
+    # VDT-ABSOLUTE-AUDIT (2026-06-30, user: „VDT musí rešpektovať SOC; nesmie nominovať čo
+    # realita nedodá"): pre VDT obchod je SOC kontrola ABSOLÚTNA — VDT nesmie pretlačiť SOC
+    # mimo [soc_min, soc_max] ANI keď je trajektória plánu/nahromadeného VDT „už pokazená".
+    # Delta-filter (ignoruj baseline-spôsobené violácie) platí LEN pre RT/auto_control — tie
+    # REAGUJÚ na realitu a nemajú ju zhoršovať. VDT nominuje NOVÝ trhový záväzok → musí byť
+    # absolútne dodateľný, inak realita nedodá → odchýlka = pokuta (presne čo riešime).
+    if str(source or "").lower() in ("vdt", "vdt_extra"):
+        _base_viols_set = set()
+    else:
+        _base_viols_set = {(v[0], v[1]) for v in check_violations(
+            _base_path, _base_dirs,
+            soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
+            from_slot=si)}
 
     # Pokus s plnou požadovanou hodnotou
     soc_path_full, dirs_full = _trial(kwh_req)
