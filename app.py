@@ -4591,8 +4591,32 @@ a{{color:#1F4E78}}</style></head><body>
 <p style="color:#666;font-size:13px">(Auto-redirect za 2 s na /dentrh…)</p>
 </body></html>"""
     try:
-        ote = _fetch_ote_cached(d)                        # reálne 15-min DT ceny (známe vopred)
-        price15 = _dt15_from_ote(ote)
+        # DENTRH-REAL-DAM (2026-06-30, user): REÁLNY DAM podľa TRHU profilu — SK → OKTE
+        # (seps_sk.load_okte_dt_for_day), CZ → OTE. Predtým _fetch_ote_cached (=český OTE) pre
+        # VŠETKY trhy → SK profil (Trakany) dostal CZ ceny (77/518) namiesto SK OKTE (91/755).
+        # Žiadny forecast fallback — ak SK OKTE nie je publikovaný, plán sa NEgeneruje.
+        _mkt_d = (mk.get_active_market() if mk is not None else "cz")
+        if str(_mkt_d).lower() == "sk":
+            import seps_sk as _ss_d
+            _okte_d = _ss_d.load_okte_dt_for_day(d.isoformat()) or {}
+            _arr_d = np.full(96, np.nan)
+            for _k_d, _v_d in _okte_d.items():
+                try:
+                    _t_d = pd.Timestamp(_k_d)
+                    if _t_d.date() == d:
+                        _ix_d = _t_d.hour * 4 + _t_d.minute // 15
+                        if 0 <= _ix_d < 96:
+                            _arr_d[_ix_d] = float(_v_d)
+                except Exception:
+                    continue
+            if not np.isfinite(_arr_d).any():
+                return _dentrh_form(
+                    f"Denný trh (SK OKTE) pre {d} ešte nie je publikovaný — plán sa "
+                    f"negeneruje (dentrh = reálny DAM, nie predikcia).")
+            price15 = pd.Series(_arr_d).ffill().bfill().values
+        else:
+            ote = _fetch_ote_cached(d)                     # CZ: reálne 15-min DT ceny (OTE)
+            price15 = _dt15_from_ote(ote)
         # Pre batt-only profily (kwp=0, napr. Trakany_real) PVF fetch nedáva zmysel.
         # Vytvoríme prázdny pv_h aby plan bežal s 0 FTV (čistá batt arbitráž).
         if float(kwp or 0) > 0.01:
