@@ -230,6 +230,12 @@ def save_profile(name: str, data: Dict[str, Any]) -> str:
     else:
         _s = str(data.get("plan_source") or "").strip().lower()
         plan_source = _s if _s in _VALID_SRC else "predicted"
+    # PLAN-SOURCE-MODE (2026-06-30, user): REÁLNY profil obchoduje VŽDY na REÁLNOM Dennom trhu
+    # (dentrh) — „Denný trh 15-min nie je o predikcii a nikdy nebol". Predikcia je LEN pre
+    # simuláciu. Preto real → plan_source VŽDY 'dentrh' (prepíše aj zle zamknutý/defaultnutý
+    # 'predicted'). Simulácia si druh ponecháva (predicted/dentrh podľa voľby).
+    if mode == "real":
+        plan_source = "dentrh"
     body = {
         "name": _safe_name(name),
         "mode": mode,

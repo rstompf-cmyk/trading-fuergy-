@@ -708,6 +708,23 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
     if ps is None:
         raise RuntimeError("plan_store modul nie je dostupný")
     d = dt.date.fromisoformat(date_iso)
+    # PLAN-KIND-GUARD (2026-06-30, user: "môžem vytvoriť akýkoľvek plán na akomkoľvek profile
+    # a to sa nemalo dať"): druh plánu MUSÍ sedieť s profilovým plan_source — dentrh profil
+    # (reálny Denný trh 15-min) → VŽDY 'dentrh', predicted profil → VŽDY 'plan'. Vynútené, takže
+    # sa nedá vyrobiť nesprávny typ. 60-min legacy ostáva 'plan'.
+    if int(step_min) != 60:
+        try:
+            import profiles as _pr_pk
+            from core.profile_resolver import get_active as _ga_pk
+            _src_pk = str((_pr_pk.load_profile(_ga_pk()) or {}).get("plan_source", "predicted")
+                          or "predicted").lower()
+            _want_kind = "dentrh" if _src_pk == "dentrh" else "plan"
+            if str(kind).lower() != _want_kind:
+                print(f"[PLAN-KIND-GUARD] profil plan_source='{_src_pk}' → vynútený kind "
+                      f"'{_want_kind}' (požadovaný '{kind}' ignorovaný)")
+                kind = _want_kind
+        except Exception as _e_pk:
+            print(f"[PLAN-KIND-GUARD] preskočené ({_e_pk})")
     # Bug #641 diag: vstup _gen_one_plan — vidíme či sa volá a aké parametre dostane
     print(f"[_gen_one_plan] day={date_iso} step={step_min} kind={kind} "
           f"batt_kw={fp.get('batt_kw')} batt_kwh={fp.get('batt_kwh')} "
