@@ -19,7 +19,7 @@ git add app.py livesim.py vdt_state.py vdt_optimizer.py vdt_live_advisor.py vdt_
         tools/diag_trades.py tools/export_livesim_xlsx.py tests/test_vdt_pair_matcher.py \
         scripts/upgrade_dev.ps1 deploy_dev.sh 2>/dev/null || true
 git add -f out/price_model_15m.joblib 2>/dev/null || true
-git commit -m "dev: SOC-DISPLAY-FIX - (A) current_engine_soc berie PRVE engine meta today_soc_pct (autoritativny aktualny real SOC), az potom trace (batt_kw_realistic je riedke/zastarava). (B2) livesim projekcia SOC seeduje z posledneho REALIZOVANEHO soc_pct -> koniec 5% skoku v hlavicke. Realny SOC bol 100% (plna), 5% v hlavicke bol display bug (projekcia z day-start). Trade-control bol spravny. + feasibility-unify KROK1/2/3. Golden 5/5. Po deploy CLEAN re-sim WV_4." || echo "(nic nove)"
+git commit -m "dev: REAL-STATE-FALLBACK - compute_current_state: ked realizovany SOC nedostupny (skoro rano, livesim dnes nebezal), obchodnik berie START dna (carryover, posledny realny), NIE planovu projekciu soc_path[cur_idx] (predpoklada nabijanie -> fiktivny SOC -> neparove nakupy). User rozhodnutie: obchodnik berie skutocny stav. Plan immutable. Golden+testy zelene. + SOC-DISPLAY-FIX - (A) current_engine_soc berie PRVE engine meta today_soc_pct (autoritativny aktualny real SOC), az potom trace (batt_kw_realistic je riedke/zastarava). (B2) livesim projekcia SOC seeduje z posledneho REALIZOVANEHO soc_pct -> koniec 5% skoku v hlavicke. Realny SOC bol 100% (plna), 5% v hlavicke bol display bug (projekcia z day-start). Trade-control bol spravny. + feasibility-unify KROK1/2/3. Golden 5/5. Po deploy CLEAN re-sim WV_4." || echo "(nic nove)"
 echo "=== HEAD po ==="; git log --oneline -1
 git push origin dev
 echo "=== origin/dev ==="; git log --oneline -1 origin/dev

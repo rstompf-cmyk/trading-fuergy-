@@ -569,6 +569,15 @@ def compute_current_state(profile: str,
         if _realized is not None:
             current_soc = float(_realized["soc_pct"])
             current_soc_source = _realized["source"]
+        else:
+            # REAL-STATE fallback (user 2026-06-29: „obchodník berie SKUTOČNÝ stav"): keď
+            # realizovaný SOC ešte nie je k dispozícii (skoro ráno, livesim dnes nebežal),
+            # NEobchoduj na PLÁNOVEJ PROJEKCII (soc_path[cur_idx] predpokladá, že sa plán už
+            # odohral — napr. nabíjanie → optimizer vidí fiktívny SOC → nepárové nákupy).
+            # Použi POSLEDNÝ ZNÁMY REÁLNY = ŠTART dňa (carryover z reálneho konca N-1).
+            current_soc = float(soc_path[0])
+            current_soc_source = (f"štart dňa carryover {float(soc_path[0]):.1f}% "
+                                  f"(realiz. trace dnes ešte nedostupný)")
 
     # 6. Data completeness final check
     data_completeness = (len(missing) == 0)
