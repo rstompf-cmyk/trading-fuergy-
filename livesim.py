@@ -1715,6 +1715,44 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     _chg_real = np.minimum(_plan_chg, _avail_for_chg)
                     _dis_real = np.minimum(_plan_dis, _avail_for_dis)
                     _batt_real = _dis_real - _chg_real                              # ±kW
+                    # SOC-PHYS-CLIP (úloha #66, 2026-06-30): JEDEN fyzikálny SOC strop na
+                    # REALIZOVANEJ batérii. Energiu nedá uložiť do plnej ani vziať z prázdnej —
+                    # platí nezávisle od cesty (run_day_physical/joint_lp/_batt_real). _batt_real
+                    # bol orezaný LEN gridom; pri rozídenom realizovanom SOC (napr. plán nabíja
+                    # pri SOC=100 z carryoveru) sa „dodal" výkon bez miesta → real==plán → žiadna
+                    # odchýlka. Tu bežiaci SOC z day-start carryoveru oreže batt o SOC a SOC
+                    # integruje z OREZANÉHO → real != plán pri SOC na hrane → odchýlka cez _dev_kw.
+                    # Kill-switch SOC_PHYS_CLIP=0. Pre run_day_physical (plán SOC-feasibilný) ~no-op.
+                    if os.environ.get("SOC_PHYS_CLIP", "1") != "0":
+                        try:
+                            from core.feasibility import clip_to_soc_feasible as _cl_soc, battery_step as _bs_soc
+                            _bkwh_pc = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
+                            if _bkwh_pc > 0:
+                                _ec_pc = float(getattr(cfg, "eff_c", 0.95) or 0.95)
+                                _ed_pc = float(getattr(cfg, "eff_d", 0.95) or 0.95)
+                                _smin_pc = _bkwh_pc * float(getattr(cfg, "soc_min", 0.05) or 0.0)
+                                _smax_pc = _bkwh_pc * float(getattr(cfg, "soc_max", 1.0) or 1.0)
+                                _soc_run_pc = float(soc)                 # day-start carryover (kWh)
+                                _dtm_pc = 1.0 / 60.0                     # realizované minúty
+                                _bvals = np.asarray(_batt_real, dtype=float)
+                                _bclip = np.empty(len(_bvals), dtype=float)
+                                _socp = np.empty(len(_bvals), dtype=float)
+                                for _ip in range(len(_bvals)):
+                                    _bc = _cl_soc(float(_bvals[_ip]), _soc_run_pc, dt_h=_dtm_pc,
+                                                  eff_c=_ec_pc, eff_d=_ed_pc,
+                                                  soc_min_kwh=_smin_pc, soc_max_kwh=_smax_pc)
+                                    _soc_run_pc = _bs_soc(_soc_run_pc, _bc, _dtm_pc, _ec_pc, _ed_pc)
+                                    _bclip[_ip] = _bc; _socp[_ip] = _soc_run_pc
+                                _n_clip = int(np.sum(np.abs(_bclip - _bvals) > 1.0))
+                                _batt_real = _bclip                      # odchýlka aj real_grid = orezané
+                                if "act_batt_kw" not in tr.columns:
+                                    # cesty bez run_day_physical: zjednoť aj zobrazenie + SOC z 1 zdroja
+                                    tr["soc_kwh"] = _socp
+                                    tr["soc_pct"] = np.round(_socp / _bkwh_pc * 100.0, 1)
+                                if _n_clip > 0:
+                                    print(f"[SOC-PHYS-CLIP] {profile} {d.isoformat()}: orezaných {_n_clip} minút (SOC na hrane)")
+                        except Exception as _e_pc:
+                            print(f"[SOC-PHYS-CLIP] zlyhalo ({_e_pc}) → bez SOC stropu")
                     # Bug RT-INLINE-AUDIT (2026-06-11): batt_kw_realistic preferuje act_batt_kw
                     # z rt_controllera (= už integruje realistic clip dovnútra) ak je k dispozícii.
                     # Bývalý Bug #607 _batt_p_raw post-loop je teraz nadbytočný — necháme len

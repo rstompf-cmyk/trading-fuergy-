@@ -30,6 +30,29 @@ def battery_step(soc_kwh: float, batt_kw: float, dt_h: float,
     return soc_kwh
 
 
+def clip_to_soc_feasible(batt_kw: float, soc_kwh: float, *, dt_h: float,
+                         eff_c: float, eff_d: float,
+                         soc_min_kwh: float, soc_max_kwh: float) -> float:
+    """Oreže JEDEN batériový povel tak, aby výsledný SOC ostal v [soc_min, soc_max].
+    JEDINÝ fyzikálny strop pre REALIZOVANÚ batériu (nezávisle od cesty: run_day_physical,
+    joint_lp, _batt_real fallback…). Energiu nedá uložiť do plnej ani vziať z prázdnej.
+
+    Konvencia (zhodná s battery_step): +batt_kw = vybíjanie (/eff_d), −batt_kw = nabíjanie (·eff_c).
+    Zrkadlí run_day_physical r.712–714:
+      vybíjanie:  batt ≤ (soc − soc_min)·eff_d / dt_h
+      nabíjanie:  |batt| ≤ (soc_max − soc) / (dt_h·eff_c)
+    """
+    dt_h = max(1e-9, float(dt_h)); eff_c = max(1e-6, float(eff_c)); eff_d = max(1e-6, float(eff_d))
+    b = float(batt_kw or 0.0)
+    if b > 0:      # vybíjanie — obmedzené dostupným SOC nad dnom
+        room = max(0.0, float(soc_kwh) - float(soc_min_kwh))
+        return min(b, room * eff_d / dt_h)
+    if b < 0:      # nabíjanie — obmedzené voľným miestom pod stropom
+        head = max(0.0, float(soc_max_kwh) - float(soc_kwh))
+        return -min(-b, head / (dt_h * eff_c))
+    return 0.0
+
+
 def soc_trajectory(batt_kw: Sequence[float], *, soc_init_kwh: float, batt_kwh: float = 0.0,
                    eff_c: float = 0.95, eff_d: float = 0.95, dt_h: float = 0.25) -> List[float]:
     """SOC trajektória (kWh, dĺžka N+1) pre daný batt plán BEZ clipu (na detekciu porušenia).
