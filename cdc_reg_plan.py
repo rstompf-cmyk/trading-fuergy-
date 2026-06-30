@@ -86,17 +86,24 @@ def _plan_arrays(battery: Dict[str, Any], day_iso: str):
 
 def build_band_table(battery: Dict[str, Any], day_iso: Optional[str] = None, *,
                      mode: str = "battery", rt: str = "fixed",
-                     rl_band_w: float = 1.0, soc_margin: float = 7.0
+                     rl_band_w: float = 1.0, soc_margin: float = 7.0,
+                     rl_active: int = 1, gl_active: Optional[int] = None
                      ) -> List[Dict[str, Any]]:
     """Postaví 15-min tabuľku regulačných pásiem z plánu batérie.
 
     mode: 'battery' (len RL) | 'point' (aj GL). rt: 'fixed' | 'band'.
+    rl_active/gl_active: globálny aktivačný bit (1=limity sa použijú, 0=ignorujú).
+      gl_active=None → odvodí sa z mode (point→1, inak 0).
     """
     if day_iso is None:
         day_iso = dt.date.today().isoformat()
     pnom = float(battery.get("batt_kw") or 0.0)
     batt, soc = _plan_arrays(battery, day_iso)
     point = (mode == "point")
+    if gl_active is None:
+        gl_active = 1 if point else 0
+    rl_active = int(rl_active)
+    gl_active = int(gl_active)
     rows: List[Dict[str, Any]] = []
     for i in range(96):
         h, m = divmod(i * 15, 60)
@@ -117,9 +124,9 @@ def build_band_table(battery: Dict[str, Any], day_iso: Optional[str] = None, *,
             "slot": i,
             "time": f"{h:02d}:{m:02d}",
             "sl_min": round(slmin, 1), "sl_max": round(slmax, 1),
-            "gl_active": 1 if point else 0,
+            "gl_active": gl_active,
             "gl_min": 0.0, "gl_base": 0.0, "gl_max": 0.0,
-            "rl_active": 1,
+            "rl_active": rl_active,
             "rl_min": round(rmin, 3), "rl_base": round(base, 3), "rl_max": round(rmax, 3),
             "batt_kw": None if batt[i] is None else round(batt[i], 1),
             "soc_pct": None if soc[i] is None else round(soc[i], 1),

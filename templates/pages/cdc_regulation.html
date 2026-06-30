@@ -70,17 +70,39 @@
       </select>
     </label>
     <label>SOC margin %: <input type="number" name="soc_margin" value="{{ soc_margin }}" step="0.5" style="width:80px"></label>
+    <label>RL aktívne (limity batérie):
+      <select name="rl_active">
+        <option value="1" {% if rl_active==1 %}selected{% endif %}>1 — zapnuté</option>
+        <option value="0" {% if rl_active==0 %}selected{% endif %}>0 — vypnuté</option>
+      </select>
+    </label>
+    <label>GL aktívne (riadenie na prahu):
+      <select name="gl_active">
+        <option value="1" {% if gl_active==1 %}selected{% endif %}>1 — zapnuté</option>
+        <option value="0" {% if gl_active==0 %}selected{% endif %}>0 — vypnuté</option>
+      </select>
+    </label>
     <label>Deň: <input type="date" name="day" value="{{ day }}"></label>
     <button type="submit" class="btn sec sm">Generovať z plánu</button>
   </form>
+  <p class="muted" style="font-size:12px">RL/GL aktívne = stavový bit zapisovaný do
+    <code>…_U_RegLimit_RL_Act_Plan</code> / <code>…_GL_Act_Plan</code> (1 = limity sa použijú).</p>
 
   {% if viz_svg %}{{ viz_svg|safe }}{% endif %}
 
   {% if write_result %}
     <div class="banner {{ 'info' if write_result.dry_run else 'success' }}">
       Zápis ({{ 'DRY-RUN' if write_result.dry_run else 'reálny' }}):
-      {% for lk, r in write_result.tags.items() %}<code>{{ lk }}</code>×{{ r.n }}{% if r.error %} ⚠{{ r.error }}{% endif %} {% endfor %}
+      {% for lk, r in write_result.tags.items() %}<code>{{ lk }}</code>×{{ r.n }}{% if r.status %} [{{ r.status }}]{% endif %}{% if r.error %} ⚠{{ r.error }}{% endif %} {% endfor %}
     </div>
+    {% set _first = (write_result.tags.values()|list)[0] if write_result.tags else none %}
+    {% if _first and (_first.response or _first.payload_sample) %}
+      <details style="font-size:12px;margin:4px 0">
+        <summary>🔎 Diagnostika zápisu (odpoveď servera + ukážka payloadu)</summary>
+        {% if _first.payload_sample %}<div>payload (1. tag, prvé body): <code>{{ _first.payload_sample }}</code></div>{% endif %}
+        {% if _first.response %}<div>odpoveď servera: <code>{{ _first.response }}</code></div>{% endif %}
+      </details>
+    {% endif %}
   {% endif %}
 
   {% if band_rows %}
@@ -94,7 +116,7 @@
           {{ 'Zakázať zápis' if write_enabled else 'Povoliť zápis' }}
         </button>
       </form>
-      <span class="muted" style="font-size:12px">aj keď povolený, reálny HW zápis ide len pri FLEET_REAL_WRITE=1 (inak DRY-RUN)</span>
+      <span class="muted" style="font-size:12px">manuálny export zapíše na CDC keď je povolený (autonómne riadenie na pozadí má navyše vlastnú poistku FLEET_REAL_WRITE)</span>
     </div>
     <form method="post" action="/customers/battery/regulation/write" style="margin:8px 0">
       <input type="hidden" name="id" value="{{ b.id }}">
@@ -102,6 +124,8 @@
       <input type="hidden" name="rt" value="{{ rt }}">
       <input type="hidden" name="soc_margin" value="{{ soc_margin }}">
       <input type="hidden" name="day" value="{{ day }}">
+      <input type="hidden" name="rl_active" value="{{ rl_active }}">
+      <input type="hidden" name="gl_active" value="{{ gl_active }}">
       <input type="hidden" name="edited" value="1">
       <p>
         <button type="submit" class="btn green" {% if not write_enabled %}disabled title="Najprv povoľ zápis"{% endif %}>💾 Zapísať do batérie ({{ b.cdc_prefix }})</button>

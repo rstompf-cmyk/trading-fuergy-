@@ -21,6 +21,11 @@
       </label>
       <label>Endpoint read: <input type="text" name="endpoint_read" value="{{ cfg.endpoint_read }}"></label>
       <label>Endpoint write: <input type="text" name="endpoint_write" value="{{ cfg.endpoint_write }}"></label>
+      <label>Formát času (zápis):
+        <input type="text" name="write_time_fmt" value="{{ cfg.write_time_fmt }}" size="22"
+               placeholder="%d.%m.%Y %H:%M:%S">
+        <span class="muted" style="font-size:12px">ak server odmieta zápis, skús napr. <code>%d.%m.%Y_%H:%M:%S</code></span>
+      </label>
       <br>
       <label>Užívateľ: <input type="text" name="username" value="{{ cfg.username }}"></label>
       <label>Heslo: <input type="password" name="password" value="{{ cfg.password }}"></label>

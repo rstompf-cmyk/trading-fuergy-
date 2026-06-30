@@ -17625,6 +17625,7 @@ async def cdc_save(request: Request):
     cfg["host"] = (form.get("host") or "").strip()
     cfg["endpoint_read"] = (form.get("endpoint_read") or "/api/excel/data/read").strip()
     cfg["endpoint_write"] = (form.get("endpoint_write") or "/api/excel/data/write").strip()
+    cfg["write_time_fmt"] = (form.get("write_time_fmt") or "%d.%m.%Y %H:%M:%S").strip()
     cfg["username"] = (form.get("username") or "").strip()
     cfg["password"] = (form.get("password") or "").strip()
     try:
@@ -17908,7 +17909,8 @@ def _cdc_set_write_enabled(bid, val: bool) -> None:
 
 
 def _regulation_page(request, id, *, mode="battery", rt="fixed", soc_margin=7.0,
-                     day=None, msg="", msg_kind="success", write_result=None):
+                     day=None, msg="", msg_kind="success", write_result=None,
+                     rl_active=1, gl_active=None):
     import fleet
     import cdc
     import cdc_reg_plan
@@ -17938,9 +17940,11 @@ def _regulation_page(request, id, *, mode="battery", rt="fixed", soc_margin=7.0,
         ("reg_output_kw", "Reg. výstup", "kW"),
     ]
     day = day or _dt.date.today().isoformat()
+    _gl_eff = (1 if mode == "point" else 0) if gl_active is None else int(gl_active)
     try:
         band_rows = cdc_reg_plan.build_band_table(b, day, mode=mode, rt=rt,
-                                                  soc_margin=float(soc_margin))
+                                                  soc_margin=float(soc_margin),
+                                                  rl_active=int(rl_active), gl_active=_gl_eff)
     except Exception as e:
         band_rows = []
         if not msg:
@@ -17952,14 +17956,16 @@ def _regulation_page(request, id, *, mode="battery", rt="fixed", soc_margin=7.0,
                   status=status, viz_svg=_reg_plan_charts(band_rows),
                   band_rows=band_rows, mode=mode, rt=rt, soc_margin=soc_margin,
                   day=day, msg=msg, msg_kind=msg_kind, write_result=write_result,
-                  write_enabled=_cdc_write_enabled(id))
+                  write_enabled=_cdc_write_enabled(id),
+                  rl_active=int(rl_active), gl_active=_gl_eff)
 
 
 @app.get("/customers/battery/regulation", response_class=HTMLResponse)
 def customers_battery_regulation(request: Request, id: int, mode: str = "battery",
                                  rt: str = "fixed", soc_margin: float = 7.0,
-                                 day: str = None):
-    return _regulation_page(request, id, mode=mode, rt=rt, soc_margin=soc_margin, day=day)
+                                 day: str = None, rl_active: int = 1, gl_active: int = None):
+    return _regulation_page(request, id, mode=mode, rt=rt, soc_margin=soc_margin, day=day,
+                            rl_active=rl_active, gl_active=gl_active)
 
 
 @app.post("/customers/battery/regulation/write", response_class=HTMLResponse)
@@ -17980,13 +17986,21 @@ async def customers_battery_regulation_write(request: Request):
     except ValueError:
         soc_margin = 7.0
     day = form.get("day") or _dt.date.today().isoformat()
+    # globálne aktivačné bity (1=limity sa použijú, 0=ignorujú)
+    try:
+        _rla = int(form.get("rl_active") if form.get("rl_active") not in (None, "") else 1)
+    except (TypeError, ValueError):
+        _rla = 1
+    _gla_raw = form.get("gl_active")
+    _gla = int(_gla_raw) if _gla_raw not in (None, "") else (1 if mode == "point" else 0)
     b = fleet.get_battery(bid)
     if not b or b.get("backend") != "cdc" or not b.get("cdc_prefix"):
         return _regulation_page(request, bid, mode=mode, rt=rt, soc_margin=soc_margin,
                                 day=day, msg="Batéria nie je CDC alebo nemá prefix.",
                                 msg_kind="error")
     if form.get("edited") == "1":
-        # zapíš ručne upravené hodnoty z tabuľky (nie regenerované)
+        # zapíš ručne upravené hodnoty z tabuľky (nie regenerované); aktivačné bity
+        # berie GLOBÁLNY prepínač (rovnaký pre všetky sloty)
         rows = []
         for i in range(96):
             h, m = divmod(i * 15, 60)
@@ -18002,27 +18016,31 @@ async def customers_battery_regulation_write(request: Request):
             rows.append({
                 "slot": i, "time": f"{h:02d}:{m:02d}",
                 "sl_min": _f("sl_min"), "sl_max": _f("sl_max", 100.0),
-                "gl_active": 1 if form.get(pfx + "gl_active") else 0,
+                "gl_active": _gla,
                 "gl_min": _f("gl_min"), "gl_base": _f("gl_base"), "gl_max": _f("gl_max"),
-                "rl_active": 1,
+                "rl_active": _rla,
                 "rl_min": _f("rl_min"), "rl_base": _f("rl_base"), "rl_max": _f("rl_max"),
             })
         if not rows:
-            rows = cdc_reg_plan.build_band_table(b, day, mode=mode, rt=rt, soc_margin=soc_margin)
+            rows = cdc_reg_plan.build_band_table(b, day, mode=mode, rt=rt, soc_margin=soc_margin,
+                                                 rl_active=_rla, gl_active=_gla)
     else:
-        rows = cdc_reg_plan.build_band_table(b, day, mode=mode, rt=rt, soc_margin=soc_margin)
+        rows = cdc_reg_plan.build_band_table(b, day, mode=mode, rt=rt, soc_margin=soc_margin,
+                                             rl_active=_rla, gl_active=_gla)
     cfg = cdc.load_system_config(b.get("country"))
     cfg["enabled"] = True
     cfg["control_enabled"] = _cdc_write_enabled(bid)   # per-batéria prepínač
     if not _cdc_write_enabled(bid):
         return _regulation_page(request, bid, mode=mode, rt=rt, soc_margin=soc_margin,
-                                day=day, msg="Zápis je ZAKÁZANÝ — najprv povoľ prepínačom nižšie.",
+                                day=day, rl_active=_rla, gl_active=_gla,
+                                msg="Zápis je ZAKÁZANÝ — najprv povoľ prepínačom nižšie.",
                                 msg_kind="error")
     res = cdc.write_band_table(b["cdc_prefix"], rows, day, cfg=cfg)
     kind = "info" if res.get("dry_run") else "success"
-    note = "DRY-RUN (nezapísané — FLEET_REAL_WRITE!=1)" if res.get("dry_run") else "Zapísané do batérie."
+    note = "DRY-RUN (nezapísané — povoľ prepínač zápisu)" if res.get("dry_run") else "Zapísané do batérie (CDC)."
     return _regulation_page(request, bid, mode=mode, rt=rt, soc_margin=soc_margin,
-                            day=day, msg=note, msg_kind=kind, write_result=res)
+                            day=day, rl_active=_rla, gl_active=_gla,
+                            msg=note, msg_kind=kind, write_result=res)
 
 
 @app.post("/customers/battery/regulation/toggle_write", response_class=HTMLResponse)

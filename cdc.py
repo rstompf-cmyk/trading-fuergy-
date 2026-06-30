@@ -144,6 +144,7 @@ DEFAULT_SYSTEM: Dict[str, Any] = {
     "verify_ssl": False,
     "timeout_s": 15,
     "step_read_s": 900,            # 900 = 15-min, 3600 = 1h
+    "write_time_fmt": "%d.%m.%Y %H:%M:%S",   # formát časovej značky pri zápise (server-špecifický)
     "tz_offset_h": 0,              # CDC server TZ → lokálny: +h pripočítané k CDC času
                                    #   (CET server vs CEST lokál v lete = 1). Tuneable v /cdc.
     "enabled": False,              # master kill switch (read)
@@ -504,12 +505,17 @@ def write_series(prefix: str, logical: str, series: List, market: Optional[str] 
         out["error"] = f"write tag '{logical}' nie je nakonfigurovaný"
         return out
     scale = float((cfg.get("scale_write") or {}).get(logical, 1.0)) if apply_scale else 1.0
-    payload = {tag: [{"time": _fmt_dt(t).replace("_", " "), "value": v * scale}
+    # Časový formát zápisu je konfigurovateľný (cfg['write_time_fmt']) — server môže
+    # vyžadovať inú podobu časovej značky; default zrkadlí read response "DD.MM.YYYY HH:MM:SS".
+    _tf = cfg.get("write_time_fmt") or "%d.%m.%Y %H:%M:%S"
+    payload = {tag: [{"time": t.strftime(_tf), "value": v * scale}
                      for (t, v) in series]}
     out["payload_sample"] = payload[tag][:3]
-    if not _real_write_enabled(cfg):
+    # MANUÁLNY export: stačí enabled+control_enabled (per-batéria prepínač zápisu),
+    # NEvyžaduje FLEET_REAL_WRITE (ten je pre autonómny control loop / write_value).
+    if not (bool(cfg.get("enabled")) and bool(cfg.get("control_enabled"))):
         out["ok"] = True
-        out["note"] = "DRY-RUN (zapnúť enabled+control_enabled a FLEET_REAL_WRITE=1)"
+        out["note"] = "DRY-RUN (povoľ prepínač zápisu)"
         return out
     host = (cfg.get("host") or "").rstrip("/")
     path = cfg.get("endpoint_write") or "/api/excel/data/write"
@@ -518,6 +524,7 @@ def write_series(prefix: str, logical: str, series: List, market: Optional[str] 
         r = s.post(f"{host}{path}", data=json.dumps(payload),
                    timeout=float(cfg.get("timeout_s", 15)))
         out["status"] = r.status_code
+        out["response"] = (r.text or "")[:300]
         r.raise_for_status()
         out["ok"] = True
         out["dry_run"] = False
@@ -555,7 +562,9 @@ def write_band_table(prefix: str, rows: List[Dict[str, Any]], day_iso: str,
         res = write_series(prefix, logical, series, cfg=cfg, source=source)
         results["tags"][logical] = {"ok": res.get("ok"), "n": res.get("n"),
                                     "dry_run": res.get("dry_run"), "tag": res.get("tag"),
-                                    "error": res.get("error")}
+                                    "error": res.get("error"), "status": res.get("status"),
+                                    "response": res.get("response"),
+                                    "payload_sample": res.get("payload_sample")}
         if not res.get("dry_run"):
             any_real = True
     results["dry_run"] = not any_real
