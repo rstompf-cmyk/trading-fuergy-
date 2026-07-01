@@ -538,8 +538,17 @@ def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
         except Exception:
             _src = "predicted"
         _primary, _secondary = (("dentrh", "plan") if _src == "dentrh" else ("plan", "dentrh"))
-        plan = (ps.load_plan_safe(date_iso, 15, _primary)
-                or ps.load_plan_safe(date_iso, 15, _secondary))
+        # REAL-NO-PREDICT-FALLBACK (2026-07-01, user: „reálny profil sa NEGENERUJE z predikcie,
+        # je to total pomiešané"): dentrh (reálny) profil NESMIE ticho spadnúť na PREDIKOVANÝ plán,
+        # keď dentrh chýba — inak realio ukazuje predikciu ako keby bola reálny trhový záväzok.
+        # Pre dentrh profil zrušíme sekundárny fallback → radšej PlanMissingError („chýba reálny
+        # DAM plán, vygeneruj cez /dentrh") než tichá predikcia. Predikované profily bez zmeny.
+        # Kill-switch REAL_NO_PREDICT_FALLBACK=0 → staré správanie (fallback na plan).
+        if _src == "dentrh" and os.environ.get("REAL_NO_PREDICT_FALLBACK", "1") != "0":
+            _secondary = None
+        plan = ps.load_plan_safe(date_iso, 15, _primary)
+        if plan is None and _secondary is not None:
+            plan = ps.load_plan_safe(date_iso, 15, _secondary)
         if plan is None:
             plan = ps.load_plan(date_iso, 15, _primary)       # PlanMissingError (primárny kind)
     else:
