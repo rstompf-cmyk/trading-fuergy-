@@ -20,6 +20,7 @@ iba horná pre nabíjanie (batt sa nezvládne nabiť nad soc_max).
 """
 from __future__ import annotations
 
+import os
 import datetime as dt
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -485,23 +486,41 @@ def audit_action(profile: str,
     # Delta-filter (ignoruj baseline-spôsobené violácie) platí LEN pre RT/auto_control — tie
     # REAGUJÚ na realitu a nemajú ju zhoršovať. VDT nominuje NOVÝ trhový záväzok → musí byť
     # absolútne dodateľný, inak realita nedodá → odchýlka = pokuta (presne čo riešime).
-    if str(source or "").lower() in ("vdt", "vdt_extra"):
-        _base_viols_set = set()
+    # VDT-AUDIT-NOWORSEN (2026-07-01, KILL-SWITCH VDT_AUDIT_NOWORSEN=0 → späť na ABSOLUTNÝ):
+    # keď je baseline SOC UŽ infeasibilný (D-1/nahromadený VDT plán mimo limitov), absolútny
+    # audit zamietal KAŽDÝ VDT obchod (aj feasibilný) → žiadne VDT sa neuzavreli (WV_3/4, Elpremont…).
+    # No-worsen: VDT obchod smie prejsť, ak NEZVÝŠI celkový SOC excess (nákup pri 100 % / predaj
+    # pri 0 % ho zvýšia → padnú = fyzika dodržaná; feasibilný obchod ho nezvýši → prejde).
+    # Non-VDT (RT/auto_control) ostáva bit-exact (delta filter) — golden nedotknuté.
+    _is_vdt = str(source or "").lower() in ("vdt", "vdt_extra")
+    _vdt_noworsen = _is_vdt and os.environ.get("VDT_AUDIT_NOWORSEN", "1") != "0"
+
+    def _soc_excess(_path):
+        return sum(max(0.0, _x - soc_max_eff) + max(0.0, soc_min_eff - _x) for _x in _path)
+
+    if _vdt_noworsen:
+        _base_viols_set = None                    # signál: použi excess no-worsen (nižšie)
+        _base_excess = _soc_excess(_base_path)
+    elif _is_vdt:
+        _base_viols_set = set()                   # ABSOLUTNÝ (kill-switch VDT_AUDIT_NOWORSEN=0)
     else:
         _base_viols_set = {(v[0], v[1]) for v in check_violations(
             _base_path, _base_dirs,
             soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
             from_slot=si)}
 
+    def _eff_viols(_soc_path, _dirs):
+        """Efektívne violácie: VDT no-worsen = obchod „porušuje" len ak ZVÝŠI SOC excess;
+        inak (RT/auto_control aj VDT-absolute) delta filter podľa (slot, kind)."""
+        _raw = check_violations(_soc_path, _dirs, soc_min_eff_pct=soc_min_eff,
+                                soc_max_eff_pct=soc_max_eff, from_slot=si)
+        if _base_viols_set is None:               # VDT no-worsen (magnitúda excess)
+            return list(_raw) if _soc_excess(_soc_path) > _base_excess + 1e-6 else []
+        return [v for v in _raw if (v[0], v[1]) not in _base_viols_set]
+
     # Pokus s plnou požadovanou hodnotou
     soc_path_full, dirs_full = _trial(kwh_req)
-    # Filter: ignoruj violácie ktoré existovali aj v baseline (= plán je infeasible,
-    # nie RT vina). RT prispel k violation len ak (slot, kind) nie je v baseline.
-    violations_full = [v for v in check_violations(
-        soc_path_full, dirs_full,
-        soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
-        from_slot=si)
-        if (v[0], v[1]) not in _base_viols_set]
+    violations_full = _eff_viols(soc_path_full, dirs_full)
     out["soc_path_proposed"] = soc_path_full
 
     if not violations_full:
@@ -516,11 +535,7 @@ def audit_action(profile: str,
         if mid <= 0.001:
             break
         soc_path_mid, dirs_mid = _trial(mid)
-        viol_mid = [v for v in check_violations(
-            soc_path_mid, dirs_mid,
-            soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
-            from_slot=si)
-            if (v[0], v[1]) not in _base_viols_set]   # DELTA: ignoruj plán-spôsobené
+        viol_mid = _eff_viols(soc_path_mid, dirs_mid)
         if viol_mid:
             hi = mid
         else:
@@ -529,11 +544,7 @@ def audit_action(profile: str,
     # Re-eval final soc_path
     soc_path_final, dirs_final = _trial(allowed)
     out["soc_path_proposed"] = soc_path_final
-    out["violations"] = [v for v in check_violations(
-        soc_path_final, dirs_final,
-        soc_min_eff_pct=soc_min_eff, soc_max_eff_pct=soc_max_eff,
-        from_slot=si)
-        if (v[0], v[1]) not in _base_viols_set]   # DELTA: ignoruj plán-spôsobené
+    out["violations"] = _eff_viols(soc_path_final, dirs_final)
     if allowed < 0.5:           # menej ako 0.5 kWh nemá zmysel
         out["decision"] = "reject"
         out["allowed_kwh"] = 0.0
