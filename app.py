@@ -8620,6 +8620,28 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _dist_reduction_kwh = float(_dist_r.get("import_reduction_kwh", 0.0))
     except Exception as _e_dist:
         print(f"[DIST-FEE karta] {_e_dist}")
+    # KROK 4 Fáza 1 (2026-07-01): NOMINÁCIA vs EXEKÚCIA — koľko sa trhový záväzok
+    # (nomination_batt_kw = D-1 + committed VDT) rozchádza s tým, čo plán/realita
+    # zvládne (exec = plan_batt_kw). Rozdiel = zdroj budúcej odchýlky, dnes maskovaný
+    # tým, že plan_batt_kw = feasibilný sch. LEN diagnostika (odchýlka sa nemení).
+    _nomdiff_card = ""
+    try:
+        if ("nomination_batt_kw" in dview.columns) and ("exec_batt_kw" in dview.columns):
+            _nom_a = pd.to_numeric(dview["nomination_batt_kw"], errors="coerce").fillna(0.0)
+            _exe_a = pd.to_numeric(dview["exec_batt_kw"], errors="coerce").fillna(0.0)
+            _diff_kw = (_nom_a - _exe_a).abs()
+            _n_min = int((_diff_kw > 1.0).sum())          # minúty s rozdielom > 1 kW
+            _diff_kwh = float(_diff_kw.sum()) / 60.0       # per-minútové kW → kWh
+            if _n_min > 0:
+                _nomdiff_card = (
+                    f"<div class='card' style='background:#fff3cd;border:1px solid #ffe399'>"
+                    f"<div class='l'>Nominácia vs exekúcia {view_day}</div>"
+                    f"<div class='v' style='color:#7a5d00'>{_diff_kwh:.0f} kWh</div>"
+                    f"<div style='font-size:10px;color:#888'>trhový záväzok (D-1+VDT) sa "
+                    f"{_n_min} min rozchádza s feasibilným plánom — potenciálna odchýlka "
+                    f"(Fáza 2 ju zúčtuje)</div></div>")
+    except Exception as _e_nomdiff:
+        print(f"[NOMINÁCIA-vs-EXEKÚCIA karta] {_e_nomdiff}")
     # CARDS-ROBUST (2026-06-19, user: "po úprave načítania vypadli sumárne displeje"):
     # ktorákoľvek komponenta kariet (now_cards / _vdt_eff_cards / DB override …) môže pri
     # niektorých dátach hodiť výnimku/NameError → predtým to zhodilo CELÝ card blok a sumáre
@@ -8645,6 +8667,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             f"<div class='card' style='background:#eef7ee'><div class='l'>Úspora na distribúcii {view_day}</div>"
             f"<div class='v' style='color:#2E7D32'>{_d_dist:+.1f} €</div>"
             f"<div style='font-size:11px;color:#555'>{_dist_reduction_kwh:+.0f} kWh menej odberu zo siete · poplatok {_gf_dist:.2f} €/MWh</div></div>"
+            f"{_nomdiff_card}"
             f"<div class='card' style='background:#eef7ee'><div class='l'>FTV výroba za deň</div><div class='v'>{d_ftv:.0f} kWh</div></div></div>"
             f"<h2 style='margin:6px 0'>Hodnoty teraz</h2><div style='display:flex;gap:12px;flex-wrap:wrap;margin:4px 0'>{now_cards}</div>"
             f"{reco_card}")

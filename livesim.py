@@ -159,6 +159,10 @@ CSV_COLS = ["time", "date", "ts15",
             # VDT druhýkrát (plan_batt_kw už po Bug VDT-DATE-ISO VDT obsahuje).
             "plan_batt_dam_kw", "plan_batt_vdt_kw",
             "plan_grid_dam_kwh", "plan_grid_vdt_kwh",
+            # KROK 4 Fáza 1 (2026-07-01): NOMINÁCIA (trhový záväzok, raw D-1+committed VDT
+            # pred SOC clipom) vs EXEKÚCIA (=plan_batt_kw). Diagnostika viditeľnosti rozdielu,
+            # settlement ich zatiaľ NEČÍTA (Fáza 2 prepne odchýlku na nomination_grid_kwh).
+            "nomination_batt_kw", "exec_batt_kw", "nomination_grid_kwh",
             "batt_kw_realistic", "rt_rev_realistic_min",
             # Bug VDT-ARB-ORDER (2026-06-11): vdt_arb_min do CSV — efekt z CSV
             # (chC export, karty cez get_vdt_arb_series priorita 1) bez runtime
@@ -1525,6 +1529,11 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 # orezaný na grid/SOC → real ~4000, ale plan_batt_kw sa staval z raw VDT → 6000 →
                 # odchýlka real(4000) vs nominácia(6000) = pokuta. Teraz plan_batt_kw = sch =
                 # presne to, čo realita dodá → odchýlka VDT ≈ 0. DAM ostáva, VDT = sch − čistý DAM.
+                # KROK 4 Fáza 1 (2026-07-01): NOMINÁCIA = trhový záväzok = čistý D-1 DAM +
+                # COMMITTED VDT (raw, PRED feasibility clipom). Zachytíme raw VDT teraz, kým ho
+                # nižšie neprepíšeme na feasible (sch−dam). Slúži LEN na záznam/zobrazenie
+                # rozdielu nominácia↔exekúcia — odchýlka/pokuta sa NEMENÍ (to je Fáza 2).
+                _vdt_nom_per_min = list(vdt_per_min)
                 _sch_per_min = [float(sch["batt_kw"].values[i]) for i in tr["pidx"]]
                 vdt_per_min = [s - dpm for s, dpm in zip(_sch_per_min, dam_per_min)]
                 _dt_vc = max(int(step), 1) / 60.0
@@ -1532,6 +1541,11 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 tr["plan_batt_dam_kw"] = dam_per_min
                 tr["plan_batt_vdt_kw"] = vdt_per_min
                 tr["plan_batt_kw"] = _sch_per_min                       # = feasibilný plán (grid+SOC), zhodný s realitou
+                # KROK 4 Fáza 1: NOMINÁCIA (batéria) = D-1 DAM + committed VDT (raw) vs
+                # EXEKÚCIA = _sch (feasibilný plán). Rozdiel = kde trhový záväzok fyzicky
+                # nevyjde. Diagnostické stĺpce — odchýlka ich zatiaľ NEČÍTA (Fáza 2).
+                tr["nomination_batt_kw"] = [d + v for d, v in zip(dam_per_min, _vdt_nom_per_min)]
+                tr["exec_batt_kw"] = _sch_per_min
                 _dam_grid = [float(sch["grid_kwh"].values[i]) for i in tr["pidx"]]
                 tr["plan_grid_dam_kwh"] = _dam_grid
                 tr["plan_grid_vdt_kwh"] = vdt_kwh_per_min
@@ -1548,6 +1562,17 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     tr["plan_grid_kwh"] = [max(_clip_lo, min(_clip_hi, x)) for x in _plan_grid_raw]
                 else:
                     tr["plan_grid_kwh"] = _plan_grid_raw
+                # KROK 4 Fáza 1: NOMINÁCIA (grid) = D-1 DAM grid + committed VDT (raw), orezaná
+                # LEN na fyzický grid limit (nie SOC). Toto je trhový záväzok, voči ktorému sa
+                # v Fáze 2 bude merať odchýlka. Zatiaľ LEN záznam — settlement číta plan_grid_kwh.
+                _vdt_nom_kwh = [v * _dt_vc for v in _vdt_nom_per_min]
+                _nom_grid_raw = [g + v for g, v in zip(_dam_grid, _vdt_nom_kwh)]
+                if _gke_kwh_max is not None or _gki_kwh_max is not None:
+                    _nhi = _gke_kwh_max if _gke_kwh_max is not None else float("inf")
+                    _nlo = -_gki_kwh_max if _gki_kwh_max is not None else float("-inf")
+                    tr["nomination_grid_kwh"] = [max(_nlo, min(_nhi, x)) for x in _nom_grid_raw]
+                else:
+                    tr["nomination_grid_kwh"] = _nom_grid_raw
                 tr["plan_curtail_kwh"] = [float(sch["curtail_kwh"].values[i]) for i in tr["pidx"]]
                 tr["dt_eur"] = [float(price[i]) for i in tr["pidx"]]
                 tr["ftv_kw"] = [float(pvper[i]) for i in tr["pidx"]]
@@ -2443,6 +2468,11 @@ def _trace_from_db(profile, day):
         _df["batt_kw_realistic"] = _col("batt_kw_real")
         _df["plan_batt_dam_kw"] = _col("plan_batt_kw")
         _df["plan_batt_vdt_kw"] = 0.0
+        # KROK 4 Fáza 1: história (DB) nemá uloženú raw nomináciu → default = plan_batt_kw
+        # (nominácia ≈ exekúcia, žiadny rozdiel). Živý dnešný trace ich má reálne vyplnené.
+        _df["nomination_batt_kw"] = _col("plan_batt_kw")
+        _df["exec_batt_kw"] = _col("plan_batt_kw")
+        _df["nomination_grid_kwh"] = 0.0
         _df["plan_grid_kwh"] = 0.0
         _df["plan_grid_dam_kwh"] = 0.0
         _df["plan_grid_vdt_kwh"] = 0.0
@@ -2478,6 +2508,7 @@ def _trace_from_db(profile, day):
                         _cu[_ii] = float(_ck[_slot])
             _df["plan_grid_dam_kwh"] = _gd
             _df["plan_grid_kwh"] = _gd          # história: nominácia = čistý DAM grid (VDT vrstva sa nerekonštruuje)
+            _df["nomination_grid_kwh"] = _gd    # KROK 4 Fáza 1: história = DAM grid nominácia
             _df["plan_curtail_kwh"] = _cu
         except Exception as _e_rec:
             print(f"[_trace_from_db] rekonštrukcia nominácie z plánu zlyhala: {_e_rec}")
