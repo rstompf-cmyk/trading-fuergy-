@@ -11787,8 +11787,9 @@ _VDT_WATCH_TMPL = """<!doctype html><html lang="sk"><head><meta charset="utf-8">
 <p class="err" id="err"></p>
 <h3>Najlepšie páry (simulácia)</h3>
 <table id="pairs"><thead><tr><th>#</th><th>NÁKUP čas</th><th>@ €/MWh</th><th>PREDAJ čas</th><th>@ €/MWh</th><th>marža €/MWh</th><th>zisk €</th></tr></thead><tbody></tbody></table>
-<h3>Orderbook — best bid/ask per slot (len sloty s ponukou)</h3>
-<table id="book"><thead><tr><th>slot</th><th>čas</th><th>ASK (predaj) €</th><th>MW</th><th>BID (nákup) €</th><th>MW</th><th>spread</th></tr></thead><tbody></tbody></table>
+<h3>Orderbook — best ponuky per slot (len sloty s ponukou · tvoj pohľad)</h3>
+<div class="sub">ASK = najlacnejší predajca na trhu → <b>tu KÚPIŠ</b> · BID = najdrahší kupec → <b>tu PREDÁŠ</b></div>
+<table id="book"><thead><tr><th>slot</th><th>čas</th><th>ASK · kúpiš €</th><th>MW</th><th>BID · predáš €</th><th>MW</th><th>ask−bid</th></tr></thead><tbody></tbody></table>
 <script>
 function fmt(x,d){ return (x==null)?'—':Number(x).toFixed(d==null?2:d); }
 async function refresh(){
@@ -11809,7 +11810,7 @@ async function refresh(){
     const bb = document.querySelector('#book tbody');
     bb.innerHTML = (d.slots||[]).filter(s=>s.ask!=null||s.bid!=null).map(s=>{
       const cls = pset.has(s.slot)?' class="pair"':'';
-      return '<tr'+cls+'><td>'+s.slot+'</td><td class="l">'+s.period+'</td><td class="sell">'+fmt(s.ask)+'</td><td>'+fmt(s.ask_mw,1)+'</td><td class="buy">'+fmt(s.bid)+'</td><td>'+fmt(s.bid_mw,1)+'</td><td>'+fmt(s.spread)+'</td></tr>';
+      return '<tr'+cls+'><td>'+s.slot+'</td><td class="l">'+s.period+'</td><td class="buy">'+fmt(s.ask)+'</td><td>'+fmt(s.ask_mw,1)+'</td><td class="sell">'+fmt(s.bid)+'</td><td>'+fmt(s.bid_mw,1)+'</td><td>'+fmt((s.ask!=null&&s.bid!=null)?(s.ask-s.bid):null)+'</td></tr>';
     }).join('') || '<tr><td colspan="7">— žiadne ponuky na trhu</td></tr>';
   }catch(e){ document.getElementById('err').textContent='chyba: '+e; }
 }
