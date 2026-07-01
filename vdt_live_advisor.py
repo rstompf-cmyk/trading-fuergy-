@@ -1438,8 +1438,28 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
                 if _action_upper in ("CHARGE", "DISCHARGE", "BUY", "SELL") and abs(_kwh_req) > 0:
                     try:
                         from core.soc_use_audit import audit_action as _soc_audit
+                        # VDT-AUDIT-REAL-SOC (#28, 2026-07-01): audit MUSÍ rezervovať SOC pre
+                        # DAM záväzok voči REÁLNEMU SOC (nie plánu od 00:00). Bez toho VDT
+                        # otvárací predaj zožral SOC, ktorý realita nedodá → večerná odchýlka.
+                        # Podáme reálny current_soc + aktuálny slot (seed simulácie).
+                        # Kill-switch VDT_AUDIT_REAL_SOC=0 → späť na seed z plánu (00:00).
+                        _ts_rs = None; _cur_soc_rs = None; _cur_slot_rs = None
+                        if os.environ.get("VDT_AUDIT_REAL_SOC", "1") != "0":
+                            try:
+                                import vdt_state as _vs_rs
+                                _ts_rs = _vs_rs.compute_current_state(
+                                    profile, today=dt.date.fromisoformat(_today))
+                                if _ts_rs and _ts_rs.get("ok"):
+                                    _cur_soc_rs = float(_ts_rs.get("current_soc_pct"))
+                                    _cur_slot_rs = int(_ts_rs.get("current_slot_idx") or 0)
+                            except Exception as _e_rs:
+                                print(f"[append_paper_trade VDT-AUDIT-REAL-SOC] {profile}: {_e_rs} → seed z plánu")
+                                _ts_rs = None; _cur_soc_rs = None; _cur_slot_rs = None
                         _sa = _soc_audit(profile, _today, _slot_idx, _direction,
-                                          abs(_kwh_req), source="vdt")
+                                          abs(_kwh_req), source="vdt",
+                                          today_state=_ts_rs,
+                                          current_soc_pct_at_si=_cur_soc_rs,
+                                          sim_from_slot=_cur_slot_rs)
                         if _sa["decision"] == "reject":
                             print(f"[append_paper_trade #637] REJECT {profile} slot={slot} "
                                   f"{_action_upper}: {_sa['reason']}")

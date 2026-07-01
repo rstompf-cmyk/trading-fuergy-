@@ -324,7 +324,8 @@ def audit_action(profile: str,
                   source: str = "vdt",
                   today_state: Optional[Dict[str, Any]] = None,
                   step_min: int = 15,
-                  current_soc_pct_at_si: Optional[float] = None) -> Dict[str, Any]:
+                  current_soc_pct_at_si: Optional[float] = None,
+                  sim_from_slot: Optional[int] = None) -> Dict[str, Any]:
     """Audit navrhovanej akcie pred zápisom.
 
     Args:
@@ -444,8 +445,14 @@ def audit_action(profile: str,
     # (slot si vyššie) od tohto SOC. Minulosť sa nemení.
     if current_soc_pct_at_si is not None:
         _sim_start_soc = float(current_soc_pct_at_si)
-        # Sloty 0..si-1 → 0 kWh (nemení SOC, simulácia začína v si)
-        _sim_offset = si
+        # VDT-AUDIT-REAL-SOC (#28, 2026-07-01): seed simulácie NIE nutne v trade slote si,
+        # ale v AKTUÁLNOM slote (sim_from_slot) — reálny SOC teraz + záväzky vpred (DAM/VDT
+        # medzi teraz a si) → rezervácia proti REALITE, nie plánovej trajektórii od 00:00.
+        # sim_from_slot=None → seed v si (spätná kompat: RT/repro/testy bit-exact).
+        if sim_from_slot is not None:
+            _sim_offset = int(max(0, min(int(sim_from_slot), si)))
+        else:
+            _sim_offset = si
     else:
         _sim_start_soc = float(today_state["start_soc_pct"])
         _sim_offset = 0
