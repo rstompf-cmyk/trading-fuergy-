@@ -212,6 +212,11 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
     grid_kw_export = float(pp.get("grid_kw_export", grid_kw))
     grid_fee = float(pp.get("grid_fee", 22.0))
     cycle_cost = float(pp.get("cycle_cost", 2.0))
+    # MIN-SPREAD-PLAN (2026-06-30): D-1 plán MUSÍ rešpektovať profilový `min_spread`
+    # (€/MWh) — bez neho LP chytal tenké/šumové vnútrohodinové spready z predikcie
+    # (napr. nabíjanie večer pri 152 na predaj 180). pen=(cycle_cost+min_spread)/2/1000
+    # zvýši prah round-trip cyklu. Default 0 = golden bit-exact (back-compat).
+    min_spread_eur = float(pp.get("min_spread", pp.get("min_spread_eur", 0.0)) or 0.0)
     # Stropy denného obchodovania (kWh/deň). Override z volania má prednosť pred profile defaultom.
     # 0 alebo None znamená "bez stropu".
     def _opt_float(v):
@@ -307,6 +312,7 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
             grid_kw=grid_kw,
             grid_kw_import=grid_kw_import, grid_kw_export=grid_kw_export,
             grid_fee=grid_fee, cycle_cost=cycle_cost,
+            min_spread_eur=min_spread_eur,
             dt=dt_h, load_kwh=load_kwh,
             max_export_kwh_day=max_export_kwh_day,
             max_import_kwh_day=max_import_kwh_day,

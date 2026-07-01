@@ -426,10 +426,11 @@ def _stale_plans_banner(case: str = "plan_d1") -> str:
             f"<a href='/plan_batch'>📦 Batch</a>.</div>")
 
 
-def _vdt_trade_stats(profile: str, day: str = None) -> dict:
+def _vdt_trade_stats(profile: str, day: str = None, day_to: str = None) -> dict:
     """Bug VDT-EFEKTIVITA (2026-06-11): agregát VDT paper trades pre UI karty —
     objemy + vážené priemerné ceny nákup/predaj + hrubý cash (predaj − nákup).
-    day=None → celá história profilu; day='YYYY-MM-DD' → len ten deň."""
+    day=None → celá história profilu; day='YYYY-MM-DD' → len ten deň;
+    day+day_to → inkluzívny rozsah [day, day_to] (portfólio s vybraným rozsahom)."""
     out = dict(n=0, buy_kwh=0.0, buy_avg=0.0, sell_kwh=0.0, sell_avg=0.0,
                cash_eur=0.0)
     try:
@@ -438,13 +439,17 @@ def _vdt_trade_stats(profile: str, day: str = None) -> dict:
         if not p or not os.path.exists(p):
             return out
         import csv as _csv
+        _d0 = str(day)[:10] if day else None
+        _d1 = str(day_to)[:10] if day_to else _d0
         b_pw = b_w = s_pw = s_w = 0.0
         with open(p, encoding="utf-8", newline="") as f:
             for row in _csv.DictReader(f):
                 if str(row.get("profile") or "") != profile:
                     continue
-                if day and str(row.get("ts", ""))[:10] != str(day)[:10]:
-                    continue
+                if _d0:
+                    _td = str(row.get("ts", ""))[:10]
+                    if _td < _d0 or _td > _d1:
+                        continue
                 act = str(row.get("action", "")).upper()
                 if act not in ("BUY", "CHARGE", "SELL", "DISCHARGE"):
                     continue
@@ -3393,8 +3398,19 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
                 eff = _edb.get_period_effect(name, day_iso, _rng_to) or {}
                 rec["dt_eur"] = float(eff.get("dt_eur", 0.0) or 0.0)
                 rec["rt_eur"] = float(eff.get("rt_eur", 0.0) or 0.0)
-                rec["vdt_eur"] = float(eff.get("vdt_arb_eur", 0.0) or 0.0)
+                _vdt_arb_eur = float(eff.get("vdt_arb_eur", 0.0) or 0.0)
+                rec["vdt_eur"] = _vdt_arb_eur
                 rec["total_eur"] = float(eff.get("total_eur", 0.0) or 0.0)
+                # VDT-DAY-CASH (2026-07-01): portfólio VDT = reálne cash saldo uzavretých
+                # obchodov (rovnaká definícia ako /livesim karty), nie arbitráž vs DAM
+                # clearing (=0 pri profiloch bez DAM). total_eur dorovnaný (−arb +cash),
+                # aby súčet sedel. Kill-switch VDT_DAY_CASH=0 → späť na arbitráž.
+                if os.environ.get("VDT_DAY_CASH", "1") != "0":
+                    _vs_cash = _vdt_trade_stats(name, day_iso, _rng_to) or {}
+                    if int(_vs_cash.get("n", 0) or 0) > 0:
+                        _cash_eur = float(_vs_cash.get("cash_eur", 0.0) or 0.0)
+                        rec["vdt_eur"] = _cash_eur
+                        rec["total_eur"] = rec["total_eur"] - _vdt_arb_eur + _cash_eur
             except Exception:
                 pass
 
@@ -8469,8 +8485,28 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     # (user: "chýba z toho VDT tak ako DT a RT") — aj keď 0, nech je breakdown
     # Zisk SPOLU = DT + RT + VDT kompletný a konzistentný.
     _cum_vdt_arb = float(r.get("cum_vdt_arb", 0) or 0)
+    # VDT-DAY-CASH (2026-07-01): kumulatívna "z toho VDT" = reálne cash saldo VŠETKÝCH
+    # uzavretých obchodov od štartu (rovnaká definícia ako denná karta). "Zisk SPOLU"
+    # sa dorovná (−arb +cash), aby total = DT+RT+VDT+Dist zostal súčtom položiek.
+    # Kill-switch VDT_DAY_CASH=0 → späť na arbitráž (cum_vdt_arb + pôvodný cum_total).
+    _cum_vdt_disp = _cum_vdt_arb
+    _cum_vdt_cash_used = False
+    if os.environ.get("VDT_DAY_CASH", "1") != "0":
+        try:
+            from core.profile_resolver import get_active as _ga_vdc2
+            _prof_vdc2 = _ga_vdc2() or ""
+            if _prof_vdc2:
+                _vts_all_cash = _vdt_trade_stats(_prof_vdc2)
+                if int(_vts_all_cash.get("n", 0) or 0) > 0:
+                    _cum_vdt_disp = float(_vts_all_cash.get("cash_eur", 0.0) or 0.0)
+                    _cum_vdt_cash_used = True
+        except Exception as _e_vdc2:
+            print(f"[VDT-DAY-CASH cum] {_e_vdc2}")
+    _cum_total_disp = float(r.get("cum_total", 0) or 0)
+    if _cum_vdt_cash_used:
+        _cum_total_disp = _cum_total_disp - _cum_vdt_arb + _cum_vdt_disp
     _vdt_arb_card = (f"<div class='card'><div class='l'>z toho VDT</div>"
-                      f"<div class='v'>{_cum_vdt_arb:+.1f} €</div></div>")
+                      f"<div class='v'>{_cum_vdt_disp:+.1f} €</div></div>")
     # Bug VDT-EFEKTIVITA (2026-06-11): karty efektivity obchodovania — objemy +
     # vážené ceny nákup/predaj za zobrazený deň aj od štartu.
     _vdt_eff_cards = ""
@@ -8506,9 +8542,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                                         .get("plan") or {}).get("batt_kwh", 0.0)) or 0.0)
                     _vdt_cycles = ((_vts_all["buy_kwh"] + _vts_all["sell_kwh"]) / 2.0
                                    / _bkwh_cyc) if _bkwh_cyc > 0 else 0.0
-                    if _vdt_cycles > 0.05 and _cum_vdt_arb:
+                    if _vdt_cycles > 0.05 and _cum_vdt_disp:
                         _cyc_txt = (f" · {_vdt_cycles:.1f} cyklov "
-                                    f"≈ {_cum_vdt_arb / _vdt_cycles:+.1f} €/cyklus")
+                                    f"≈ {_cum_vdt_disp / _vdt_cycles:+.1f} €/cyklus")
                 except Exception:
                     pass
                 _vdt_eff_cards = _day_part + (
@@ -8596,7 +8632,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         cards = (
             f"{_f4_diag_banner}"
             f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin:10px 0'>"
-            f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{r['cum_total']:.1f} €</div></div>"
+            f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{_cum_total_disp:.1f} €</div></div>"
             f"<div class='card'><div class='l'>z toho DT</div><div class='v'>{r['cum_dt']:.1f} €</div></div>"
             f"<div class='card'><div class='l'>z toho odchýlka (RT)</div><div class='v'>{r['cum_rt']:.1f} €</div></div>"
             f"<div class='card'><div class='l'>z toho distribúcia (od štartu)</div><div class='v'>{r.get('cum_dist', 0.0):.1f} €</div></div>"
@@ -8617,10 +8653,10 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         print(f"[livesim cards] full render zlyhal → fallback sumáre: {_e_cards}\n{_tb_cards.format_exc()}")
         cards = (
             f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin:10px 0'>"
-            f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{_num(r.get('cum_total')):.1f} €</div></div>"
+            f"<div class='card'><div class='l'>Zisk SPOLU (od štartu)</div><div class='v' style='color:#2E7D32'>{_num(_cum_total_disp):.1f} €</div></div>"
             f"<div class='card'><div class='l'>z toho DT</div><div class='v'>{_num(r.get('cum_dt')):.1f} €</div></div>"
             f"<div class='card'><div class='l'>z toho odchýlka (RT)</div><div class='v'>{_num(r.get('cum_rt')):.1f} €</div></div>"
-            f"<div class='card'><div class='l'>z toho VDT</div><div class='v'>{_num(r.get('cum_vdt_arb')):.1f} €</div></div>"
+            f"<div class='card'><div class='l'>z toho VDT</div><div class='v'>{_num(_cum_vdt_disp):.1f} €</div></div>"
             f"<div class='card'><div class='l'>z toho distribúcia</div><div class='v'>{_num(r.get('cum_dist')):.1f} €</div></div>"
             f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div>"
             f"<div class='v' style='color:#2E7D32'>{_num(d_dt)+_num(d_rt)+_num(_d_vdt)+_num(_d_dist):.1f} €</div></div>"
