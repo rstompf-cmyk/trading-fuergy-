@@ -8797,6 +8797,18 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         # alebo FTV nedodá → batt_kw_realistic clipnutý na 0 a vznikne dev).
         _plan_for_ref = dview["plan_batt_kw"].fillna(0.0).tolist() if "plan_batt_kw" in dview.columns else [0.0]*len(dview)
         AP = "[" + ",".join(_js(float(x)) for x in _plan_for_ref) + "]"
+        # KROK 4 Fáza 1 vizuál (2026-07-01, user: „chcem vidieť KDE sa výkon nemohol dodať,
+        # nie že realita sa tvári akoby to bolo možné"): NOMINÁCIA (trhový záväzok = D-1+VDT
+        # raw) + ODCHÝLKA-NEDODANÉ = nominácia − exekúcia (kde SOC/limit nedovolil dodať).
+        # Zelený post-cap (AC) ukazuje čo sa dalo; toto ukazuje čo chýbalo. Staré dáta bez
+        # stĺpcov → nominácia = plán, odchýlka = 0.
+        _nom_ref = (pd.to_numeric(dview["nomination_batt_kw"], errors="coerce").fillna(0.0).tolist()
+                    if "nomination_batt_kw" in dview.columns else _plan_for_ref)
+        _exec_ref = (pd.to_numeric(dview["exec_batt_kw"], errors="coerce").fillna(0.0).tolist()
+                     if "exec_batt_kw" in dview.columns else _plan_for_ref)
+        NOM = "[" + ",".join(_js(float(x)) for x in _nom_ref) + "]"
+        _devnd = [float(n) - float(e) for n, e in zip(_nom_ref, _exec_ref)]
+        DEVND = "[" + ",".join((_js(float(x)) if abs(x) > 1.0 else "null") for x in _devnd) + "]"
         # 15-min agregat ako druhy dataset (transparentny prehlad)
         try:
             _act_df = pd.DataFrame({"_t": dview["time"].values, "_v": _act_per_min})
@@ -9403,6 +9415,8 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"<div style='height:360px'><canvas id='chRi'></canvas></div>"
                 f"<script>new Chart(document.getElementById('chRi'),{{type:'line',data:{{labels:{Ld},datasets:["
                 f"{{label:'Plán batérie (D-1 + VDT, kW)',data:{AP},borderColor:'#37474F',borderWidth:1.4,borderDash:[2,3],fill:false,stepped:true,pointRadius:0,tension:.0}},"
+                f"{{label:'Nominácia (trhový záväzok D-1+VDT) kW',data:{NOM},borderColor:'#EF6C00',borderWidth:1.6,borderDash:[4,2],fill:false,stepped:true,pointRadius:0}},"
+                f"{{label:'⚠ Nedodané kvôli SOC/limit kW (odchýlka)',data:{DEVND},borderColor:'#D50000',backgroundColor:'rgba(213,0,0,.20)',fill:true,stepped:true,pointRadius:0,borderWidth:1.4}},"
                 f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min, post-cap)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
                 f"{{label:'Batéria PREDIKCIA kW (15-min agregát)',data:{AC_AGG},borderColor:'#1565C0',borderDash:[6,3],fill:false,stepped:true,pointRadius:0,borderWidth:2.2}},"
                 f"{{label:'🔴 Batéria REÁLNE MERANIE kW',data:{BATT_REAL},borderColor:'#C62828',backgroundColor:'rgba(198,40,40,.0)',fill:false,pointRadius:0,borderWidth:2.2,tension:.15}},"

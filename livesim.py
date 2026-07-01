@@ -1808,6 +1808,16 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     # PLAN nominovaný grid flow (kW) — to bola D-1 nominácia, fixné
                     _plan_grid_kw = (np.asarray(tr["plan_grid_kwh"].values, float) /
                                       (max(step, 1) / 60.0))
+                    # KROK 4 Fáza 2 (2026-07-01, user: „chcem vidieť kde sa výkon nedodal, nie
+                    # že realita sa tvári akoby to šlo"): odchýlka = realita − NOMINÁCIA (trhový
+                    # záväzok = raw D-1 + committed VDT), NIE realita − feasibilný plán. Dovtedy
+                    # sa nominácia predefinovala na to, čo batéria zvládla (plan=sch) → odchýlka
+                    # umelo ≈ 0 a skryla nedodaný výkon (SOC/limit). Teraz sa nedodaný výkon
+                    # zúčtuje cez ZCO (cena známa D+1). Kill-switch DEV_VS_NOMINATION=0 → staré.
+                    if (os.environ.get("DEV_VS_NOMINATION", "1") != "0"
+                            and "nomination_grid_kwh" in tr.columns):
+                        _plan_grid_kw = (np.asarray(tr["nomination_grid_kwh"].values, float) /
+                                          (max(step, 1) / 60.0))
                     # Odchýlka reality vs nominácia → settlement cez ZCO
                     _dev_kw = _real_grid_kw - _plan_grid_kw
                     _dev_kwh_min = _dev_kw / 60.0                                   # kWh za minútu
@@ -1826,7 +1836,12 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                     # FTV+Load+Batt drift. Pridať dev_batt/dev_ftv/dev_load + ich € €.
                     try:
                         # Plánovaný batt v kW per minútu (D-1 plán + VDT realized po Bug X)
+                        # KROK 4 Fáza 2: batt drift sa tiež meria voči NOMINÁCII (nie feasible
+                        # sch), aby dev_batt zahŕňal nedodanú batériu. Kill-switch DEV_VS_NOMINATION=0.
                         _plan_batt_kw = np.asarray(tr["plan_batt_kw"].values, float)
+                        if (os.environ.get("DEV_VS_NOMINATION", "1") != "0"
+                                and "nomination_batt_kw" in tr.columns):
+                            _plan_batt_kw = np.asarray(tr["nomination_batt_kw"].values, float)
                         # FTV plánované = pv_plan_kw (hodinový plán PVF) — fallback na ftv_kw
                         _plan_ftv_kw = (np.asarray(tr["ftv_hour_plan_kw"].values, float)
                                           if "ftv_hour_plan_kw" in tr.columns
