@@ -11618,6 +11618,211 @@ def _render_settlement_card(settle: dict) -> str:
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# VDT ŽIVÝ ORDERBOOK — plná hĺbka (všetci účastníci, anonym.) pre vybraný 15-min
+# slot, auto-refresh 10 s. Zdroj: okte_vdt.get_orderbook(15) (SOAP IdmOrderBook).
+# Cache 8 s (aby 10-s refresh nezahltil OKTE). Read-only, nezasiela obchody.
+# ─────────────────────────────────────────────────────────────────────────
+_VDT_OB_CACHE = {"ts": 0.0, "data": None}
+
+
+def _vdt_orderbook_cached(ttl_s: float = 8.0):
+    import time as _t
+    now = _t.time()
+    if _VDT_OB_CACHE["data"] is not None and (now - _VDT_OB_CACHE["ts"]) < ttl_s:
+        return _VDT_OB_CACHE["data"], round(now - _VDT_OB_CACHE["ts"], 1)
+    try:
+        import okte_vdt as _ov
+        d = _ov.get_orderbook(delivery_duration=15)
+    except Exception as e:
+        d = {"ok": False, "error": str(e)}
+    _VDT_OB_CACHE["data"] = d
+    _VDT_OB_CACHE["ts"] = now
+    return d, 0.0
+
+
+def _vdt_slot_to_period(slot_idx: int) -> str:
+    slot_idx = max(0, min(95, int(slot_idx)))
+    h, m = (slot_idx // 4) % 24, (slot_idx % 4) * 15
+    eh, em = ((slot_idx + 1) // 4) % 24, ((slot_idx + 1) % 4) * 15
+    return f"{h:02d}:{m:02d}-{eh:02d}:{em:02d}"
+
+
+@app.get("/vdt/orderbook_depth")
+def vdt_orderbook_depth(slot: int = -1):
+    """JSON: plná hĺbka VDT orderbooku pre 15-min slot (0..95). Cachované 8 s."""
+    if slot < 0:
+        _n = dt.datetime.now()
+        slot = _n.hour * 4 + _n.minute // 15
+    slot = max(0, min(95, int(slot)))
+    period = _vdt_slot_to_period(slot)
+    d, age = _vdt_orderbook_cached()
+    if not d or not d.get("ok"):
+        return {"ok": False, "slot": slot, "period": period,
+                "error": (d or {}).get("error", "orderbook nedostupný"),
+                "bids": [], "asks": []}
+    q = (d.get("orders") or {}).get("quarterly") or {}
+    bids = sorted((q.get("bids") or {}).get(period, []), key=lambda x: -x["eur"])
+    asks = sorted((q.get("asks") or {}).get(period, []), key=lambda x: x["eur"])
+    bb = bids[0]["eur"] if bids else None
+    ba = asks[0]["eur"] if asks else None
+    return {"ok": True, "slot": slot, "period": period,
+            "ts": d.get("trade_day_extract_ts"), "age_s": age,
+            "best_bid": bb, "best_ask": ba,
+            "spread": (ba - bb) if (bb is not None and ba is not None) else None,
+            "bids": [{"eur": b["eur"], "mw": b["mw"]} for b in bids],
+            "asks": [{"eur": a["eur"], "mw": a["mw"]} for a in asks]}
+
+
+_VDT_OB_LIVE_TMPL = """<!doctype html><html lang="sk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VDT živý orderbook</title>
+<style>
+ body{font-family:system-ui,Arial;margin:16px;color:#1a2b3c;background:#f7f9fb}
+ h2{margin:0 0 4px} .sub{color:#66788a;font-size:13px;margin-bottom:12px}
+ select{font-size:15px;padding:4px}
+ .book{display:flex;max-width:660px;margin-top:12px;border:1px solid #dde;background:#fff}
+ .col{flex:1} .col h3{margin:0;padding:6px;text-align:center;font-size:13px}
+ .bids h3{background:#e8f5e9;color:#1b5e20} .asks h3{background:#ffebee;color:#b71c1c}
+ table{width:100%;border-collapse:collapse;font-size:14px}
+ td{padding:3px 8px} .bids td.p{color:#1b5e20;font-weight:600} .asks td.p{color:#b71c1c;font-weight:600}
+ .bids tr:nth-child(even),.asks tr:nth-child(even){background:#fafafa}
+ .mw{text-align:right;color:#66788a} .depthbar{height:12px;display:inline-block;vertical-align:middle;margin-left:6px;border-radius:2px;background:#c8e6c9}
+ .asks .depthbar{background:#ffcdd2}
+ .top{display:flex;gap:24px;align-items:baseline;margin:10px 0} .top b{font-size:20px}
+ .spread{color:#7b1fa2} .age{color:#999;font-size:12px;margin-left:10px}
+</style></head><body>
+<h2>VDT živý orderbook</h2>
+<div class="sub">OKTE SIDC · plná hĺbka (všetci účastníci, anonymizované) · auto-refresh 10 s · cache 8 s · read-only</div>
+<label>Slot: <select id="slot" onchange="location.search='?slot='+this.value">__OPTS__</select></label>
+<span class="age" id="age"></span>
+<div class="top">
+  <div>best bid <b id="bb" style="color:#1b5e20">—</b></div>
+  <div>best ask <b id="ba" style="color:#b71c1c">—</b></div>
+  <div>spread <b id="sp" class="spread">—</b></div>
+</div>
+<div class="book">
+  <div class="col bids"><h3>NÁKUP (bids) · €/MWh · MW</h3><table id="tb_bids"></table></div>
+  <div class="col asks"><h3>PREDAJ (asks) · €/MWh · MW</h3><table id="tb_asks"></table></div>
+</div>
+<p id="err" style="color:#b71c1c"></p>
+<script>
+const SLOT = __SLOT__;
+function row(o, maxmw){
+  const w = maxmw>0 ? Math.round(60*o.mw/maxmw) : 0;
+  return '<tr><td class="p">'+o.eur.toFixed(2)+'</td><td class="mw">'+o.mw.toFixed(1)+'<span class="depthbar" style="width:'+w+'px"></span></td></tr>';
+}
+async function refresh(){
+  try{
+    const r = await fetch('/vdt/orderbook_depth?slot='+SLOT, {cache:'no-store'});
+    const d = await r.json();
+    document.getElementById('err').textContent = d.ok ? '' : ('Orderbook: '+(d.error||'nedostupný'));
+    document.getElementById('bb').textContent = d.best_bid!=null ? d.best_bid.toFixed(2) : '—';
+    document.getElementById('ba').textContent = d.best_ask!=null ? d.best_ask.toFixed(2) : '—';
+    document.getElementById('sp').textContent = d.spread!=null ? d.spread.toFixed(2) : '—';
+    document.getElementById('age').textContent = d.ts ? ('dáta: '+d.ts+'  ·  vek '+(d.age_s||0)+' s') : '';
+    const mmb = Math.max(0,...(d.bids||[]).map(x=>x.mw)), mma = Math.max(0,...(d.asks||[]).map(x=>x.mw));
+    document.getElementById('tb_bids').innerHTML = (d.bids||[]).map(o=>row(o,mmb)).join('') || '<tr><td>— žiadne bids</td></tr>';
+    document.getElementById('tb_asks').innerHTML = (d.asks||[]).map(o=>row(o,mma)).join('') || '<tr><td>— žiadne asks</td></tr>';
+  }catch(e){ document.getElementById('err').textContent = 'chyba: '+e; }
+}
+refresh(); setInterval(refresh, 10000);
+</script></body></html>"""
+
+
+@app.get("/vdt/orderbook_live", response_class=HTMLResponse)
+def vdt_orderbook_live_page(slot: int = -1):
+    """Živý VDT orderbook — plná hĺbka pre vybraný 15-min slot, auto-refresh 10 s."""
+    if slot < 0:
+        _n = dt.datetime.now()
+        slot = _n.hour * 4 + _n.minute // 15
+    slot = max(0, min(95, int(slot)))
+    opts = "".join(
+        f"<option value='{i}'{' selected' if i == slot else ''}>{i:02d} · {_vdt_slot_to_period(i)}</option>"
+        for i in range(96))
+    html = _VDT_OB_LIVE_TMPL.replace("__OPTS__", opts).replace("__SLOT__", str(slot))
+    return HTMLResponse(html)
+
+
+@app.get("/vdt/watch_data")
+def vdt_watch_data():
+    """JSON snapshot z workers/vdt_watcher (best bid/ask per slot + páry + simulovaný zisk, 10 s)."""
+    import json as _j, time as _t
+    p = os.path.join("out", "_status", "vdt_watch.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = _j.load(f)
+        d["snapshot_age_s"] = round(_t.time() - os.path.getmtime(p), 1)
+        return d
+    except FileNotFoundError:
+        return {"ok": False, "error": "watcher nebeží / snapshot chýba — spusti workers.vdt_watcher"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+_VDT_WATCH_TMPL = """<!doctype html><html lang="sk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VDT živý watcher</title>
+<style>
+ body{font-family:system-ui,Arial;margin:16px;color:#1a2b3c;background:#f7f9fb}
+ h2{margin:0 0 4px} .sub{color:#66788a;font-size:13px;margin-bottom:10px}
+ .kpi{display:flex;gap:26px;align-items:baseline;margin:10px 0;flex-wrap:wrap}
+ .kpi b{font-size:22px} .profit{color:#1b5e20} .age{color:#999;font-size:12px}
+ h3{margin:16px 0 4px;font-size:15px}
+ table{border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #dde}
+ th,td{padding:4px 9px;text-align:right;border-bottom:1px solid #eef} th{background:#eef2f6;text-align:center}
+ td.l{text-align:left} .buy{color:#1b5e20;font-weight:600} .sell{color:#b71c1c;font-weight:600}
+ tr.pair td{background:#fffde7}
+ .err{color:#b71c1c}
+</style></head><body>
+<h2>VDT živý watcher <span style="font-size:13px;font-weight:400;color:#888">· auto 10 s · read-only</span></h2>
+<div class="sub">OKTE SIDC · best bid/ask na 96 slotoch · najlepšie páry cez match_pairs · simulovaný nákup/predaj voči batérii profilu</div>
+<div class="kpi">
+  <div>zisk simulácie <b class="profit" id="profit">—</b> €</div>
+  <div>párov <b id="npairs">—</b></div>
+  <div>profil <b id="prof" style="font-size:16px">—</b></div>
+  <div>min. spread <span id="ms">—</span> €/MWh</div>
+  <div class="age" id="age"></div>
+</div>
+<p class="err" id="err"></p>
+<h3>Najlepšie páry (simulácia)</h3>
+<table id="pairs"><thead><tr><th>#</th><th>NÁKUP čas</th><th>@ €/MWh</th><th>PREDAJ čas</th><th>@ €/MWh</th><th>marža €/MWh</th><th>zisk €</th></tr></thead><tbody></tbody></table>
+<h3>Orderbook — best bid/ask per slot (len sloty s ponukou)</h3>
+<table id="book"><thead><tr><th>slot</th><th>čas</th><th>ASK (predaj) €</th><th>MW</th><th>BID (nákup) €</th><th>MW</th><th>spread</th></tr></thead><tbody></tbody></table>
+<script>
+function fmt(x,d){ return (x==null)?'—':Number(x).toFixed(d==null?2:d); }
+async function refresh(){
+  try{
+    const r = await fetch('/vdt/watch_data',{cache:'no-store'});
+    const d = await r.json();
+    document.getElementById('err').textContent = d.ok===false ? ('Chyba: '+(d.error||'')) : '';
+    document.getElementById('profit').textContent = fmt(d.profit_eur);
+    document.getElementById('npairs').textContent = d.n_cycles!=null? d.n_cycles : '—';
+    document.getElementById('prof').textContent = d.profile||'—';
+    document.getElementById('ms').textContent = d.min_spread!=null? d.min_spread : '—';
+    document.getElementById('age').textContent = d.ts ? ('dáta: '+d.ts+'  ·  vek '+(d.snapshot_age_s||0)+' s') : '';
+    const pset = new Set();
+    const pb = document.querySelector('#pairs tbody');
+    pb.innerHTML = (d.cycles||[]).map((c,i)=>{ pset.add(c.buy_slot); pset.add(c.sell_slot);
+      return '<tr><td>'+(i+1)+'</td><td class="l buy">'+c.buy_period+'</td><td class="buy">'+fmt(c.buy_eur)+'</td><td class="l sell">'+c.sell_period+'</td><td class="sell">'+fmt(c.sell_eur)+'</td><td>'+fmt(c.margin_eur_mwh,1)+'</td><td><b>'+fmt(c.profit_eur)+'</b></td></tr>';
+    }).join('') || '<tr><td colspan="7">— žiadne ziskové páry pri aktuálnom orderbooku</td></tr>';
+    const bb = document.querySelector('#book tbody');
+    bb.innerHTML = (d.slots||[]).filter(s=>s.ask!=null||s.bid!=null).map(s=>{
+      const cls = pset.has(s.slot)?' class="pair"':'';
+      return '<tr'+cls+'><td>'+s.slot+'</td><td class="l">'+s.period+'</td><td class="sell">'+fmt(s.ask)+'</td><td>'+fmt(s.ask_mw,1)+'</td><td class="buy">'+fmt(s.bid)+'</td><td>'+fmt(s.bid_mw,1)+'</td><td>'+fmt(s.spread)+'</td></tr>';
+    }).join('') || '<tr><td colspan="7">— žiadne ponuky na trhu</td></tr>';
+  }catch(e){ document.getElementById('err').textContent='chyba: '+e; }
+}
+refresh(); setInterval(refresh, 10000);
+</script></body></html>"""
+
+
+@app.get("/vdt/watch", response_class=HTMLResponse)
+def vdt_watch_page():
+    """Živý VDT watcher — best bid/ask + najlepšie páry + simulovaný zisk, auto 10 s."""
+    return HTMLResponse(_VDT_WATCH_TMPL)
+
+
 @app.get("/vdt/live_advisor", response_class=HTMLResponse)
 def vdt_live_advisor_page(
     soc_override: float = -1.0,

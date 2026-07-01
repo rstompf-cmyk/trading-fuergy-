@@ -253,3 +253,40 @@ services:
         max-file: "5"
     profiles:
       - dev
+
+  # ---------------------------------------------------------------------------
+  # vdt-watcher-dev - ZIVY VDT watcher (10s), samostatny proces. Kazdych 10s stiahne
+  # best bid/ask na 96 slotoch z OKTE, prezenie cez match_pairs (najlepsie pary voci
+  # baterii profilu) + odsimuluje nakup/predaj -> snapshot out/_status/vdt_watch.json.
+  # Web /vdt/watch ho cita (read-only, auto 10s). READ-ONLY, nezasiela obchody na trh.
+  # VDT_WATCH_PROFILE = ktory profil (jeho baterka/params); default aktivny.
+  # Spustenie: docker compose --profile dev up -d vdt-watcher-dev
+  # ---------------------------------------------------------------------------
+  vdt-watcher-dev:
+    image: trading-fuergy:dev
+    container_name: vdt-watcher-dev
+    restart: unless-stopped
+    depends_on:
+      - trading-fuergy-dev
+    command: ["python", "-m", "workers.vdt_watcher"]
+    volumes:
+      - ./data-dev/db:/app/db/data
+      - ./data-dev/out:/app/out
+      - ./core:/app/core:ro
+    env_file:
+      - ./.env
+    environment:
+      TZ: "Europe/Bratislava"
+      USE_DB: "1"
+      VDT_WATCH_CONTROL: "1"
+      VDT_WATCH_SEC: "10"
+      VDT_WATCH_PROFILE: "Trakany_real"
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    profiles:
+      - dev
