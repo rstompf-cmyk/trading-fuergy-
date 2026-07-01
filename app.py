@@ -3405,7 +3405,7 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
                 # obchodov (rovnaká definícia ako /livesim karty), nie arbitráž vs DAM
                 # clearing (=0 pri profiloch bez DAM). total_eur dorovnaný (−arb +cash),
                 # aby súčet sedel. Kill-switch VDT_DAY_CASH=0 → späť na arbitráž.
-                if os.environ.get("VDT_DAY_CASH", "1") != "0":
+                if os.environ.get("VDT_DAY_CASH", "0") != "0":
                     _vs_cash = _vdt_trade_stats(name, day_iso, _rng_to) or {}
                     if int(_vs_cash.get("n", 0) or 0) > 0:
                         _cash_eur = float(_vs_cash.get("cash_eur", 0.0) or 0.0)
@@ -8491,7 +8491,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     # Kill-switch VDT_DAY_CASH=0 → späť na arbitráž (cum_vdt_arb + pôvodný cum_total).
     _cum_vdt_disp = _cum_vdt_arb
     _cum_vdt_cash_used = False
-    if os.environ.get("VDT_DAY_CASH", "1") != "0":
+    if os.environ.get("VDT_DAY_CASH", "0") != "0":
         try:
             from core.profile_resolver import get_active as _ga_vdc2
             _prof_vdc2 = _ga_vdc2() or ""
@@ -8599,7 +8599,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
     # sedia + total = DT+RT+VDT+Dist zostáva súčtom položiek.
     # Kill-switch VDT_DAY_CASH=0 → späť na arbitráž (vdt_arb_min).
     _vdt_day_cash_used = False
-    if os.environ.get("VDT_DAY_CASH", "1") != "0":
+    if os.environ.get("VDT_DAY_CASH", "0") != "0":
         try:
             from core.profile_resolver import get_active as _ga_vdc
             _prof_vdc = _ga_vdc() or ""
