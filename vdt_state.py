@@ -675,11 +675,19 @@ def _compute_closedprice_day(profile: str, day_iso: str) -> Dict[str, Any]:
         soc_max = float((plan.get("soc_max") if plan.get("soc_max") is not None
                          else plan.get("soc_max_pct")) or 100.0)
         max_cycles = plan.get("max_cycles_per_day")
+        # CLOSED-PAIRS (2026-07-01, user: „párový matcher aj v simulácii"): historická VDT
+        # simulácia použije PROFILOVÝ engine (rovnako ako živý advisor) — pairs = spárované
+        # nákup↔predaj cykly, žiadne nepárové nákupy. Predtým sa tu volalo optimize_vdt_day
+        # bez engine → default LP (nespárované). Zrkadlo vdt_live_advisor.py:581-586.
+        _ck_engine = str(plan.get("vdt_engine", "lp") or "lp").lower()
+        _ck_priority = str(plan.get("vdt_pair_priority", "closest") or "closest").lower()
+        _ck_buyback = bool(plan.get("vdt_allow_buyback", False))
         _soc_init_ck = float(plan.get("soc_init_pct",
                              plan.get("soc_init", (soc_min + soc_max) / 2.0))
                              or (soc_min + soc_max) / 2.0)
         ck = (f"{profile}|{day_iso}|{batt_kwh:.0f}|{batt_kw:.0f}|{min_spread:.1f}"
-              f"|{soc_min:.0f}|{soc_max:.0f}|{max_cycles}|si{_soc_init_ck:.1f}")
+              f"|{soc_min:.0f}|{soc_max:.0f}|{max_cycles}|si{_soc_init_ck:.1f}"
+              f"|e{_ck_engine}|p{_ck_priority}|b{int(_ck_buyback)}")
         _c = _CLOSEDPRICE_CACHE.get(ck)
         if _c is not None:
             return _c
@@ -714,6 +722,8 @@ def _compute_closedprice_day(profile: str, day_iso: str) -> Dict[str, Any]:
             max_cycles_per_day=(float(max_cycles) if max_cycles else None),
             dam_commitments=dam_view, slot_minutes=15,
             use_orderbook=False, future_only=False,
+            engine=_ck_engine, pair_priority=_ck_priority,
+            allow_buyback=_ck_buyback,
         )
         if not res.get("ok"):
             _CLOSEDPRICE_CACHE[ck] = zeros
