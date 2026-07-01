@@ -210,3 +210,46 @@ services:
         max-file: "5"
     profiles:
       - dev
+
+  # ---------------------------------------------------------------------------
+  # profile-supervisor-dev - PROCES PER PROFIL (sim AJ real), vrstva MONITORINGU
+  # (advance+persist livesim), vedla web dev (vzor control-loop-dev). Kazdy bg_enabled
+  # profil = vlastny proces (workers.profile_runner --profile <name>) -> persist do
+  # ZDIELANEJ dev DB/out -> web /livesim ho cita (read-only monitor). Prepnutie profilu
+  # = instant (data uz su spocitane). Realne profily maju OKREM tohto aj HW riadenie
+  # cez control-loop-dev (fleet_supervisor) - to je ina vrstva.
+  # Ktore profily: BG_PROFILES="A,B" (explicitne test) alebo profily s bg_enabled=True.
+  # POZOR: ked bezi tento supervisor, na trading-fuergy-dev nastav LIVESIM_BG: "0"
+  #   (nech web nerobi dvojity bg vypocet; supervisor je jediny compute pre profily).
+  # Spustenie: docker compose --profile dev up -d profile-supervisor-dev
+  # ---------------------------------------------------------------------------
+  profile-supervisor-dev:
+    image: trading-fuergy:dev
+    container_name: profile-supervisor-dev
+    restart: unless-stopped
+    depends_on:
+      - trading-fuergy-dev
+    command: ["python", "-m", "workers.profile_supervisor"]
+    volumes:
+      - ./data-dev/db:/app/db/data
+      - ./data-dev/out:/app/out
+      - ./core:/app/core:ro
+    env_file:
+      - ./.env
+    environment:
+      TZ: "Europe/Bratislava"
+      USE_DB: "1"
+      PROFILE_BG_CONTROL: "1"
+      PROFILE_TICK_SEC: "60"
+      PROFILE_RECONCILE_SEC: "15"
+      SOC_PHYS_CLIP: "1"
+      # BG_PROFILES: "Trakany,Simulacia_Coop"   # test: explicitny zoznam; inak bg_enabled=True
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    profiles:
+      - dev
