@@ -290,3 +290,40 @@ services:
         max-file: "5"
     profiles:
       - dev
+
+  # ---------------------------------------------------------------------------
+  # vdt-trader-dev - GLOBALNY zivy VDT paper trader (10s), samostatny proces.
+  # Kazdych 10s prehodnoti VDT pre VSETKY profily s VDT (scheduler.job_vdt_advisor:
+  # gate use_vdt + CZ guard + run_and_cache -> commit PAPER obchodov do vdt_paper_trades.csv).
+  # *** PAPER ONLY *** - ziadne realne ordery (taky kod v repe neexistuje); OKTE sa iba cita.
+  # POZOR: ked bezi, na trading-fuergy-dev vypni 15-min scheduler vdt_advisor (SCHED_VDT=0
+  #   alebo ekvivalent), nech sa VDT nepocita dvakrat.
+  # Spustenie: docker compose --profile dev up -d vdt-trader-dev
+  # ---------------------------------------------------------------------------
+  vdt-trader-dev:
+    image: trading-fuergy:dev
+    container_name: vdt-trader-dev
+    restart: unless-stopped
+    depends_on:
+      - trading-fuergy-dev
+    command: ["python", "-m", "workers.vdt_trader"]
+    volumes:
+      - ./data-dev/db:/app/db/data
+      - ./data-dev/out:/app/out
+      - ./core:/app/core:ro
+    env_file:
+      - ./.env
+    environment:
+      TZ: "Europe/Bratislava"
+      USE_DB: "1"
+      VDT_TRADE_CONTROL: "1"
+      VDT_TRADE_SEC: "10"
+    healthcheck:
+      disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    profiles:
+      - dev
