@@ -8554,6 +8554,26 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _d_vdt = float(pd.to_numeric(dview["vdt_arb_min"], errors="coerce").fillna(0).sum())
     except Exception:
         pass
+    # VDT-DAY-CASH (2026-07-01, user: "pod položkou VDT vidieť saldo na VDT za deň —
+    # reálne dnešné saldo uzavretých obchodov"): karta "Zisk za deň · VDT" ukazovala
+    # vdt_arb (arbitráž vs DAM clearing) = +0.0 pri profiloch bez DAM clearing (WV_4),
+    # HOCI karta "VDT obchody {deň}" na tej istej stránke už ukazuje reálny cash. Keď
+    # dnes existujú UZAVRETÉ VDT obchody, VDT položka = reálne cash saldo (predaj € −
+    # nákup €, rovnaký zdroj _vdt_trade_stats().cash_eur) → obe VDT čísla na stránke
+    # sedia + total = DT+RT+VDT+Dist zostáva súčtom položiek.
+    # Kill-switch VDT_DAY_CASH=0 → späť na arbitráž (vdt_arb_min).
+    _vdt_day_cash_used = False
+    if os.environ.get("VDT_DAY_CASH", "1") != "0":
+        try:
+            from core.profile_resolver import get_active as _ga_vdc
+            _prof_vdc = _ga_vdc() or ""
+            if _prof_vdc:
+                _vts_vdc = _vdt_trade_stats(_prof_vdc, day=view_day)
+                if int(_vts_vdc.get("n", 0) or 0) > 0:
+                    _d_vdt = float(_vts_vdc.get("cash_eur", 0.0) or 0.0)
+                    _vdt_day_cash_used = True
+        except Exception as _e_vdc:
+            print(f"[VDT-DAY-CASH] {_e_vdc}")
     # DIST-FEE (2026-06-15): distribučná úspora zvlášť = grid_fee × (baseline_import − skutočný_import)
     _d_dist = 0.0; _dist_reduction_kwh = 0.0; _gf_dist = 0.0
     try:
