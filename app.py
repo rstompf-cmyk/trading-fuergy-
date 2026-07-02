@@ -8808,7 +8808,20 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                      if "exec_batt_kw" in dview.columns else _plan_for_ref)
         NOM = "[" + ",".join(_js(float(x)) for x in _nom_ref) + "]"
         _devnd = [float(n) - float(e) for n, e in zip(_nom_ref, _exec_ref)]
-        DEVND = "[" + ",".join((_js(float(x)) if abs(x) > 1.0 else "null") for x in _devnd) + "]"
+        # ND-TOLERANCE (2026-07-02, user: „~2% nad SOC sa farbí ako odchylka, mame tolerancny
+        # parameter"): prekrocenie SOC v ramci soc_reserve sa NEFARBI ako „Nedodane". Tol =
+        # energia rezervnej zony dodatelna za 15-min slot [kW] = soc_reserve_frac × batt_kwh × 4.
+        # LEN DISPLEJ (DEVND) — zuctovanie odchylky/€ (livesim) sa NEMENI. Kill DEV_ND_TOL=0.
+        _nd_tol = 1.0
+        try:
+            if os.environ.get("DEV_ND_TOL", "1") != "0":
+                _pl_nd = _ui_load("plan", {}) or {}
+                _res_nd = float(_pl_nd.get("soc_reserve_pct", 0) or 0) / 100.0
+                _bk_nd = float(_pl_nd.get("batt_kwh", 0) or 0)
+                _nd_tol = max(1.0, _res_nd * _bk_nd * 4.0)
+        except Exception:
+            _nd_tol = 1.0
+        DEVND = "[" + ",".join((_js(float(x)) if abs(x) > _nd_tol else "null") for x in _devnd) + "]"
         # 15-min agregat ako druhy dataset (transparentny prehlad)
         try:
             _act_df = pd.DataFrame({"_t": dview["time"].values, "_v": _act_per_min})
