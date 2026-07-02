@@ -1142,6 +1142,28 @@ def version_endpoint():
     }
 
 
+@app.get("/cleanup_alerts")
+def cleanup_alerts_endpoint():
+    """VDT Upratovanie — VŠETKY aktívne alerty naprieč profilmi (globálny banner).
+    Alert vzniká, keď je ≤1h do nedodateľného slotu a cleanup NEupratal (strata > limit).
+    READ-ONLY, fail-safe."""
+    try:
+        import vdt_live_advisor as _vla
+        return {"alerts": _vla.read_cleanup_alerts()}
+    except Exception as e:
+        return {"alerts": [], "error": str(e)}
+
+
+@app.post("/cleanup_force")
+def cleanup_force_endpoint(profile: str = Form(...)):
+    """MANUÁLNY OVERRIDE z banneru — uprac nedodateľný slot za najlepšiu cenu aj so stratou."""
+    try:
+        import vdt_live_advisor as _vla
+        return _vla.force_cleanup(str(profile or ""))
+    except Exception as e:
+        return {"acted": False, "reason": f"chyba: {e}"}
+
+
 @app.get("/plan_batch", response_class=HTMLResponse)
 def plan_batch_form(from_date: str = None, to_date: str = None, step_min: int = 15,
                     kind: str = "plan"):  # 15-min + PREDIKOVANÝ default

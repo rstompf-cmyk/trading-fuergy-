@@ -8,6 +8,48 @@
   {% block head_extra %}{% endblock %}
 </head>
 <body>
+  <!-- VDT Upratovanie — globálny alert (nedodateľný slot ≤1h, neupratané kvôli max strate).
+       Viditeľný na KAŽDEJ stránke, nezávisle od otvoreného profilu (kým je appka otvorená). -->
+  <div id="cleanup-alert-bar" style="display:none;position:sticky;top:0;z-index:9999;
+       background:#7a1f1f;color:#fff;padding:8px 14px;font-size:14px;
+       box-shadow:0 2px 6px rgba(0,0,0,.3)"></div>
+  <script>
+  (function(){
+    async function forceCleanup(profile, btn){
+      if(!confirm("Upratať profil "+profile+" za najlepšiu dostupnú cenu (aj so stratou)?")) return;
+      btn.disabled=true; btn.textContent="Upratávam…";
+      try{
+        const r=await fetch("/cleanup_force",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"profile="+encodeURIComponent(profile)});
+        const j=await r.json();
+        alert(j.acted ? ("Upratané: "+(j.reason||"")) : ("Neupratané: "+(j.reason||"neznáma chyba")));
+      }catch(e){ alert("Chyba: "+e); }
+      poll();
+    }
+    window.__forceCleanup=forceCleanup;
+    async function poll(){
+      const bar=document.getElementById("cleanup-alert-bar");
+      if(!bar) return;
+      try{
+        const r=await fetch("/cleanup_alerts",{cache:"no-store"});
+        const j=await r.json();
+        const al=(j&&j.alerts)||[];
+        if(!al.length){ bar.style.display="none"; bar.innerHTML=""; return; }
+        bar.innerHTML = al.map(function(a){
+          const dir = a.direction==="sell" ? "vybíjať (SOC preplnené)" : "nabíjať (SOC pod min)";
+          const px  = (a.best_price_eur_mwh!=null)? a.best_price_eur_mwh+" €/MWh" : "cena n/a";
+          const loss= (a.would_loss_eur!=null)? (" · strata ~"+a.would_loss_eur+" €") : "";
+          return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:3px 0">'
+            + '<span>⚠ <b>'+a.profile+'</b>: o '+ (a.tau_h!=null?a.tau_h:"?") +' h nedodateľný slot <b>'+(a.problem_slot||"")+'</b> — treba '+dir
+            + ', '+ (a.kw!=null?a.kw:"?") +' kW. Najlepšia cena <b>'+px+'</b>'+loss+' (neupratané: strata > limit).</span>'
+            + '<button onclick="__forceCleanup(\''+a.profile+'\',this)" style="background:#fff;color:#7a1f1f;border:0;border-radius:5px;padding:4px 10px;font-weight:600;cursor:pointer">Upratať za túto cenu</button>'
+            + '</div>';
+        }).join("");
+        bar.style.display="block";
+      }catch(e){ /* ticho — appka funguje ďalej */ }
+    }
+    poll(); setInterval(poll, 30000);
+  })();
+  </script>
   {% block layout %}
     <div class="container {% block container_class %}{% endblock %}">
       {% block nav %}{% include "components/nav.html" %}{% endblock %}

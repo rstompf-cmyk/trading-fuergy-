@@ -1671,6 +1671,67 @@ def load_cache(profile: Optional[str] = None) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _cleanup_alert_dir() -> str:
+    """Zdieľaný adresár pre cleanup alerty (global, naprieč profilmi)."""
+    d = os.path.join("out", "_status")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def _cleanup_alert_path(profile: str) -> str:
+    _safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in str(profile or ""))
+    return os.path.join(_cleanup_alert_dir(), f"cleanup_alert_{_safe}.json")
+
+
+def _write_cleanup_alert(profile: str, payload: Dict[str, Any]) -> None:
+    """Zapíš/prepíš alert pre profil (nedodateľný slot ≤ alert_h, neupratané kvôli max strate)."""
+    try:
+        import json as _json
+        payload = dict(payload or {})
+        payload["profile"] = profile
+        payload["created"] = dt.datetime.now().isoformat(timespec="seconds")
+        with open(_cleanup_alert_path(profile), "w", encoding="utf-8") as f:
+            _json.dump(payload, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"[VDT-CLEANUP-ALERT] zápis zlyhal ({profile}): {e}")
+
+
+def clear_cleanup_alert(profile: str) -> None:
+    """Zmaž alert (problém vyriešený / upratané / už neexistuje)."""
+    try:
+        p = _cleanup_alert_path(profile)
+        if os.path.exists(p):
+            os.remove(p)
+    except Exception:
+        pass
+
+
+def read_cleanup_alerts(max_age_min: int = 20) -> list:
+    """Vráti VŠETKY aktívne (čerstvé) cleanup alerty naprieč profilmi — pre globálny banner.
+
+    Alert je „čerstvý", ak nie je starší než max_age_min (worker ho každý tick prepíše/zmaže;
+    zastaraný súbor = profil sa už nespracúva → nezobrazuj)."""
+    import glob as _glob, json as _json
+    out = []
+    for p in _glob.glob(os.path.join(_cleanup_alert_dir(), "cleanup_alert_*.json")):
+        try:
+            with open(p, encoding="utf-8") as f:
+                a = _json.load(f)
+            _c = a.get("created")
+            if _c:
+                age = (dt.datetime.now() - dt.datetime.fromisoformat(_c)).total_seconds() / 60.0
+                if age > max_age_min:
+                    continue
+            out.append(a)
+        except Exception:
+            continue
+    out.sort(key=lambda x: x.get("tau_h", 99))
+    return out
+
+
 def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
     """VDT „Upratovanie" (bezpečnostná sieť, task #82). Kill-switch VDT_CLEANUP=1 (DEFAULT OFF).
 
@@ -1716,6 +1777,7 @@ def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
         tgt = detect_undeliverable_target(path, cur_slot, soc_min_pct=soc_min,
                                           soc_max_pct=soc_max, batt_kwh=cap, batt_kw=batt_kw)
         if not tgt:
+            clear_cleanup_alert(profile)      # problém zmizol → zruš prípadný alert
             out["reason"] = "žiadny nedodateľný slot (OK)"
             return out
         obps = result.get("orderbook_per_slot") or []
@@ -1732,6 +1794,7 @@ def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
         horizon_h = float(_pl.get("cleanup_horizon_h", 6.0) or 6.0)
         deadband_kw = float(_pl.get("cleanup_deadband_kw", 50.0) or 50.0)
         max_loss = float(_pl.get("cleanup_max_loss_eur_mwh", 20.0) or 20.0)
+        alert_h = float(_pl.get("cleanup_alert_h", 1.0) or 1.0)
         min_spread = float(_pl.get("min_spread", _pl.get("min_spread_eur", 5.0)) or 5.0)
         max_action_kw = max(0.0, batt_kw - abs(float(sched[cur_slot]))) if batt_kw > 0 else 0.0
         dec = decide_cleanup(tgt["deviation_kw"], tgt["tau_h"], direction=direction,
@@ -1740,9 +1803,36 @@ def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
                              max_loss_eur=max_loss, deadband_kw=deadband_kw,
                              max_action_kw=max_action_kw)
         out["target"] = tgt; out["decision"] = dec
+        # Problémový slot ako HH:MM-HH:MM (pre alert aj log)
+        _ps = int(tgt["problem_slot"])
+        _ph0, _pm0 = divmod(_ps * 15, 60); _ph1, _pm1 = divmod(_ps * 15 + 15, 60)
+        _prob_slot_str = f"{_ph0:02d}:{_pm0:02d}-{_ph1:02d}:{_pm1:02d}"
         if not dec.get("act"):
             out["reason"] = dec.get("reason", "")
+            # ALERT: ≤ alert_h do problému + odmietnuté kvôli marži (strata > max) + je cena.
+            _mrg = dec.get("margin"); _req = dec.get("req_margin")
+            _loss_decline = (_mrg is not None and _req is not None and float(_mrg) < float(_req))
+            if (_loss_decline and float(tgt["tau_h"]) <= alert_h
+                    and action_price is not None):
+                _kw_al = min(abs(float(tgt["deviation_kw"])), abs(float(max_action_kw)))
+                _act_al = "discharge" if direction == "sell" else "charge"
+                _would_loss = round(float(_mrg) * (_kw_al * 0.25) / 1000.0, 2)  # €/MWh × MWh
+                _write_cleanup_alert(profile, {
+                    "problem_slot": _prob_slot_str, "tau_h": round(float(tgt["tau_h"]), 2),
+                    "direction": direction, "action": _act_al, "kw": round(_kw_al, 1),
+                    "best_price_eur_mwh": (round(float(action_price), 2)
+                                           if action_price is not None else None),
+                    "ref_price_eur_mwh": (round(float(ref_price), 2)
+                                          if ref_price is not None else None),
+                    "margin_eur_mwh": _mrg, "req_margin_eur_mwh": _req,
+                    "would_loss_eur": _would_loss, "kind": tgt.get("kind", ""),
+                    "ts": result.get("ts", ""),
+                })
+                out["alert"] = True
+            else:
+                clear_cleanup_alert(profile)   # ešte je čas / nie strata → žiadny alert
             return out
+        clear_cleanup_alert(profile)           # ideme upratať → alert netreba
         _kw = float(dec["kw"])
         _act = "discharge" if direction == "sell" else "charge"
         _h0, _m0 = divmod(cur_slot * 15, 60)
@@ -1760,6 +1850,77 @@ def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
         return out
     except Exception as e:
         out["reason"] = f"cleanup zlyhal (fail-safe): {e}"
+        return out
+
+
+def force_cleanup(profile: str) -> Dict[str, Any]:
+    """MANUÁLNY OVERRIDE (užívateľ potvrdil z banneru): uprac nedodateľný slot za NAJLEPŠIU
+    dostupnú cenu aj napriek strate (ignoruje max_loss). Vždy len ZMENŠUJE odchýlku (cap na
+    voľný výkon + |deviation|), commit tagom `vdt_cleanup`, potom zmaže alert. Fail-safe."""
+    out = {"acted": False, "reason": ""}
+    try:
+        if not profile:
+            out["reason"] = "chýba profil"; return out
+        import vdt_state as _vs
+        import core.soc_use_audit as _sua
+        import profiles as _pr
+        from core.vdt_cleanup import detect_undeliverable_target
+        _today = dt.date.today()
+        st = _vs.compute_current_state(profile, today=_today)
+        if not st or not st.get("ok"):
+            out["reason"] = "nedostupný stav profilu"; return out
+        cap = float(st.get("batt_kwh") or 0.0)
+        if cap <= 0:
+            out["reason"] = "batt_kwh≤0"; return out
+        eff_c = float(st.get("eff_c") or 0.95); eff_d = float(st.get("eff_d") or 0.95)
+        soc_min = float(st.get("soc_min_pct") or 5.0); soc_max = float(st.get("soc_max_pct") or 100.0)
+        cur_soc = float(st.get("current_soc_pct") or 50.0)
+        cur_slot = int(st.get("current_slot_idx") or 0)
+        dam = list(st.get("dam_nomination_kwh") or [0.0] * 96)
+        vdt = list(st.get("vdt_realized_kwh") or [0.0] * 96)
+        while len(dam) < 96: dam.append(0.0)
+        while len(vdt) < 96: vdt.append(0.0)
+        sched = [float(dam[i]) + float(vdt[i]) for i in range(96)]
+        sim = [0.0] * cur_slot + sched[cur_slot:]
+        path = _sua.simulate_soc_unclipped(cur_soc, sim, cap, eff_c=eff_c, eff_d=eff_d)
+        _pl = (_pr.load_profile(profile) or {}).get("plan") or {}
+        batt_kw = float(_pl.get("batt_kw", 0.0) or 0.0)
+        tgt = detect_undeliverable_target(path, cur_slot, soc_min_pct=soc_min,
+                                          soc_max_pct=soc_max, batt_kwh=cap, batt_kw=batt_kw)
+        if not tgt:
+            clear_cleanup_alert(profile)
+            out["reason"] = "problém už neexistuje (nič netreba)"; return out
+        direction = tgt["direction"]
+        # Najlepšia dostupná cena TERAZ z orderbooku (cez čerstvý cache výsledok).
+        best_price = None
+        try:
+            _cache = load_cache(profile) or {}
+            _obps = _cache.get("orderbook_per_slot") or []
+            d = _obps[int(cur_slot)] or {}
+            best_price = float(d.get("bid") if direction == "sell" else d.get("ask"))
+        except Exception:
+            best_price = None
+        max_action_kw = max(0.0, batt_kw - abs(float(sched[cur_slot]))) if batt_kw > 0 else 0.0
+        _kw = min(abs(float(tgt["deviation_kw"])), abs(float(max_action_kw)))
+        if _kw < 1e-6:
+            out["reason"] = "žiadna voľná kapacita (max_action_kw≈0)"; return out
+        _act = "discharge" if direction == "sell" else "charge"
+        _h0, _m0 = divmod(cur_slot * 15, 60); _h1, _m1 = divmod(cur_slot * 15 + 15, 60)
+        _slot_str = f"{_h0:02d}:{_m0:02d}-{_h1:02d}:{_m1:02d}"
+        _res = {"ok": True, "profile": profile, "ts": _today.isoformat(),
+                "current": {"slot": _slot_str, "action": _act, "kw": _kw,
+                            "kwh_per_slot": _kw * 0.25, "price_eur_mwh": best_price,
+                            "soc_after_pct": cur_soc},
+                "soc": {"soc_pct": cur_soc, "source": "vdt_cleanup"},
+                "profit_eur": 0.0}
+        append_paper_trade(_res)
+        clear_cleanup_alert(profile)
+        out.update(acted=True, kw=round(_kw, 1), price_eur_mwh=best_price,
+                   reason=f"OVERRIDE uprataný {_act} {_kw:.0f} kW @ {best_price} €/MWh")
+        print(f"[VDT-CLEANUP-FORCE] {profile} {_slot_str} {_act} {_kw:.0f}kW @ {best_price}")
+        return out
+    except Exception as e:
+        out["reason"] = f"force_cleanup zlyhal: {e}"
         return out
 
 
