@@ -1190,6 +1190,33 @@ def append_extra_paper_trade(profile: str, slot: str, action: str,
     today = dt.date.today().isoformat()
     ts_now = dt.datetime.now().isoformat(timespec="seconds")
 
+    # VDT-IMMUTABLE (2026-07-02, user: „uzavretý obchod = nemenný, nezrušiteľný — len kompletné
+    # pregenerovanie ho zmaže; simulujeme reálny stav, tam sa obchod nedá zrušiť"): keď na tomto
+    # slote DNES už existuje batériový VDT obchod, je UZAVRETÝ → ďalší tick ho NESMIE prepísať ani
+    # zmazať. Preskoč zápis (žiadny churn). Nahrádza VDT-NO-CHURN „replace". Iba full regen (zmazanie
+    # CSV cez /plan_batch) obchody odstráni. Kill-switch VDT_IMMUTABLE_TRADES=0 → späť na replace.
+    _immutable = os.environ.get("VDT_IMMUTABLE_TRADES", "1") != "0"
+    if _immutable and str(action or "").upper() in ("CHARGE", "DISCHARGE", "BUY", "SELL") and not new_file:
+        try:
+            with open(path, "r", encoding="utf-8", newline="") as _f:
+                _rows0 = list(csv.reader(_f))
+            if _rows0:
+                _h = _rows0[0]
+                _pi = _h.index("profile") if "profile" in _h else 1
+                _si = _h.index("slot") if "slot" in _h else 2
+                _ai = _h.index("action") if "action" in _h else 3
+                _ti = _h.index("ts") if "ts" in _h else 0
+                for _r in _rows0[1:]:
+                    if len(_r) <= max(_pi, _si, _ai, _ti):
+                        continue
+                    if ((_r[_ti] or "")[:10] == today
+                            and _r[_pi] == str(profile or "")
+                            and _r[_si] == str(slot or "")
+                            and str(_r[_ai] or "").upper() in ("BUY", "SELL", "CHARGE", "DISCHARGE")):
+                        return   # slot má už uzavretý obchod → nemenný, nechaj tak
+        except Exception:
+            pass
+
     # Bug #612: capacity audit pre extras (BUY/SELL/CHARGE/DISCHARGE).
     # CURTAIL_FTV a LOAD_COVER nepoužívajú batt kapacitu → preskočia audit.
     _act_upper = str(action or "").upper()
