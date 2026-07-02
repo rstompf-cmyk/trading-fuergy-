@@ -13,8 +13,92 @@
   <div id="cleanup-alert-bar" style="display:none;position:sticky;top:0;z-index:9999;
        background:#7a1f1f;color:#fff;padding:8px 14px;font-size:14px;
        box-shadow:0 2px 6px rgba(0,0,0,.3)"></div>
+
+  <!-- Ručný VDT obchod (objem, cena, čas) — globálny modal, otvárateľný z alertu aj samostatne -->
+  <div id="manual-trade-modal" style="display:none;position:fixed;inset:0;z-index:10000;
+       background:rgba(0,0,0,.5)">
+    <div style="max-width:420px;margin:8% auto;background:#fff;color:#111;border-radius:10px;
+         padding:18px 20px;box-shadow:0 8px 30px rgba(0,0,0,.4);font-size:14px">
+      <div style="font-weight:700;font-size:16px;margin-bottom:10px">✎ Ručný VDT obchod</div>
+      <div id="mt-info" style="background:#f3f4f6;border-radius:6px;padding:8px 10px;margin-bottom:12px;
+           font-size:13px;color:#374151"></div>
+      <input type="hidden" id="mt-profile">
+      <label style="display:block;margin:6px 0 2px">Profil</label>
+      <input id="mt-profile-show" readonly style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;background:#f9fafb">
+      <div style="display:flex;gap:10px">
+        <div style="flex:1"><label style="display:block;margin:6px 0 2px">Čas (HH:MM)</label>
+          <input id="mt-slot" placeholder="16:45" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px"></div>
+        <div style="flex:1"><label style="display:block;margin:6px 0 2px">Akcia</label>
+          <select id="mt-action" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px">
+            <option value="discharge">Vybíjať / predaj</option>
+            <option value="charge">Nabíjať / nákup</option>
+          </select></div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <div style="flex:1"><label style="display:block;margin:6px 0 2px">Objem (kW)</label>
+          <input id="mt-kw" type="number" step="1" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px"></div>
+        <div style="flex:1"><label style="display:block;margin:6px 0 2px">Cena (€/MWh)</label>
+          <input id="mt-price" type="number" step="0.01" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px"></div>
+      </div>
+      <div style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">
+        <button onclick="__closeManualTrade()" style="padding:7px 14px;border:1px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer">Zrušiť</button>
+        <button id="mt-submit" style="padding:7px 14px;border:0;background:#166534;color:#fff;border-radius:6px;font-weight:600;cursor:pointer">Zobchodovať</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Plávajúce tlačidlo „Ručný VDT obchod" — len na živej simulácii / realio -->
+  <button id="manual-trade-fab" style="display:none;position:fixed;right:18px;bottom:18px;z-index:9998;
+       background:#166534;color:#fff;border:0;border-radius:24px;padding:10px 16px;font-size:14px;
+       font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer">✎ Ručný VDT obchod</button>
+
   <script>
   (function(){
+    var _activeProfile = "{{ active_profile.name if active_profile else '' }}";
+    (function(){
+      var p = window.location.pathname || "";
+      if (p.indexOf("/livesim") === 0 || p.indexOf("/realio") === 0){
+        var fab = document.getElementById("manual-trade-fab");
+        if (fab){
+          fab.style.display = "block";
+          fab.addEventListener("click", function(){
+            window.__openManualTrade({profile:_activeProfile, action:"discharge",
+              info:"Ručný VDT obchod pre profil "+_activeProfile+". Zadaj čas 15-min slotu, akciu, objem a cenu."});
+          });
+        }
+      }
+    })();
+    function openManualTrade(pf){
+      pf = pf || {};
+      document.getElementById("mt-profile").value = pf.profile || "";
+      document.getElementById("mt-profile-show").value = pf.profile || "";
+      document.getElementById("mt-slot").value = (pf.slot || "").slice(0,5);
+      document.getElementById("mt-action").value = pf.action || "discharge";
+      document.getElementById("mt-kw").value = (pf.kw!=null? Math.round(pf.kw) : "");
+      document.getElementById("mt-price").value = (pf.price!=null? pf.price : "");
+      var info = pf.info || "Zadaj objem, cenu a čas 15-min slotu. Obchod sa zapíše ako override (tvoje rozhodnutie).";
+      document.getElementById("mt-info").textContent = info;
+      document.getElementById("manual-trade-modal").style.display="block";
+    }
+    function closeManualTrade(){ document.getElementById("manual-trade-modal").style.display="none"; }
+    window.__openManualTrade = openManualTrade;
+    window.__closeManualTrade = closeManualTrade;
+    document.getElementById("mt-submit").addEventListener("click", async function(){
+      var b=this; b.disabled=true; b.textContent="Zapisujem…";
+      var body = "profile="+encodeURIComponent(document.getElementById("mt-profile").value)
+        + "&slot="+encodeURIComponent(document.getElementById("mt-slot").value)
+        + "&action="+encodeURIComponent(document.getElementById("mt-action").value)
+        + "&kw="+encodeURIComponent(document.getElementById("mt-kw").value)
+        + "&price_eur_mwh="+encodeURIComponent(document.getElementById("mt-price").value);
+      try{
+        var r=await fetch("/vdt/manual_trade",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body});
+        var j=await r.json();
+        alert(j.ok ? (j.reason + (j.warn? ("\n\n"+j.warn):"")) : ("Chyba: "+(j.reason||"neznáma")));
+        if(j.ok) closeManualTrade();
+      }catch(e){ alert("Chyba: "+e); }
+      b.disabled=false; b.textContent="Zobchodovať";
+    });
+
     async function forceCleanup(profile, btn){
       if(!confirm("Upratať profil "+profile+" za najlepšiu dostupnú cenu (aj so stratou)?")) return;
       btn.disabled=true; btn.textContent="Upratávam…";
@@ -42,6 +126,7 @@
             + '<span>⚠ <b>'+a.profile+'</b>: o '+ (a.tau_h!=null?a.tau_h:"?") +' h nedodateľný slot <b>'+(a.problem_slot||"")+'</b> — treba '+dir
             + ', '+ (a.kw!=null?a.kw:"?") +' kW. Najlepšia cena <b>'+px+'</b>'+loss+' (neupratané: strata > limit).</span>'
             + '<button onclick="__forceCleanup(\''+a.profile+'\',this)" style="background:#fff;color:#7a1f1f;border:0;border-radius:5px;padding:4px 10px;font-weight:600;cursor:pointer">Upratať za túto cenu</button>'
+            + '<button onclick=\'__openManualTrade('+JSON.stringify({profile:a.profile,slot:a.problem_slot,action:a.direction,kw:a.kw,price:a.best_price_eur_mwh,info:("Odporúčanie: "+(a.direction==="sell"?"predať":"nakúpiť")+" "+(a.kw||"?")+" kW v "+(a.problem_slot||"")+", najlepšia cena "+((a.best_price_eur_mwh!=null)?a.best_price_eur_mwh+" €/MWh":"n/a")+".")})+')\' style="background:#fde68a;color:#7a1f1f;border:0;border-radius:5px;padding:4px 10px;font-weight:600;cursor:pointer">✎ Zadať ručne</button>'
             + '</div>';
         }).join("");
         bar.style.display="block";

@@ -1164,6 +1164,19 @@ def cleanup_force_endpoint(profile: str = Form(...)):
         return {"acted": False, "reason": f"chyba: {e}"}
 
 
+@app.post("/vdt/manual_trade")
+def vdt_manual_trade_endpoint(profile: str = Form(...), slot: str = Form(...),
+                              action: str = Form(...), kw: float = Form(...),
+                              price_eur_mwh: float = Form(...)):
+    """RUČNÝ VDT obchod z UI (objem, cena, čas). Override — zapíše sa ako zadané."""
+    try:
+        import vdt_live_advisor as _vla
+        return _vla.place_manual_trade(str(profile or ""), str(slot or ""),
+                                       str(action or ""), float(kw), float(price_eur_mwh))
+    except Exception as e:
+        return {"ok": False, "reason": f"chyba: {e}"}
+
+
 @app.get("/plan_batch", response_class=HTMLResponse)
 def plan_batch_form(from_date: str = None, to_date: str = None, step_min: int = 15,
                     kind: str = "plan"):  # 15-min + PREDIKOVANÝ default

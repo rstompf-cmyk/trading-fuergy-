@@ -1342,8 +1342,11 @@ def _vdt_price_is_real(px) -> bool:
     return math.isfinite(f) and f != 0.0
 
 
-def append_paper_trade(result: Dict[str, Any]) -> None:
+def append_paper_trade(result: Dict[str, Any], bypass_audit: bool = False) -> None:
     """Append jednu odporúčanú akciu do paper trading log CSV.
+
+    bypass_audit=True → preskočí #612/#637/DELIVERABLE audit (ručný obchod = override
+    rozhodnutý užívateľom). Používa place_manual_trade.
 
     Cieľ: zaznamenať odporúčanie aby sme ho mohli neskôr porovnať s realitou
     (čo sa naozaj zobchodovalo na VDT/clearing) a získať trust v presnosť MPC.
@@ -1382,7 +1385,7 @@ def append_paper_trade(result: Dict[str, Any]) -> None:
     # Ak voľná kapacita (= batt_kw_max − Σ rezervácie) nestačí → downscale alebo reject.
     # IDLE akcie sa nepasujú cez audit (žiadna rezervácia kapacity).
     _action_upper = action.upper()
-    if _action_upper in ("CHARGE", "DISCHARGE", "BUY", "SELL", "BOTH"):
+    if (not bypass_audit) and _action_upper in ("CHARGE", "DISCHARGE", "BUY", "SELL", "BOTH"):
         # VDT-ZERO-PRICE (writer enforcement, 2026-06-18): VDT obchod sa zapíše LEN s
         # reálnou cenou. None/0.0/NaN/inf = placeholder (chýbajúci orderbook alebo DAM
         # commitment BEZ VDT ceny) → NEZAPÍSAŤ. Inak sa napr. DAM nabíjanie zaloguje ako
@@ -1921,6 +1924,69 @@ def force_cleanup(profile: str) -> Dict[str, Any]:
         return out
     except Exception as e:
         out["reason"] = f"force_cleanup zlyhal: {e}"
+        return out
+
+
+def place_manual_trade(profile: str, slot: str, action: str, kw: float,
+                        price_eur_mwh: float) -> Dict[str, Any]:
+    """RUČNÝ obchod z UI (užívateľ zadá objem, cenu, čas). Override — zapíše sa presne
+    ako zadané (bypass audit, tag `vdt_manual`), lebo je to explicitné ľudské rozhodnutie.
+    Vráti aj upozornenie z auditu (či by bol nedodateľný), ale NEBLOKUJE. Fail-safe.
+
+    Args: slot = "HH:MM" alebo "HH:MM-HH:MM" (začiatok 15-min slotu), action = buy/sell/
+    charge/discharge, kw > 0, price v €/MWh (môže byť aj záporná)."""
+    out = {"ok": False, "reason": ""}
+    try:
+        if not profile:
+            out["reason"] = "chýba profil"; return out
+        _a = str(action or "").lower().strip()
+        if _a in ("buy", "nakup", "nákup"):
+            _a = "charge"
+        elif _a in ("sell", "predaj"):
+            _a = "discharge"
+        if _a not in ("charge", "discharge"):
+            out["reason"] = f"neznáma akcia: {action!r}"; return out
+        _kw = abs(float(kw or 0.0))
+        if _kw < 1e-6:
+            out["reason"] = "objem (kW) musí byť > 0"; return out
+        _px = float(price_eur_mwh)
+        _s = str(slot or "").strip()[:5]           # "HH:MM"
+        if len(_s) != 5 or ":" not in _s:
+            out["reason"] = f"neplatný čas slotu: {slot!r} (očakávam HH:MM)"; return out
+        _hh = int(_s[:2]); _mm = int(_s[3:5])
+        _si = (_hh * 60 + _mm) // 15
+        _h1, _m1 = divmod(_si * 15 + 15, 60)
+        _slot_str = f"{_hh:02d}:{(_si*15) % 60:02d}-{_h1:02d}:{_m1:02d}"
+        _today = dt.date.today().isoformat()
+        # Upozornenie z auditu (nedodateľnosť) — len info, nezastaví zápis.
+        _warn = ""
+        try:
+            from core.soc_use_audit import audit_action as _sa
+            import vdt_state as _vs_m
+            _ts_m = _vs_m.compute_current_state(profile, today=dt.date.fromisoformat(_today))
+            _cs = float(_ts_m.get("current_soc_pct")) if (_ts_m and _ts_m.get("ok")) else None
+            _cslot = int(_ts_m.get("current_slot_idx") or 0) if (_ts_m and _ts_m.get("ok")) else None
+            _r = _sa(profile, _today, _si, _a, _kw * 0.25, source="vdt",
+                     today_state=_ts_m, current_soc_pct_at_si=_cs, sim_from_slot=_cslot)
+            if _r.get("decision") != "accept":
+                _warn = f"POZOR (audit): {_r.get('reason', '')}"
+        except Exception:
+            _warn = ""
+        _res = {"ok": True, "profile": profile, "ts": _today,
+                "current": {"slot": _slot_str, "action": _a, "kw": _kw,
+                            "kwh_per_slot": _kw * 0.25, "price_eur_mwh": _px,
+                            "soc_after_pct": 0.0},
+                "soc": {"soc_pct": 0.0, "source": "vdt_manual"},
+                "profit_eur": 0.0}
+        append_paper_trade(_res, bypass_audit=True)
+        clear_cleanup_alert(profile)               # ručný zásah rieši problém → zruš alert
+        out.update(ok=True, slot=_slot_str, action=_a, kw=round(_kw, 1),
+                   price_eur_mwh=_px, warn=_warn,
+                   reason=f"Zapísaný ručný obchod {_a} {_kw:.0f} kW @ {_px} €/MWh v {_slot_str}")
+        print(f"[VDT-MANUAL] {profile} {_slot_str} {_a} {_kw:.0f}kW @ {_px} {('| '+_warn) if _warn else ''}")
+        return out
+    except Exception as e:
+        out["reason"] = f"ručný obchod zlyhal: {e}"
         return out
 
 
