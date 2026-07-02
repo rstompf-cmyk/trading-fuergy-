@@ -63,6 +63,37 @@ def simulate_soc_unclipped(start_soc_pct: float,
     return soc_path
 
 
+def simulate_soc_clipped(start_soc_pct: float,
+                          batt_kwh_per_slot: List[float],
+                          batt_kwh_capacity: float,
+                          eff_c: float = 0.95,
+                          eff_d: float = 0.95,
+                          lo_pct: float = 0.0,
+                          hi_pct: float = 100.0) -> List[float]:
+    """Ako simulate_soc_unclipped, ale SOC clampuje na [lo_pct, hi_pct] po každom slote.
+
+    Dáva REÁLNU (fyzikálne dodateľnú) SOC trajektóriu committed plánu — energia nad hi
+    (plná batéria) alebo pod lo sa „stratí", NEPRENÁŠA sa dopredu. Použité pre kontrolu
+    dodateľnosti VDT obchodu v jeho slote (VDT-AUDIT-DELIVERABLE)."""
+    cap = max(1.0, float(batt_kwh_capacity))
+    lo = float(lo_pct); hi = float(hi_pct)
+    cur = min(hi, max(lo, float(start_soc_pct)))
+    soc_path = [cur]
+    eff_d_safe = max(0.01, eff_d)
+    for t in range(min(96, len(batt_kwh_per_slot))):
+        v = float(batt_kwh_per_slot[t] or 0.0)
+        if v >= 0:
+            delta_kwh = -v / eff_d_safe
+        else:
+            delta_kwh = (-v) * eff_c
+        cur += (delta_kwh / cap) * 100.0
+        cur = min(hi, max(lo, cur))              # fyzikálny clamp
+        soc_path.append(cur)
+    while len(soc_path) < 97:
+        soc_path.append(cur)
+    return soc_path
+
+
 def check_violations(soc_path: List[float],
                        direction_per_slot: List[str],
                        *,
@@ -502,6 +533,55 @@ def audit_action(profile: str,
     _is_vdt = str(source or "").lower() in ("vdt", "vdt_extra")
     _vdt_noworsen = _is_vdt and os.environ.get("VDT_AUDIT_NOWORSEN", "1") != "0"
 
+    # VDT-AUDIT-DELIVERABLE (2026-07-02, user: „žiadny nákup 3 % pod 100 % a predaj 3 % nad 5 %"):
+    # absolútna dodateľnosť v SLOTE obchodu podľa CLIPNUTÉHO committed SOC (fyzikálna realita).
+    # No-worsen používa NECLIPNUTÝ excess → nabíjanie pri 100 % vytvorí fiktívnu energiu nad max,
+    # ktorá „vykryje" večerný deficit → excess sa nezvýši → obchod prejde, hoci ho realita nedodá.
+    # Fix: nabíjať len ak SOC ≤ soc_max − buffer, vybíjať len ak SOC ≥ soc_min + buffer
+    # (buffer = vdt_edge_buffer_pct, default 3 %). Len VDT; RT/auto_control bit-exact (golden).
+    # Kill-switch VDT_AUDIT_DELIVERABLE=0.
+    _deliv_cap = None; _soc_at_si = None
+    if _is_vdt and os.environ.get("VDT_AUDIT_DELIVERABLE", "1") != "0":
+        try:
+            _buf = 3.0
+            try:
+                import profiles as _pr_b
+                _buf = float(((_pr_b.load_profile(profile) or {}).get("plan") or {})
+                             .get("vdt_edge_buffer_pct", 3.0) or 3.0)
+            except Exception:
+                _buf = 3.0
+            _buf = max(0.0, min(50.0, _buf))
+            _cbase = simulate_soc_clipped(
+                _sim_start_soc,
+                ([0.0] * _sim_offset + list(scheduled_kwh[_sim_offset:])) if _sim_offset > 0 else list(scheduled_kwh),
+                cap, eff_c=eff_c, eff_d=eff_d, lo_pct=soc_min, hi_pct=soc_max)
+            _soc_at_si = float(_cbase[si])
+            if direction == "charge":
+                _head_pct = max(0.0, (soc_max - _buf) - _soc_at_si)
+                _deliv_cap = _head_pct / 100.0 * cap / max(eff_c, 0.01)
+            else:
+                _head_pct = max(0.0, _soc_at_si - (soc_min + _buf))
+                _deliv_cap = _head_pct / 100.0 * cap * max(eff_d, 0.01)
+        except Exception:
+            _deliv_cap = None
+
+    def _cap_deliverable(_out):
+        """Orež final allowed_kwh na fyzikálne dodateľné množstvo v slote si (len VDT)."""
+        if _deliv_cap is None:
+            return _out
+        if _deliv_cap < float(_out["allowed_kwh"]) - 1e-9:
+            _edge = "plná (SOC≈max)" if direction == "charge" else "prázdna (SOC≈min)"
+            if _deliv_cap < 0.5:
+                _out["decision"] = "reject"; _out["allowed_kwh"] = 0.0
+                _out["reason"] = (f"VDT-DELIVERABLE: batéria {_edge} v slote {si} "
+                                  f"(SOC={_soc_at_si:.1f}%) → {direction} nedodateľné.")
+            else:
+                _out["decision"] = "downscale"; _out["allowed_kwh"] = float(_deliv_cap)
+                _out["reason"] = (f"VDT-DELIVERABLE: SOC v slote {si}={_soc_at_si:.1f}% → "
+                                  f"{direction} orezané na {_deliv_cap:.1f} kWh. "
+                                  + _out.get("reason", ""))
+        return _out
+
     def _soc_excess(_path):
         return sum(max(0.0, _x - soc_max_eff) + max(0.0, soc_min_eff - _x) for _x in _path)
 
@@ -532,7 +612,7 @@ def audit_action(profile: str,
 
     if not violations_full:
         out["decision"] = "accept"
-        return out
+        return _cap_deliverable(out)
 
     # Binárne hľadanie max_allowed_kwh
     lo, hi = 0.0, kwh_req
@@ -565,7 +645,7 @@ def audit_action(profile: str,
         out["reason"] = (f"SOC violation v slot {v0[0]} ({v0[1]} @ {v0[2]:.1f}%). "
                           f"Downscale {kwh_req:.1f}→{allowed:.1f} kWh "
                           f"(limity {soc_min_eff:.1f}–{soc_max_eff:.1f}%).")
-    return out
+    return _cap_deliverable(out)
 
 
 def audit_action_simple(profile: str, day: str, slot_idx: int,
