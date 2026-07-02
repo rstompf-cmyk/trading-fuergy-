@@ -1164,6 +1164,17 @@ def cleanup_force_endpoint(profile: str = Form(...)):
         return {"acted": False, "reason": f"chyba: {e}"}
 
 
+@app.post("/vdt/cleanup_simulate")
+def vdt_cleanup_simulate_endpoint(profile: str = Form(...), day: str = Form(...)):
+    """OPTION B — upratovanie v regene (walk-forward, OKTE VDT uzavreté ceny). Zapíše
+    vdt_cleanup obchody pre daný deň → zobrazia sa v grafe/tabuľke/Exceli."""
+    try:
+        import vdt_live_advisor as _vla
+        return _vla.simulate_cleanup_for_day(str(profile or ""), str(day or ""))
+    except Exception as e:
+        return {"ok": False, "reason": f"chyba: {e}"}
+
+
 @app.post("/vdt/manual_trade")
 def vdt_manual_trade_endpoint(profile: str = Form(...), slot: str = Form(...),
                               action: str = Form(...), kw: float = Form(...),

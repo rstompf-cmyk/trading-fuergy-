@@ -51,6 +51,9 @@
   <button id="manual-trade-fab" style="display:none;position:fixed;right:18px;bottom:18px;z-index:9998;
        background:#166534;color:#fff;border:0;border-radius:24px;padding:10px 16px;font-size:14px;
        font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer">✎ Ručný VDT obchod</button>
+  <button id="cleanup-sim-fab" style="display:none;position:fixed;right:18px;bottom:64px;z-index:9998;
+       background:#92400e;color:#fff;border:0;border-radius:24px;padding:10px 16px;font-size:14px;
+       font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer">🧹 Simuluj upratovanie (deň)</button>
 
   <script>
   (function(){
@@ -64,6 +67,22 @@
           fab.addEventListener("click", function(){
             window.__openManualTrade({profile:_activeProfile, action:"discharge",
               info:"Ručný VDT obchod pre profil "+_activeProfile+". Zadaj čas 15-min slotu, akciu, objem a cenu."});
+          });
+        }
+        var cfab = document.getElementById("cleanup-sim-fab");
+        if (cfab){
+          cfab.style.display = "block";
+          cfab.addEventListener("click", async function(){
+            var day = new URLSearchParams(location.search).get("day") || new Date().toISOString().slice(0,10);
+            if(!confirm("Simulovať upratovanie (Option B, OKTE VDT ceny) pre "+_activeProfile+" deň "+day+"?")) return;
+            this.disabled=true; this.textContent="Upratávam…";
+            try{
+              var r=await fetch("/vdt/cleanup_simulate",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"profile="+encodeURIComponent(_activeProfile)+"&day="+encodeURIComponent(day)});
+              var j=await r.json();
+              alert(j.ok ? (j.reason||"hotovo") : ("Chyba: "+(j.reason||"neznáma")));
+              if(j.ok && j.count>0) location.reload();
+            }catch(e){ alert("Chyba: "+e); }
+            this.disabled=false; this.textContent="🧹 Simuluj upratovanie (deň)";
           });
         }
       }

@@ -1990,6 +1990,96 @@ def place_manual_trade(profile: str, slot: str, action: str, kw: float,
         return out
 
 
+def simulate_cleanup_for_day(profile: str, day: str) -> Dict[str, Any]:
+    """OPTION B (2026-07-02): upratovanie v REGENE — walk-forward cez deň s OKTE VDT
+    uzavretými cenami (task #27). Pre každý slot si (ako „teraz") z reálneho (sim) SOC +
+    committed nominácie (DAM+VDT+doterajšie korekcie) nájde prvý nedodateľný budúci slot,
+    ocení ho OKTE VDT uzavretými cenami (akcia@si, referencia@problém), spustí decide_cleanup
+    (časová decay marže) a ak sa oplatí, vloží korekciu (tag `vdt_cleanup`). Korekcie sa
+    kumulujú → ovplyvňujú ďalší SOC. Zápis cez append_paper_trade(bypass_audit=True).
+    Vráti súhrn (počet, kWh, cash). Fail-safe. Určené na tlačidlo po regene."""
+    import math as _m
+    out = {"ok": False, "reason": "", "count": 0, "kwh": 0.0, "cash_eur": 0.0, "trades": []}
+    try:
+        day = str(day)[:10]
+        import vdt_state as _vs
+        import core.soc_use_audit as _sua
+        import profiles as _pr
+        from core.vdt_cleanup import detect_undeliverable_target, decide_cleanup
+        st = _vs.compute_current_state(profile, today=dt.date.fromisoformat(day))
+        if not st or not st.get("ok"):
+            out["reason"] = "stav profilu nedostupný"; return out
+        cap = float(st.get("batt_kwh") or 0.0)
+        if cap <= 0:
+            out["reason"] = "batt_kwh≤0"; return out
+        eff_c = float(st.get("eff_c") or 0.95); eff_d = float(st.get("eff_d") or 0.95)
+        soc_min = float(st.get("soc_min_pct") or 5.0); soc_max = float(st.get("soc_max_pct") or 100.0)
+        soc_start = float(st.get("start_soc_pct") or 50.0)
+        dam = list(st.get("dam_nomination_kwh") or [0.0] * 96)
+        vdt = list(st.get("vdt_realized_kwh") or [0.0] * 96)
+        while len(dam) < 96: dam.append(0.0)
+        while len(vdt) < 96: vdt.append(0.0)
+        _pl = (_pr.load_profile(profile) or {}).get("plan") or {}
+        batt_kw = float(_pl.get("batt_kw", 0.0) or 0.0)
+        horizon_h = float(_pl.get("cleanup_horizon_h", 6.0) or 6.0)
+        deadband_kw = float(_pl.get("cleanup_deadband_kw", 50.0) or 50.0)
+        max_loss = float(_pl.get("cleanup_max_loss_eur_mwh", 20.0) or 20.0)
+        min_spread = float(_pl.get("min_spread", _pl.get("min_spread_eur", 5.0)) or 5.0)
+        prices = _vs.get_okte_vdt_price_curve(day)                 # 96 OKTE VDT cien
+        corr = [0.0] * 96                                          # kWh batt-view korekcie
+        for si in range(96):
+            sch = [dam[i] + vdt[i] + corr[i] for i in range(96)]
+            cbase = _sua.simulate_soc_clipped(soc_start, sch, cap, eff_c=eff_c, eff_d=eff_d,
+                                              lo_pct=soc_min, hi_pct=soc_max)
+            soc_si = float(cbase[si])                              # reálny (sim) SOC v si
+            sim = [0.0] * si + sch[si:]
+            path = _sua.simulate_soc_unclipped(soc_si, sim, cap, eff_c=eff_c, eff_d=eff_d)
+            tgt = detect_undeliverable_target(path, si, soc_min_pct=soc_min,
+                                              soc_max_pct=soc_max, batt_kwh=cap, batt_kw=batt_kw)
+            if not tgt:
+                continue
+            direction = tgt["direction"]
+            ap = prices[si]; rp = prices[int(tgt["problem_slot"])]
+            if not (_m.isfinite(ap) and _m.isfinite(rp)):          # bez ceny nezasahuj
+                continue
+            max_action_kw = max(0.0, batt_kw - abs(float(sch[si]))) if batt_kw > 0 else 0.0
+            dec = decide_cleanup(tgt["deviation_kw"], tgt["tau_h"], direction=direction,
+                                 action_price_eur=ap, ref_price_eur=rp, horizon_h=horizon_h,
+                                 min_spread_eur=min_spread, max_loss_eur=max_loss,
+                                 deadband_kw=deadband_kw, max_action_kw=max_action_kw)
+            if not dec.get("act"):
+                continue
+            kw = float(dec["kw"])
+            signed_kwh = (kw * 0.25) if direction == "sell" else -(kw * 0.25)
+            corr[si] += signed_kwh
+            _act = "discharge" if direction == "sell" else "charge"
+            _h0, _m0 = divmod(si * 15, 60); _h1, _m1 = divmod(si * 15 + 15, 60)
+            _slot_str = f"{_h0:02d}:{_m0:02d}-{_h1:02d}:{_m1:02d}"
+            _res = {"ok": True, "profile": profile, "ts": day,
+                    "current": {"slot": _slot_str, "action": _act, "kw": kw,
+                                "kwh_per_slot": kw * 0.25, "price_eur_mwh": ap,
+                                "soc_after_pct": soc_si},
+                    "soc": {"soc_pct": soc_si, "source": "vdt_cleanup"},
+                    "profit_eur": 0.0}
+            append_paper_trade(_res, bypass_audit=True)
+            out["trades"].append({"slot": _slot_str, "action": _act, "kw": round(kw, 1),
+                                  "price_eur_mwh": round(ap, 2), "tau_h": round(tgt["tau_h"], 2)})
+            out["count"] += 1
+            out["kwh"] += abs(signed_kwh)
+            out["cash_eur"] += signed_kwh / 1000.0 * ap          # sell + / buy −
+        out["ok"] = True
+        out["kwh"] = round(out["kwh"], 1)
+        out["cash_eur"] = round(out["cash_eur"], 2)
+        out["reason"] = (f"Upratovanie {profile} {day}: {out['count']} korekcií, "
+                         f"{out['kwh']:.0f} kWh, cash {out['cash_eur']:.1f} €"
+                         if out["count"] else f"Upratovanie {profile} {day}: nič netreba (OK)")
+        print(f"[VDT-CLEANUP-SIM] {out['reason']}")
+        return out
+    except Exception as e:
+        out["reason"] = f"cleanup sim zlyhal: {e}"
+        return out
+
+
 def run_and_cache(**kwargs) -> Dict[str, Any]:
     """Helper — spustí get_live_recommendation, uloží do cache + paper trade log."""
     res = get_live_recommendation(**kwargs)

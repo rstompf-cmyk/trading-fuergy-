@@ -789,6 +789,41 @@ def get_closedprice_prices_per_slot(profile: str, today_iso: str) -> list:
         return [float("nan")] * 96
 
 
+_OKTE_PRICE_CURVE_CACHE: Dict[str, list] = {}
+
+
+def get_okte_vdt_price_curve(day_iso: str) -> list:
+    """PLNÁ OKTE VDT cenová krivka pre deň (96 slotov, €/MWh, NaN kde chýba) — pre Option B
+    (upratovanie v regene). Na rozdiel od get_closedprice_prices_per_slot (len sloty s VDT
+    obchodom) vracia cenu KAŽDÉHO slotu z backtest snapshotu (potrebné na ocenenie korekcie
+    v ľubovoľnom slote: akcia@teraz, referencia@problém)."""
+    day_iso = str(day_iso)[:10]
+    _c = _OKTE_PRICE_CURVE_CACHE.get(day_iso)
+    if _c is not None:
+        return _c
+    curve = [float("nan")] * 96
+    try:
+        import datetime as _dt2
+        import vdt_arbitrage as _arb
+        snap = _arb.build_backtest_snapshot(_dt2.date.fromisoformat(day_iso))
+        if snap is not None and not snap.empty:
+            for _i in range(len(snap)):
+                _r = snap.iloc[_i]
+                _si = int(_r.get("slot_idx"))
+                _pv = _r.get("price_eur")
+                if 0 <= _si < 96 and _pv is not None:
+                    try:
+                        curve[_si] = float(_pv)
+                    except (TypeError, ValueError):
+                        pass
+    except Exception:
+        pass
+    if len(_OKTE_PRICE_CURVE_CACHE) > 32:
+        _OKTE_PRICE_CURVE_CACHE.clear()
+    _OKTE_PRICE_CURVE_CACHE[day_iso] = curve
+    return curve
+
+
 # ────────────────────────── CLI smoke test ──────────────────────────
 
 if __name__ == "__main__":
