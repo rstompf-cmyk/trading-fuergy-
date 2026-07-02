@@ -426,11 +426,14 @@ def _stale_plans_banner(case: str = "plan_d1") -> str:
             f"<a href='/plan_batch'>📦 Batch</a>.</div>")
 
 
-def _vdt_trade_stats(profile: str, day: str = None, day_to: str = None) -> dict:
+def _vdt_trade_stats(profile: str, day: str = None, day_to: str = None,
+                     reason_only: str = None, reason_exclude: str = None) -> dict:
     """Bug VDT-EFEKTIVITA (2026-06-11): agregát VDT paper trades pre UI karty —
     objemy + vážené priemerné ceny nákup/predaj + hrubý cash (predaj − nákup).
     day=None → celá história profilu; day='YYYY-MM-DD' → len ten deň;
-    day+day_to → inkluzívny rozsah [day, day_to] (portfólio s vybraným rozsahom)."""
+    day+day_to → inkluzívny rozsah [day, day_to] (portfólio s vybraným rozsahom).
+    reason_only='vdt_cleanup' → LEN upratovacie obchody; reason_exclude='vdt_cleanup' →
+    bežné VDT bez upratovania (reason = stĺpec soc_source). (task #82)"""
     out = dict(n=0, buy_kwh=0.0, buy_avg=0.0, sell_kwh=0.0, sell_avg=0.0,
                cash_eur=0.0)
     try:
@@ -452,6 +455,12 @@ def _vdt_trade_stats(profile: str, day: str = None, day_to: str = None) -> dict:
                         continue
                 act = str(row.get("action", "")).upper()
                 if act not in ("BUY", "CHARGE", "SELL", "DISCHARGE"):
+                    continue
+                # reason = stĺpec soc_source (tag obchodu: vdt_charge/vdt_discharge/vdt_cleanup)
+                _rsn = str(row.get("soc_source", "") or "")
+                if reason_only is not None and _rsn != reason_only:
+                    continue
+                if reason_exclude is not None and _rsn == reason_exclude:
                     continue
                 try:
                     kwh = abs(float(row.get("kwh") or 0))
@@ -8514,8 +8523,9 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         from core.profile_resolver import get_active as _ga_ve
         _prof_ve = _ga_ve() or ""
         if _prof_ve:
-            _vts_day = _vdt_trade_stats(_prof_ve, day=view_day)
-            _vts_all = _vdt_trade_stats(_prof_ve)
+            # bežná VDT efektivita = BEZ upratovacích obchodov (tie majú vlastnú kartu → žiadny double-count)
+            _vts_day = _vdt_trade_stats(_prof_ve, day=view_day, reason_exclude="vdt_cleanup")
+            _vts_all = _vdt_trade_stats(_prof_ve, reason_exclude="vdt_cleanup")
             if _vts_all["n"]:
                 _spread_all = _vts_all["sell_avg"] - _vts_all["buy_avg"]
                 _day_part = ""
@@ -8558,6 +8568,25 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                     f"{_cyc_txt}</div></div>")
     except Exception as _e_ve:
         print(f"[VDT-EFEKTIVITA karty] {_e_ve}")
+    # VDT UPRATOVANIE (task #82, 2026-07-02): koľko a za čo sa upratalo (tag vdt_cleanup).
+    # Samostatná karta — bezpečnostná sieť, nie ziskový VDT. Ukazuje objem + cash.
+    _vdt_cleanup_card = ""
+    try:
+        from core.profile_resolver import get_active as _ga_cl
+        _prof_cl = _ga_cl() or ""
+        if _prof_cl:
+            _cl_day = _vdt_trade_stats(_prof_cl, day=view_day, reason_only="vdt_cleanup")
+            if int(_cl_day.get("n", 0) or 0) > 0:
+                _cl_kwh = _cl_day["buy_kwh"] + _cl_day["sell_kwh"]
+                _vdt_cleanup_card = (
+                    f"<div class='card' style='background:#fff3cd;border:1px solid #ffe399'>"
+                    f"<div class='l'>🧹 VDT Upratovanie {view_day}</div>"
+                    f"<div class='v' style='font-size:13px;color:#7a5d00'>"
+                    f"{_cl_kwh:.0f} kWh · cash {_cl_day['cash_eur']:+.1f} €</div>"
+                    f"<div style='font-size:10px;color:#888'>{_cl_day['n']} korekčných obchodov "
+                    f"(bezpečnostná sieť — dorovnanie nedodateľnej nominácie, nie zisk)</div></div>")
+    except Exception as _e_cl:
+        print(f"[VDT-UPRATOVANIE karta] {_e_cl}")
     # RT efektivita (bod 2 RT v2): ex-post vyhodnotenie zásahov za zobrazený deň
     _rt_eff_card = ""
     try:
@@ -8660,6 +8689,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             f"<div class='card'><div class='l'>z toho distribúcia (od štartu)</div><div class='v'>{r.get('cum_dist', 0.0):.1f} €</div></div>"
             f"{_vdt_arb_card}"
             f"{_vdt_eff_cards}"
+            f"{_vdt_cleanup_card}"
             f"{_rt_eff_card}"
             f"{bl_cum_card}"
             f"<div class='card' style='background:#eef7ee'><div class='l'>Zisk za deň {view_day}</div><div class='v' style='color:#2E7D32'>{d_dt+d_rt+_d_vdt+_d_dist:.1f} €</div>"

@@ -1671,12 +1671,110 @@ def load_cache(profile: Optional[str] = None) -> Optional[Dict[str, Any]]:
         return None
 
 
+def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
+    """VDT „Upratovanie" (bezpečnostná sieť, task #82). Kill-switch VDT_CLEANUP=1 (DEFAULT OFF).
+
+    Zistí PRVÝ budúci nedodateľný slot (committed nominácia DAM+VDT simulovaná z REÁLNEHO
+    SOC vyjde mimo [min,max]) a ak sa oplatí (decide_cleanup s časovou decay), commitne
+    korekčný obchod s tagom `vdt_cleanup` (reason). Bezpečné: len zmenšuje odchýlku, cap na
+    voľný výkon, ref cena = orderbook@problém, action = orderbook@teraz. FAIL-SAFE: hocijaká
+    chyba → nič sa nestane (nikdy nezhodí normálny VDT flow). RT sa NEDOTÝKA.
+    """
+    out = {"acted": False, "reason": ""}
+    try:
+        if os.environ.get("VDT_CLEANUP", "0") != "1":
+            return out
+        if not result or not result.get("ok") or not _is_sk_market():
+            return out
+        profile = str(result.get("profile") or "")
+        if not profile:
+            return out
+        import vdt_state as _vs
+        import core.soc_use_audit as _sua
+        import profiles as _pr
+        from core.vdt_cleanup import detect_undeliverable_target, decide_cleanup
+        _today = (str(result.get("ts") or "")[:10]) or dt.date.today().isoformat()
+        st = _vs.compute_current_state(profile, today=dt.date.fromisoformat(_today))
+        if not st or not st.get("ok"):
+            return out
+        cap = float(st.get("batt_kwh") or 0.0)
+        if cap <= 0:
+            return out
+        eff_c = float(st.get("eff_c") or 0.95); eff_d = float(st.get("eff_d") or 0.95)
+        soc_min = float(st.get("soc_min_pct") or 5.0); soc_max = float(st.get("soc_max_pct") or 100.0)
+        cur_soc = float(st.get("current_soc_pct") or 50.0)
+        cur_slot = int(st.get("current_slot_idx") or 0)
+        dam = list(st.get("dam_nomination_kwh") or [0.0] * 96)
+        vdt = list(st.get("vdt_realized_kwh") or [0.0] * 96)
+        while len(dam) < 96: dam.append(0.0)
+        while len(vdt) < 96: vdt.append(0.0)
+        sched = [float(dam[i]) + float(vdt[i]) for i in range(96)]
+        sim = [0.0] * cur_slot + sched[cur_slot:]
+        path = _sua.simulate_soc_unclipped(cur_soc, sim, cap, eff_c=eff_c, eff_d=eff_d)
+        _pl = (_pr.load_profile(profile) or {}).get("plan") or {}
+        batt_kw = float(_pl.get("batt_kw", 0.0) or 0.0)
+        tgt = detect_undeliverable_target(path, cur_slot, soc_min_pct=soc_min,
+                                          soc_max_pct=soc_max, batt_kwh=cap, batt_kw=batt_kw)
+        if not tgt:
+            out["reason"] = "žiadny nedodateľný slot (OK)"
+            return out
+        obps = result.get("orderbook_per_slot") or []
+
+        def _price(slot_i, side):
+            try:
+                d = obps[int(slot_i)] or {}
+                return float(d.get("bid") if side == "sell" else d.get("ask"))
+            except Exception:
+                return None
+        direction = tgt["direction"]
+        action_price = _price(cur_slot, direction)
+        ref_price = _price(tgt["problem_slot"], direction)     # cena obchodu v čase problému
+        horizon_h = float(_pl.get("cleanup_horizon_h", 6.0) or 6.0)
+        deadband_kw = float(_pl.get("cleanup_deadband_kw", 50.0) or 50.0)
+        max_loss = float(_pl.get("cleanup_max_loss_eur_mwh", 20.0) or 20.0)
+        min_spread = float(_pl.get("min_spread", _pl.get("min_spread_eur", 5.0)) or 5.0)
+        max_action_kw = max(0.0, batt_kw - abs(float(sched[cur_slot]))) if batt_kw > 0 else 0.0
+        dec = decide_cleanup(tgt["deviation_kw"], tgt["tau_h"], direction=direction,
+                             action_price_eur=action_price, ref_price_eur=ref_price,
+                             horizon_h=horizon_h, min_spread_eur=min_spread,
+                             max_loss_eur=max_loss, deadband_kw=deadband_kw,
+                             max_action_kw=max_action_kw)
+        out["target"] = tgt; out["decision"] = dec
+        if not dec.get("act"):
+            out["reason"] = dec.get("reason", "")
+            return out
+        _kw = float(dec["kw"])
+        _act = "discharge" if direction == "sell" else "charge"
+        _h0, _m0 = divmod(cur_slot * 15, 60)
+        _h1, _m1 = divmod(cur_slot * 15 + 15, 60)
+        _slot_str = f"{_h0:02d}:{_m0:02d}-{_h1:02d}:{_m1:02d}"
+        _res = {"ok": True, "profile": profile, "ts": result.get("ts", ""),
+                "current": {"slot": _slot_str, "action": _act, "kw": _kw,
+                            "kwh_per_slot": _kw * 0.25, "price_eur_mwh": action_price,
+                            "soc_after_pct": cur_soc},
+                "soc": {"soc_pct": cur_soc, "source": "vdt_cleanup"},   # TAG → reason stĺpec
+                "profit_eur": 0.0}
+        append_paper_trade(_res)
+        out["acted"] = True; out["reason"] = dec.get("reason", "")
+        print(f"[VDT-CLEANUP] {profile} {_slot_str} {_act} {_kw:.0f}kW → {dec.get('reason','')}")
+        return out
+    except Exception as e:
+        out["reason"] = f"cleanup zlyhal (fail-safe): {e}"
+        return out
+
+
 def run_and_cache(**kwargs) -> Dict[str, Any]:
     """Helper — spustí get_live_recommendation, uloží do cache + paper trade log."""
     res = get_live_recommendation(**kwargs)
     if res.get("ok"):
         save_cache(res)
         append_paper_trade(res)
+        # VDT Upratovanie (task #82) — bezpečnostná sieť, DEFAULT OFF (VDT_CLEANUP=1).
+        # Fail-safe: nikdy nezhodí normálny flow.
+        try:
+            propose_cleanup(res)
+        except Exception as _e_cl:
+            print(f"[VDT-CLEANUP] fail-safe: {_e_cl}")
     return res
 
 
