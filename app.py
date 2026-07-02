@@ -8089,7 +8089,10 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
         _soft_ms = int(_refresh_s) * 1000
         _soft_js = (
             "<script>(function(){var MS=" + str(_soft_ms) + ";"
-            "function soft(){fetch(location.href,{credentials:'same-origin'})"
+            "function soft(){"
+            "var _mm=document.getElementById('manual-trade-modal');"
+            "if(_mm && _mm.style.display==='block'){setTimeout(soft,MS);return;}"
+            "fetch(location.href,{credentials:'same-origin'})"
             ".then(function(r){return r.text();}).then(function(html){"
             "var doc=new DOMParser().parseFromString(html,'text/html');"
             "var sy=window.scrollY;"

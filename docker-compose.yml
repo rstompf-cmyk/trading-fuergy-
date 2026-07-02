@@ -68,6 +68,14 @@ services:
       # cum_* z €, zvysok default) -> graf nepada. effect_minute pise advance pre kazdy den.
       # CSV fallback ak den v DB chyba.
       LIVESIM_TRACE_DB: "1"
+      # AGRESÍVNE VDT (2026-07-02) — LEN SIMULÁCIA. okte_vdt.py je READ-ONLY (žiadny place/submit
+      # order), takže sa NIKDY neodošle reálny príkaz na OKTE VDT. Tieto flagy len menia sim správanie:
+      #   VDT_AUDIT_DELIVERABLE=1 — nedodateľné VDT (nákup pri ~100 %/predaj pri ~5 %) sa nezapíšu.
+      #   VDT_CLEANUP=1           — živá bezpečnostná sieť (upratovanie) aktívna.
+      #   SOC_CARRYOVER_PLAN=1    — plán štartuje z reálneho prenosového SOC (menej infeasible plánov → viac VDT).
+      VDT_AUDIT_DELIVERABLE: "1"
+      VDT_CLEANUP: "1"
+      SOC_CARRYOVER_PLAN: "1"
       # VypnĂşĹĄ background Ăşlohy pri prvom spustenĂ­ (kĂ˝m neoverĂ­Ĺˇ Ĺľe appka beĹľĂ­)
       # Po prvom ĂşspeĹˇnom Ĺˇtarte odkomentuj na produkÄŤnĂ© fungovanie:
       # NO_BACKFILL: "1"
