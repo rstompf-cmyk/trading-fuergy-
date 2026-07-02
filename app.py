@@ -483,6 +483,43 @@ def _vdt_trade_stats(profile: str, day: str = None, day_to: str = None,
     return out
 
 
+def _cleanup_batt_kw_per_slot(profile: str, day: str) -> list:
+    """VDT Upratovanie (task #82): 96-slot pole kW korekčných obchodov (reason=vdt_cleanup)
+    pre daný deň. +vybíjanie / −nabíjanie (batt view). Pre graf + Excel. reason = soc_source."""
+    arr = [0.0] * 96
+    try:
+        import vdt_live_advisor as _vla
+        p = _vla.paper_trades_csv_path(profile)
+        if not p or not os.path.exists(p):
+            return arr
+        import csv as _csv
+        _d = str(day)[:10]
+        with open(p, encoding="utf-8", newline="") as f:
+            for row in _csv.DictReader(f):
+                if str(row.get("profile") or "") != profile:
+                    continue
+                if str(row.get("ts", ""))[:10] != _d:
+                    continue
+                if str(row.get("soc_source", "") or "") != "vdt_cleanup":
+                    continue
+                _sl = str(row.get("slot", "") or "")
+                try:
+                    _si = (int(_sl[:2]) * 60 + int(_sl[3:5])) // 15
+                except Exception:
+                    continue
+                if not (0 <= _si < 96):
+                    continue
+                _act = str(row.get("action", "")).upper()
+                try:
+                    _kw = abs(float(row.get("kw") or 0))
+                except (TypeError, ValueError):
+                    continue
+                arr[_si] += (_kw if _act in ("SELL", "DISCHARGE") else -_kw)
+    except Exception as _e:
+        print(f"[_cleanup_batt_kw_per_slot] {profile}/{day}: {_e}")
+    return arr
+
+
 def _vdt_price_accuracy(profile: str, day: str, dview) -> dict:
     """Bug VDT-EFEKTIVITA: vážená odchýlka EXEKUČNEJ ceny obchodu (reálny orderbook
     bid/ask v momente obchodu) vs finálny OKTE VDT clearing (`vdt_eur` v trace).
@@ -8852,6 +8889,18 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
         except Exception:
             _nd_tol = 1.0
         DEVND = "[" + ",".join((_js(float(x)) if abs(x) > _nd_tol else "null") for x in _devnd) + "]"
+        # VDT UPRATOVANIE (task #82): korekčné obchody (reason=vdt_cleanup) ako vlastný priebeh.
+        CLEANUP = "[" + ",".join(["null"] * len(dview)) + "]"
+        try:
+            from core.profile_resolver import get_active as _ga_cl2
+            _prof_cl2 = _ga_cl2() or ""
+            _cl_slot = _cleanup_batt_kw_per_slot(_prof_cl2, view_day) if _prof_cl2 else [0.0] * 96
+            if any(abs(x) > 1e-6 for x in _cl_slot):
+                _cl_pm = [float(_cl_slot[min(95, (pd.Timestamp(t).hour * 60
+                          + pd.Timestamp(t).minute) // 15)]) for t in dview["time"]]
+                CLEANUP = "[" + ",".join((_js(x) if abs(x) > 1.0 else "null") for x in _cl_pm) + "]"
+        except Exception as _e_cl2:
+            print(f"[VDT-UPRATOVANIE graf] {_e_cl2}")
         # 15-min agregat ako druhy dataset (transparentny prehlad)
         try:
             _act_df = pd.DataFrame({"_t": dview["time"].values, "_v": _act_per_min})
@@ -9460,6 +9509,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
                 f"{{label:'Plán batérie (D-1 + VDT, kW)',data:{AP},borderColor:'#37474F',borderWidth:1.4,borderDash:[2,3],fill:false,stepped:true,pointRadius:0,tension:.0}},"
                 f"{{label:'Nominácia (trhový záväzok D-1+VDT) kW',data:{NOM},borderColor:'#EF6C00',borderWidth:1.6,borderDash:[4,2],fill:false,stepped:true,pointRadius:0}},"
                 f"{{label:'⚠ Nedodané kvôli SOC/limit kW (odchýlka)',data:{DEVND},borderColor:'#D50000',backgroundColor:'rgba(213,0,0,.20)',fill:true,stepped:true,pointRadius:0,borderWidth:1.4}},"
+                f"{{label:'🧹 Upratovanie kW (VDT korekcia)',data:{CLEANUP},borderColor:'#8D6E63',backgroundColor:'rgba(141,110,99,.30)',fill:true,stepped:true,pointRadius:0,borderWidth:1.6}},"
                 f"{{label:'Batéria PREDIKCIA kW (plán+RT, 1-min, post-cap)',data:{AC},borderColor:'#2E7D32',backgroundColor:'rgba(46,125,50,.08)',fill:true,stepped:true,pointRadius:0,borderWidth:1.8}},"
                 f"{{label:'Batéria PREDIKCIA kW (15-min agregát)',data:{AC_AGG},borderColor:'#1565C0',borderDash:[6,3],fill:false,stepped:true,pointRadius:0,borderWidth:2.2}},"
                 f"{{label:'🔴 Batéria REÁLNE MERANIE kW',data:{BATT_REAL},borderColor:'#C62828',backgroundColor:'rgba(198,40,40,.0)',fill:false,pointRadius:0,borderWidth:2.2,tension:.15}},"

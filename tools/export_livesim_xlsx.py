@@ -24,14 +24,45 @@ from openpyxl.styles import Font, PatternFill, Alignment
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 HEADERS = ["slot_start", "slot_end", "batt_kw_net", "batt_dam_kw", "batt_vdt_kw",
-           "work_kwh", "soc_pct", "ftv_kw", "dt_eur_mwh", "dt_real_eur_mwh", "vdt_eur_mwh"]
+           "cleanup_kw", "work_kwh", "soc_pct", "ftv_kw", "dt_eur_mwh", "dt_real_eur_mwh", "vdt_eur_mwh"]
+
+
+def _cleanup_slot(profile: str, day: str):
+    """96-slot pole kW upratovacích obchodov (reason=vdt_cleanup) — pre Excel stĺpec (task #82)."""
+    arr = [0.0] * 96
+    try:
+        import vdt_live_advisor as _vla, csv as _csv
+        p = _vla.paper_trades_csv_path(profile)
+        if not p or not os.path.exists(p):
+            return arr
+        _d = str(day)[:10]
+        with open(p, encoding="utf-8", newline="") as f:
+            for row in _csv.DictReader(f):
+                if str(row.get("profile") or "") != profile or str(row.get("ts", ""))[:10] != _d:
+                    continue
+                if str(row.get("soc_source", "") or "") != "vdt_cleanup":
+                    continue
+                _sl = str(row.get("slot", "") or "")
+                try:
+                    _si = (int(_sl[:2]) * 60 + int(_sl[3:5])) // 15
+                except Exception:
+                    continue
+                if 0 <= _si < 96:
+                    try:
+                        _kw = abs(float(row.get("kw") or 0))
+                    except (TypeError, ValueError):
+                        continue
+                    arr[_si] += (_kw if str(row.get("action", "")).upper() in ("SELL", "DISCHARGE") else -_kw)
+    except Exception:
+        pass
+    return arr
 
 
 def _agg_15(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["_slot"] = pd.to_datetime(df["time"]).dt.floor("15min")
     agg = {"soc_pct": "last", "ftv_kw": "mean", "dt_eur": "mean"}
-    for c in ("plan_batt_kw", "plan_batt_dam_kw", "plan_batt_vdt_kw", "dt_real_eur", "vdt_eur"):
+    for c in ("plan_batt_kw", "plan_batt_dam_kw", "plan_batt_vdt_kw", "cleanup_batt_kw", "dt_real_eur", "vdt_eur"):
         if c in df.columns:
             agg[c] = "mean"
     g = df.groupby("_slot").agg(agg).reset_index()
@@ -56,6 +87,7 @@ def _rows(gg: pd.DataFrame, freq: str):
                     round(float(r.get("plan_batt_kw", 0)), 1),
                     round(float(r.get("plan_batt_dam_kw", 0)), 1),
                     round(float(r.get("plan_batt_vdt_kw", 0)), 1),
+                    round(float(r.get("cleanup_batt_kw", 0)), 1),
                     round(float(r.get("work_kwh", 0)), 2),
                     round(float(r.get("soc_pct", 0)), 1),
                     round(float(r.get("ftv_kw", 0)), 1),
@@ -140,6 +172,16 @@ def main():
         if df is None or df.empty:
             print(f"  {d}: žiadne dáta (case={a.case}, port={a.port})")
             continue
+        # VDT Upratovanie (task #82): stĺpec cleanup_batt_kw z paper trades (reason=vdt_cleanup)
+        try:
+            import profiles as _pr_cl
+            _prof_cl = os.environ.get("FTV_PROFILE") or (_pr_cl.get_active() or "")
+            _cl = _cleanup_slot(_prof_cl, d) if _prof_cl else [0.0] * 96
+            _tt = pd.to_datetime(df["time"])
+            df = df.copy()
+            df["cleanup_batt_kw"] = [float(_cl[min(95, (t.hour * 60 + t.minute) // 15)]) for t in _tt]
+        except Exception as _e_cl:
+            print(f"  {d}: cleanup stĺpec preskočený ({_e_cl})")
         parts.append(_agg_15(df))
     if not parts:
         print("Žiadne dáta — skontroluj --case/--port/--profile a či livesim zbehol.")
