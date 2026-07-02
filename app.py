@@ -7113,6 +7113,14 @@ def livesim_get(case: str = None, start: str = None, view: str = None, curtail: 
                         os.remove(_p)
                     except OSError:
                         pass
+        # Zdieľané VDT UI (alert banner + ručný obchod modal + FAB tlačidlá) — /livesim je raw
+        # HTML (nejde cez base.html), preto ho vkladáme priamo.
+        try:
+            from ui.html import render_cleanup_ui as _rcu_ls
+            import profiles as _pr_ls
+            _cleanup_ui_ls = _rcu_ls(_pr_ls.get_active() or (profile or ""))
+        except Exception:
+            _cleanup_ui_ls = ""
         head = ("""<!doctype html><html lang="sk"><head><meta charset="utf-8"><title>Živá simulácia</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{font-family:-apple-system,Segoe UI,Arial;max-width:100%;margin:24px auto;padding:0 16px;color:#222}
@@ -7122,7 +7130,7 @@ label{font-size:14px} input,select{padding:5px 8px;border:1px solid #ccc;border-
 table{border-collapse:collapse;width:100%;font-size:12px} th,td{border:1px solid #e3e3e3;padding:3px 7px;text-align:right}
 th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-height:300px;overflow:auto;border-radius:8px}</style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script></head><body>
-<h1>\U0001F7E2 Živá simulácia</h1>""" + ("" if str(embed) == "1" else _nav("/livesim")))
+""" + ("" if str(embed) == "1" else _cleanup_ui_ls) + """<h1>\U0001F7E2 Živá simulácia</h1>""" + ("" if str(embed) == "1" else _nav("/livesim")))
         opts = "".join(f'<option value="{k}"{" selected" if k==case else ""}>{lbl}</option>'
                         for k, (lbl, _bc, _st) in MODES.items())
         cuopts = (f'<option value="1"{" selected" if cur_curtail else ""}>povolené</option>'

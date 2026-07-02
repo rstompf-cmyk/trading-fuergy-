@@ -23,6 +23,116 @@ def _field(label: str, name: str, val, step: str = "any") -> str:
             f'style="width:120px;padding:4px;border:1px solid #ccc;border-radius:6px"></label>')
 
 
+_CLEANUP_UI_TMPL = r"""
+  <div id="cleanup-alert-bar" style="display:none;position:sticky;top:0;z-index:9999;
+       background:#7a1f1f;color:#fff;padding:8px 14px;font-size:14px;box-shadow:0 2px 6px rgba(0,0,0,.3)"></div>
+  <div id="manual-trade-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5)">
+    <div style="max-width:420px;margin:8% auto;background:#fff;color:#111;border-radius:10px;padding:18px 20px;box-shadow:0 8px 30px rgba(0,0,0,.4);font-size:14px">
+      <div style="font-weight:700;font-size:16px;margin-bottom:10px">&#9998; Ru&#269;n&yacute; VDT obchod</div>
+      <div id="mt-info" style="background:#f3f4f6;border-radius:6px;padding:8px 10px;margin-bottom:12px;font-size:13px;color:#374151"></div>
+      <input type="hidden" id="mt-profile">
+      <label style="display:block;margin:6px 0 2px">Profil</label>
+      <input id="mt-profile-show" readonly style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px;background:#f9fafb">
+      <div style="display:flex;gap:10px">
+        <div style="flex:1"><label style="display:block;margin:6px 0 2px">&#268;as (HH:MM)</label>
+          <input id="mt-slot" placeholder="16:45" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px"></div>
+        <div style="flex:1"><label style="display:block;margin:6px 0 2px">Akcia</label>
+          <select id="mt-action" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px">
+            <option value="discharge">Vyb&iacute;ja&#357; / predaj</option>
+            <option value="charge">Nab&iacute;ja&#357; / n&aacute;kup</option>
+          </select></div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <div style="flex:1"><label style="display:block;margin:6px 0 2px">Objem (kW)</label>
+          <input id="mt-kw" type="number" step="1" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px"></div>
+        <div style="flex:1"><label style="display:block;margin:6px 0 2px">Cena (&euro;/MWh)</label>
+          <input id="mt-price" type="number" step="0.01" style="width:100%;padding:6px;border:1px solid #d1d5db;border-radius:5px"></div>
+      </div>
+      <div style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">
+        <button onclick="__closeManualTrade()" style="padding:7px 14px;border:1px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer">Zru&#353;i&#357;</button>
+        <button id="mt-submit" style="padding:7px 14px;border:0;background:#166534;color:#fff;border-radius:6px;font-weight:600;cursor:pointer">Zobchodova&#357;</button>
+      </div>
+    </div>
+  </div>
+  <button id="manual-trade-fab" style="display:none;position:fixed;right:18px;bottom:18px;z-index:9998;background:#166534;color:#fff;border:0;border-radius:24px;padding:10px 16px;font-size:14px;font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer">&#9998; Ru&#269;n&yacute; VDT obchod</button>
+  <button id="cleanup-sim-fab" style="display:none;position:fixed;right:18px;bottom:64px;z-index:9998;background:#92400e;color:#fff;border:0;border-radius:24px;padding:10px 16px;font-size:14px;font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer">&#129529; Simuluj upratovanie (de&#328;)</button>
+  <script>
+  (function(){
+    var _activeProfile = "__ACTIVE_PROFILE__";
+    var p = window.location.pathname || "";
+    var onLive = (p.indexOf("/livesim") === 0 || p.indexOf("/realio") === 0);
+    if (onLive){
+      var fab = document.getElementById("manual-trade-fab");
+      if (fab){ fab.style.display="block"; fab.addEventListener("click", function(){
+        window.__openManualTrade({profile:_activeProfile, action:"discharge",
+          info:"Ručný VDT obchod pre profil "+_activeProfile+". Zadaj čas 15-min slotu, akciu, objem a cenu."}); }); }
+      var cfab = document.getElementById("cleanup-sim-fab");
+      if (cfab){ cfab.style.display="block"; cfab.addEventListener("click", async function(){
+        var day = new URLSearchParams(location.search).get("day") || new Date().toISOString().slice(0,10);
+        if(!confirm("Simulovať upratovanie (Option B, OKTE VDT ceny) pre "+_activeProfile+" deň "+day+"?")) return;
+        this.disabled=true; this.textContent="Upratávam…";
+        try{ var r=await fetch("/vdt/cleanup_simulate",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"profile="+encodeURIComponent(_activeProfile)+"&day="+encodeURIComponent(day)});
+          var j=await r.json(); alert(j.ok ? (j.reason||"hotovo") : ("Chyba: "+(j.reason||"neznáma"))); if(j.ok && j.count>0) location.reload();
+        }catch(e){ alert("Chyba: "+e); } this.disabled=false; this.textContent="🧹 Simuluj upratovanie (deň)"; }); }
+    }
+    function openManualTrade(pf){ pf=pf||{};
+      document.getElementById("mt-profile").value=pf.profile||"";
+      document.getElementById("mt-profile-show").value=pf.profile||"";
+      document.getElementById("mt-slot").value=(pf.slot||"").slice(0,5);
+      document.getElementById("mt-action").value=pf.action||"discharge";
+      document.getElementById("mt-kw").value=(pf.kw!=null?Math.round(pf.kw):"");
+      document.getElementById("mt-price").value=(pf.price!=null?pf.price:"");
+      document.getElementById("mt-info").textContent=pf.info||"Zadaj objem, cenu a čas 15-min slotu.";
+      document.getElementById("manual-trade-modal").style.display="block"; }
+    function closeManualTrade(){ document.getElementById("manual-trade-modal").style.display="none"; }
+    window.__openManualTrade=openManualTrade; window.__closeManualTrade=closeManualTrade;
+    var _sb=document.getElementById("mt-submit");
+    if(_sb) _sb.addEventListener("click", async function(){
+      var b=this; b.disabled=true; b.textContent="Zapisujem…";
+      var body="profile="+encodeURIComponent(document.getElementById("mt-profile").value)
+        +"&slot="+encodeURIComponent(document.getElementById("mt-slot").value)
+        +"&action="+encodeURIComponent(document.getElementById("mt-action").value)
+        +"&kw="+encodeURIComponent(document.getElementById("mt-kw").value)
+        +"&price_eur_mwh="+encodeURIComponent(document.getElementById("mt-price").value);
+      try{ var r=await fetch("/vdt/manual_trade",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body});
+        var j=await r.json(); alert(j.ok ? (j.reason+(j.warn?("\n\n"+j.warn):"")) : ("Chyba: "+(j.reason||"neznáma"))); if(j.ok) closeManualTrade();
+      }catch(e){ alert("Chyba: "+e); } b.disabled=false; b.textContent="Zobchodovať"; });
+    async function forceCleanup(profile, btn){
+      if(!confirm("Upratať profil "+profile+" za najlepšiu dostupnú cenu (aj so stratou)?")) return;
+      btn.disabled=true; btn.textContent="Upratávam…";
+      try{ const r=await fetch("/cleanup_force",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"profile="+encodeURIComponent(profile)});
+        const j=await r.json(); alert(j.acted?("Upratané: "+(j.reason||"")):("Neupratané: "+(j.reason||"chyba")));
+      }catch(e){ alert("Chyba: "+e); } poll(); }
+    window.__forceCleanup=forceCleanup;
+    async function poll(){ const bar=document.getElementById("cleanup-alert-bar"); if(!bar) return;
+      try{ const r=await fetch("/cleanup_alerts",{cache:"no-store"}); const j=await r.json(); const al=(j&&j.alerts)||[];
+        if(!al.length){ bar.style.display="none"; bar.innerHTML=""; return; }
+        bar.innerHTML=al.map(function(a){
+          const dir=a.direction==="sell"?"vybíjať (SOC preplné)":"nabíjať (SOC pod min)";
+          const px=(a.best_price_eur_mwh!=null)?a.best_price_eur_mwh+" €/MWh":"cena n/a";
+          const loss=(a.would_loss_eur!=null)?(" · strata ~"+a.would_loss_eur+" €"):"";
+          return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:3px 0">'
+            +'<span>⚠ <b>'+a.profile+'</b>: o '+(a.tau_h!=null?a.tau_h:"?")+' h nedodateľný slot <b>'+(a.problem_slot||"")+'</b> — treba '+dir
+            +', '+(a.kw!=null?a.kw:"?")+' kW. Najlepšia cena <b>'+px+'</b>'+loss+'.</span>'
+            +'<button onclick="__forceCleanup(\''+a.profile+'\',this)" style="background:#fff;color:#7a1f1f;border:0;border-radius:5px;padding:4px 10px;font-weight:600;cursor:pointer">Upratať za túto cenu</button>'
+            +'<button onclick=\'__openManualTrade('+JSON.stringify({profile:a.profile,slot:a.problem_slot,action:a.direction,kw:a.kw,price:a.best_price_eur_mwh})+')\' style="background:#fde68a;color:#7a1f1f;border:0;border-radius:5px;padding:4px 10px;font-weight:600;cursor:pointer">✎ Zadať ručne</button>'
+            +'</div>'; }).join("");
+        bar.style.display="block";
+      }catch(e){} }
+    poll(); setInterval(poll, 30000);
+  })();
+  </script>
+"""
+
+
+def render_cleanup_ui(active_profile: str = "") -> str:
+    """Zdieľané VDT UI (alert banner + ručný obchod modal + FAB tlačidlá + JS).
+    Vkladá sa do base.html (cez context) AJ do legacy raw stránok (/livesim, /realio),
+    lebo tie nejdú cez base.html. active_profile = meno aktívneho profilu pre predvyplnenie."""
+    _p = str(active_profile or "").replace("\\", "").replace('"', "")
+    return _CLEANUP_UI_TMPL.replace("__ACTIVE_PROFILE__", _p)
+
+
 def _profile_mode_chip(mode: str = "simulation", small: bool = True) -> str:
     """Vráti farebný chip podľa typu profilu.
     mode='simulation' → 🎮 zelený, mode='real' → 🔴 červený.

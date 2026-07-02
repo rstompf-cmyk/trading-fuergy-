@@ -69,6 +69,13 @@ def _global_context(request: Optional[Request]) -> Dict[str, Any]:
         ctx["active_market"] = str(_mk.active_market() or "cz")
     except Exception:
         pass
+    # Zdieľané VDT UI (alert banner + ručný obchod + FAB) — vkladá sa cez base.html {{ cleanup_ui|safe }}
+    try:
+        from ui.html import render_cleanup_ui
+        _ap = (ctx.get("active_profile") or {}).get("name") if ctx.get("active_profile") else ""
+        ctx["cleanup_ui"] = render_cleanup_ui(_ap or "")
+    except Exception:
+        ctx["cleanup_ui"] = ""
     return ctx
 
 
