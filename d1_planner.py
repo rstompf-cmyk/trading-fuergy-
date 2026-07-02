@@ -207,6 +207,28 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
     soc_min_pct = float(pp.get("soc_min_pct", 5.0))
     soc_max_pct = float(pp.get("soc_max_pct", 95.0))
     soc_init_pct = float(pp.get("soc_init_pct", 20.0))
+    # SOC-CARRYOVER-PLAN (2026-07-02, user: „clip len maskuje, plán káže nabíjať pri 100 %"):
+    # plán MUSÍ štartovať z REÁLNEHO prenosového SOC (koniec predošlého dňa / aktuálny SOC),
+    # nie z fixného soc_init — inak jeho SOC trajektória je posunutá voči realite a káže
+    # nabíjať do plnej / vybíjať z prázdnej batérie (fantómové povely, ktoré SOC-clip len ticho
+    # zje). carried_soc_for_date: pre budúci deň = aktuálny SOC (najlepší odhad), pre historický
+    # backtest = reálny koniec predošlého dňa z CSV. Kill-switch SOC_CARRYOVER_PLAN=1 (DEFAULT OFF).
+    import os as _os_co
+    if _os_co.environ.get("SOC_CARRYOVER_PLAN", "0") == "1":
+        try:
+            import livesim as _lsim_co
+            _port_co = _os_co.environ.get("PORT") or _os_co.environ.get("APP_PORT") or "8000"
+            for _case_co in ("dt_15min", "plan_d1"):
+                _cs = _lsim_co.carried_soc_for_date(_case_co, port=str(_port_co),
+                                                    date=date, profile=prof)
+                if _cs and _cs.get("soc_pct") is not None:
+                    _si_new = max(soc_min_pct, min(soc_max_pct, float(_cs["soc_pct"])))
+                    print(f"[SOC-CARRYOVER-PLAN] {prof} {date}: soc_init {soc_init_pct:.1f}% "
+                          f"→ carryover {_si_new:.1f}% (case={_case_co}; {_cs.get('note','')})")
+                    soc_init_pct = _si_new
+                    break
+        except Exception as _e_co:
+            print(f"[SOC-CARRYOVER-PLAN] {prof} {date}: {_e_co} → ostávam na soc_init")
     grid_kw = float(pp.get("grid_kw", 200.0))
     grid_kw_import = float(pp.get("grid_kw_import", grid_kw))
     grid_kw_export = float(pp.get("grid_kw_export", grid_kw))
