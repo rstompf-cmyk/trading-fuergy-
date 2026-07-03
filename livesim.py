@@ -1996,8 +1996,15 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                 # Pre-init _rm aby bol vždy definovaný (používa sa neskôr vo fut block).
                 _rm = (mn_day_full.drop_duplicates("time").set_index("time")["dt_real_eur"]
                        if "dt_real_eur" in mn_day_full.columns else None)
-                _real_dt_24h = _real_dt_hourly(d.isoformat())             # 24 hodinových DT cien alebo None
-                if _real_dt_24h is not None:
+                # DT-15MIN (2026-07-04, user „všetko + vyhodnotenie len 15-min"): PRIMÁRNE 15-min reálny
+                # clearing (SK autentické 15-min ceny; CZ 24h×4). Predtým sa mapovalo _real_dt_24h[hour]
+                # → hodinové schody v minulosti + sub-sloty v evaluácii chybné. Fallback: hodinové → _rm.
+                _real_dt_96 = _real_dt_quarterly(d.isoformat())           # 96 × 15-min DT cien alebo None
+                _real_dt_24h = _real_dt_hourly(d.isoformat())             # fallback 24 hodinových
+                if _real_dt_96 is not None:
+                    tr["dt_real_eur"] = [float(_real_dt_96[min(95, (pd.Timestamp(t).hour * 60 + pd.Timestamp(t).minute) // 15)])
+                                         for t in tr["time"]]
+                elif _real_dt_24h is not None:
                     tr["dt_real_eur"] = [float(_real_dt_24h[min(23, pd.Timestamp(t).hour)]) for t in tr["time"]]
                 else:
                     tr["dt_real_eur"] = tr["time"].map(_rm) if _rm is not None else np.nan
