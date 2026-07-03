@@ -2303,6 +2303,44 @@ def plan_view(date: str, step: int = 60, kind: str = "plan"):
     # mults / rt_mask
     mult_active = sum(1 for x in (plan.get("mults") or []) if x is not None and abs(float(x) - 1.0) > 1e-6)
     rt_off = sum(1 for x in (plan.get("rt_mask") or []) if x is not None and float(x) < 0.5)
+    # PLAN-CHART (2026-07-04): graf plánu — cena/predikovaný DT (€/MWh, ľavá os) + batéria kW
+    # + SOC % + obchod MWh (pravé osi). Chart.js sa načíta cez head_extra.
+    import json as _json_pc
+
+    def _pc_arr(_key, _dflt):
+        _a = sched.get(_key) or []
+        _o = []
+        for _i in range(n_rows):
+            _v = _a[_i] if _i < len(_a) else _dflt
+            try:
+                _o.append(round(float(_v), 3))
+            except (TypeError, ValueError):
+                _o.append(0.0)
+        return _o
+
+    _pc_labels = _json_pc.dumps(times[:n_rows])
+    _pc_price = _json_pc.dumps(_pc_arr("price_eur", 0.0))
+    _pc_batt = _json_pc.dumps(_pc_arr("batt_kw", 0.0))
+    _pc_soc = _json_pc.dumps(_pc_arr("soc_pct", 50.0))
+    _pc_order = _json_pc.dumps(_pc_arr("order_mwh", 0.0))
+    _plan_head_extra = '<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>'
+    _plan_scripts = (
+        "<script>(function(){var el=document.getElementById('planChart');"
+        "if(!el||!window.Chart)return;new Chart(el,{data:{labels:" + _pc_labels + ",datasets:["
+        "{type:'line',label:'Cena / predikovaný DT (€/MWh)',data:" + _pc_price + ",yAxisID:'yEur',"
+        "borderColor:'#1F4E78',backgroundColor:'#1F4E78',borderWidth:2,pointRadius:0,tension:.15},"
+        "{type:'bar',label:'Batéria kW',data:" + _pc_batt + ",yAxisID:'yKw',"
+        "backgroundColor:'rgba(46,125,50,.45)',borderColor:'#2E7D32'},"
+        "{type:'line',label:'SOC %',data:" + _pc_soc + ",yAxisID:'ySoc',"
+        "borderColor:'#C49000',backgroundColor:'#C49000',borderWidth:2,pointRadius:0,tension:.15},"
+        "{type:'bar',label:'Obchod MWh',data:" + _pc_order + ",yAxisID:'yMwh',"
+        "backgroundColor:'rgba(142,40,180,.30)',borderColor:'#8e28b4'}"
+        "]},options:{responsive:true,maintainAspectRatio:true,interaction:{mode:'index',intersect:false},"
+        "plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},"
+        "scales:{yEur:{position:'left',title:{display:true,text:'€/MWh'}},"
+        "yKw:{position:'right',title:{display:true,text:'kW'},grid:{drawOnChartArea:false}},"
+        "ySoc:{position:'right',min:0,max:100,title:{display:true,text:'SOC %'},grid:{drawOnChartArea:false}},"
+        "yMwh:{display:false}}}});})();</script>")
     body = f"""<style>
 .cols{{display:grid;grid-template-columns:1fr 1fr;gap:18px}}
 .box{{background:#f3f6fb;padding:10px 14px;border-radius:8px;margin:8px 0;font-size:13px}}
@@ -2318,6 +2356,9 @@ def plan_view(date: str, step: int = 60, kind: str = "plan"):
 <b>Bias ZCO:</b> {plan.get('zco_bias_w', 0)} &nbsp;•&nbsp;
 <b>RT freedom:</b> {plan.get('rt_freedom', True)}
 </div>
+<h2>Graf plánu</h2>
+<div style="background:#fff;border:1px solid #e3e3e3;border-radius:8px;padding:8px;margin:8px 0">
+<canvas id="planChart" height="90"></canvas></div>
 <h2>Rozvrh</h2>
 <div style="max-height:480px;overflow:auto"><table class="tbl-compact"><tr>{''.join(f'<th>{c[0]}</th>' for c in cols)}</tr>{''.join(rows)}</table></div>
 <div class="cols">
@@ -2326,10 +2367,13 @@ def plan_view(date: str, step: int = 60, kind: str = "plan"):
 </div>
 <p style="margin-top:14px">
 <a class="btn" href="/download?date={date}&step={step}&kind={kind}">⬇ Stiahnuť Excel (plán D-1)</a>
+&nbsp;|&nbsp; <a class="btn" href="/realio/batt_plan_export?day={date}" style="background:#7a1f1f;color:#fff"
+   title="Náhľad setpointov + ručné potvrdenie → zápis do CDC/Bender (iba reálny profil)">⚡ Export do riadenia (CDC/Bender)</a>
 &nbsp;|&nbsp; <a href="/plan_batch">← Späť na batch</a>
 &nbsp;|&nbsp; <a href="/livesim">Živá simulácia</a></p>
 """
-    return render_legacy_body(None, f"Plán {date} ({step}m, {kind})", body)
+    return render_legacy_body(None, f"Plán {date} ({step}m, {kind})", body,
+                              head_extra=_plan_head_extra, scripts=_plan_scripts)
 
 
 def _render_mult_warnings(summ) -> str:
@@ -4961,6 +5005,10 @@ table td:first-child{{text-align:center}}
 <div style="display:flex;gap:12px;margin:12px 0;flex-wrap:wrap">{cards}</div>
 <p style="background:#f8f9fb;border-radius:8px;padding:8px 12px;font-size:14px">{info}</p>
 {_carried_soc_banner(date, soc_init) + _overrides_status(date) + (f'<div style="background:#e8f5e9;border-left:4px solid #2E7D32;border-radius:6px;padding:8px 12px;margin:6px 0;color:#1B5E20;font-size:13px">💾 <b>Plán uložený</b> do <code>{plan_saved_path}</code></div>' if plan_saved_path and not str(plan_saved_path).startswith("ERR") else (f'<div style="background:#fff3cd;border-left:4px solid #f0b80f;border-radius:6px;padding:8px 12px;margin:6px 0;color:#7a5c00;font-size:13px">⚠ Plán sa NEpodarilo uložiť: {plan_saved_path}</div>' if plan_saved_path else '')) + ((f'<div style="background:{"#e8f5e9" if mult_msg.startswith(chr(10003)) else "#fff3cd"};border-left:4px solid {"#2E7D32" if mult_msg.startswith(chr(10003)) else "#f0b80f"};border-radius:6px;padding:10px 14px;margin:8px 0;color:{"#1B5E20" if mult_msg.startswith(chr(10003)) else "#7a5c00"};font-size:14px;font-weight:500">{mult_msg}</div>') if mult_msg else '') + _render_mult_warnings(summ)}
+<p style="margin:8px 0">
+<a class="btn" href="/realio/batt_plan_export?day={date}" style="background:#7a1f1f;color:#fff;padding:8px 14px;border-radius:8px;text-decoration:none;font-weight:600"
+   title="Náhľad setpointov + ručné potvrdenie → zápis do CDC/Bender (iba reálny profil)">⚡ Export do riadenia (CDC/Bender)</a>
+</p>
 <div style="height:320px;margin:12px 0"><canvas id="ch"></canvas></div>
 <h2>Predikcia FTV a orezanie</h2>
 <div style="height:260px;margin:12px 0"><canvas id="ch2"></canvas></div>
