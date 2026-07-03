@@ -56,6 +56,7 @@ _CLEANUP_UI_TMPL = r"""
   </div>
   <button id="manual-trade-fab" style="display:none;position:fixed;right:18px;bottom:18px;z-index:9998;background:#166534;color:#fff;border:0;border-radius:24px;padding:10px 16px;font-size:14px;font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer">&#9998; Ru&#269;n&yacute; VDT obchod</button>
   <button id="cleanup-sim-fab" style="display:none;position:fixed;right:18px;bottom:64px;z-index:9998;background:#92400e;color:#fff;border:0;border-radius:24px;padding:10px 16px;font-size:14px;font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer">&#129529; Simuluj upratovanie (de&#328;)</button>
+  <button id="cleanup-diag-fab" style="display:none;position:fixed;right:18px;bottom:110px;z-index:9998;background:#1F4E78;color:#fff;border:0;border-radius:24px;padding:10px 16px;font-size:14px;font-weight:600;box-shadow:0 3px 10px rgba(0,0,0,.3);cursor:pointer">&#128270; Diagnostika upratovania</button>
   <script>
   (function(){
     var _activeProfile = "__ACTIVE_PROFILE__";
@@ -74,6 +75,11 @@ _CLEANUP_UI_TMPL = r"""
         try{ var r=await fetch("/vdt/cleanup_simulate",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"profile="+encodeURIComponent(_activeProfile)+"&day="+encodeURIComponent(day)});
           var j=await r.json(); alert(j.ok ? (j.reason||"hotovo") : ("Chyba: "+(j.reason||"neznáma"))); if(j.ok && j.count>0) location.reload();
         }catch(e){ alert("Chyba: "+e); } this.disabled=false; this.textContent="🧹 Simuluj upratovanie (deň)"; }); }
+      var dfab = document.getElementById("cleanup-diag-fab");
+      if (dfab){ dfab.style.display="block"; dfab.addEventListener("click", function(){
+        var day = new URLSearchParams(location.search).get("day") || new Date().toISOString().slice(0,10);
+        window.open("/vdt/cleanup_diagnostics?profile="+encodeURIComponent(_activeProfile)+"&day="+encodeURIComponent(day),"_blank");
+      }); }
     }
     function openManualTrade(pf){ pf=pf||{};
       document.getElementById("mt-profile").value=pf.profile||"";
