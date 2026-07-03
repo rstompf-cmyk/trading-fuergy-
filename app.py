@@ -1175,6 +1175,99 @@ def vdt_cleanup_simulate_endpoint(profile: str = Form(...), day: str = Form(...)
         return {"ok": False, "reason": f"chyba: {e}"}
 
 
+@app.get("/vdt/cleanup_diagnostics", response_class=HTMLResponse)
+def vdt_cleanup_diagnostics(profile: str = "", day: str = ""):
+    """Okno diagnostiky upratovania — čo systém považuje za problém (nedodateľnosť + ekonomika)
+    a ako by to riešil. READ-ONLY (nič nezapisuje)."""
+    import html as _h
+    try:
+        import vdt_live_advisor as _vla
+        import profiles as _pr2
+        prof = profile or (_pr2.get_active() or "")
+        d = (day or dt.date.today().isoformat())[:10]
+        rep = _vla.analyze_day_problems(prof, d)
+    except Exception as e:
+        return render_legacy_body(None, "Diagnostika upratovania",
+                                  f"<h1>Diagnostika upratovania</h1><p style='color:#C0392B'>Chyba: {_h.escape(str(e))}</p>")
+    if not rep.get("ok"):
+        return render_legacy_body(None, "Diagnostika upratovania",
+                                  f"<h1>🔎 Diagnostika upratovania — {_h.escape(prof)} {d}</h1>"
+                                  f"<p style='color:#C0392B'>Analýza sa nepodarila: {_h.escape(rep.get('reason',''))}</p>")
+    try:
+        _clog = _vla.read_cleanup_log(prof, 60)
+    except Exception:
+        _clog = []
+    try:
+        _cst = _vdt_trade_stats(prof, d, reason_only="vdt_cleanup") or {}
+    except Exception:
+        _cst = {}
+    pos = rep.get("position", {})
+    _net = pos.get("net_kwh", 0)
+    _net_col = "#C0392B" if (_net or 0) > 1 else ("#C49000" if (_net or 0) < -1 else "#2E7D32")
+    deliv = rep.get("deliverability", [])
+    econ = rep.get("economic", [])
+    d_rows = "".join(
+        f"<tr><td>{_h.escape(r.get('slot',''))}</td><td>{_h.escape(r.get('problem_slot',''))}</td>"
+        f"<td>{_h.escape(r.get('kind',''))}</td><td>{_h.escape(r.get('direction',''))}</td>"
+        f"<td>{r.get('deviation_kw',0):+.0f}</td><td>{r.get('tau_h',0):.2f}</td>"
+        f"<td>{('' if r.get('price_now') is None else str(r.get('price_now')))}</td>"
+        f"<td>{('' if r.get('price_problem') is None else str(r.get('price_problem')))}</td>"
+        f"<td style='font-weight:600;color:{'#2E7D32' if r.get('decision')=='UPRATAŤ' else '#7a5c00'}'>{_h.escape(r.get('decision',''))}</td>"
+        f"<td style='font-size:11px'>{_h.escape(r.get('reason',''))}</td></tr>"
+        for r in deliv)
+    e_rows = "".join(
+        f"<tr><td>{_h.escape(r.get('slot',''))}</td><td>{r.get('kw',0):.0f}</td><td>{r.get('kwh',0):.0f}</td>"
+        f"<td style='color:#C0392B;font-weight:600'>{r.get('buy_price',0):.1f}</td>"
+        f"<td>{('n/a' if r.get('best_future_sell') is None else str(r.get('best_future_sell')))}</td>"
+        f"<td>{r.get('deficit_eur_mwh',0):+.1f}</td>"
+        f"<td style='color:#C0392B;font-weight:600'>{r.get('riziko_eur',0):+.1f}</td>"
+        f"<td style='font-size:11px'>{_h.escape(r.get('navrh',''))}</td></tr>"
+        for r in econ)
+    c_rows = "".join(
+        f"<tr><td>{_h.escape(str(e.get('ts',''))[11:19])}</td>"
+        f"<td style='font-weight:600;color:{'#2E7D32' if e.get('rozhodnutie')=='UPRATAŤ' else ('#C0392B' if str(e.get('rozhodnutie','')).startswith('ALERT') else '#7a5c00')}'>{_h.escape(str(e.get('udalost','')))}</td>"
+        f"<td>{_h.escape(str(e.get('slot') or e.get('problem_slot') or ''))}</td>"
+        f"<td>{_h.escape(str(e.get('smer','')))}</td>"
+        f"<td>{('' if e.get('kw') is None else e.get('kw'))}</td>"
+        f"<td>{('' if e.get('cena') is None else e.get('cena'))}</td>"
+        f"<td style='font-weight:600'>{_h.escape(str(e.get('rozhodnutie','')))}</td>"
+        f"<td style='font-size:11px'>{_h.escape(str(e.get('dovod','')))}</td></tr>"
+        for e in _clog)
+    _cl_cash = float(_cst.get("cash_eur", 0.0) or 0.0)
+    _cl_cnt = int(_cst.get("count", 0) or 0)
+    _cl_kwh = float(_cst.get("kwh", 0.0) or 0.0)
+    body = f"""<style>
+.dtbl{{border-collapse:collapse;width:100%;font-size:12px;margin:8px 0}}
+.dtbl th,.dtbl td{{border:1px solid #e3e3e3;padding:4px 8px;text-align:right}}
+.dtbl th{{background:#1F4E78;color:#fff}} .dtbl td:first-child,.dtbl td:last-child{{text-align:left}}
+.pill{{display:inline-block;padding:6px 12px;border-radius:8px;font-weight:600;margin:4px 8px 4px 0}}
+</style>
+<h1>🔎 Diagnostika upratovania — {_h.escape(prof)} · {d}</h1>
+<p style="color:#666;font-size:13px">READ-ONLY náhľad. Ukazuje, čo systém považuje za problém a ako by ho riešil (nič nezapisuje).</p>
+<div style="background:#f3f6fb;border-radius:8px;padding:10px 14px;margin:8px 0">
+<span class="pill" style="background:#eef;">Nedodateľné sloty: <b>{len(deliv)}</b></span>
+<span class="pill" style="background:#fde;">Ekonomicky zlé nákupy: <b>{len(econ)}</b></span>
+<span class="pill" style="background:#eef7e8;">Pozícia: nakúpené <b>{pos.get('buy_kwh',0):.0f}</b> · predané <b>{pos.get('sell_kwh',0):.0f}</b> kWh ·
+netto <b style="color:{_net_col}">{_net:+.0f} kWh</b> ({_h.escape(pos.get('stav',''))})</span>
+</div>
+<h2>A) Nedodateľnosť (SOC mimo hraníc)</h2>
+{('<table class="dtbl"><tr><th>Slot (teraz)</th><th>Problémový slot</th><th>Druh</th><th>Smer korekcie</th><th>Odchýlka kW</th><th>τ h</th><th>Cena teraz</th><th>Cena@problém</th><th>Rozhodnutie</th><th>Dôvod</th></tr>' + d_rows + '</table>') if deliv else '<p style="color:#2E7D32">✓ Žiadny nedodateľný slot — všetko v hraniciach SOC.</p>'}
+<h2>B) Ekonomika — drahé / nekryté nákupy</h2>
+<p style="color:#666;font-size:12px">Nákup, ktorý sa v budúcnosti nedá ziskovo predať (najlepší budúci predaj &lt; nákup + min_spread), alebo prispieva k otvorenej dlhej pozícii.</p>
+{('<table class="dtbl"><tr><th>Slot</th><th>kW</th><th>kWh</th><th>Nákupná cena</th><th>Najlepší budúci predaj</th><th>Deficit €/MWh</th><th>Riziko €</th><th>Návrh</th></tr>' + e_rows + '</table>') if econ else '<p style="color:#2E7D32">✓ Žiadny drahý/nekrytý nákup — každý nákup má ziskový budúci predaj.</p>'}
+<h2>C) Živé pokusy o upratovanie (štandardný beh)</h2>
+<div style="background:#f3f6fb;border-radius:8px;padding:10px 14px;margin:8px 0">
+<span class="pill" style="background:#eef7e8">Reálne upratané dnes: <b>{_cl_cnt}</b> obchodov · <b>{_cl_kwh:.0f}</b> kWh ·
+cash <b style="color:{'#2E7D32' if _cl_cash>=0 else '#C0392B'}">{_cl_cash:+.1f} €</b></span>
+</div>
+<p style="color:#666;font-size:12px">Čo živý cleanup (vdt-trader tick) reálne detekoval a spravil — dôkaz, že beží a pokúša sa odstrániť problém. Najnovšie hore.</p>
+{('<table class="dtbl"><tr><th>Čas</th><th>Udalosť</th><th>Slot</th><th>Smer</th><th>kW</th><th>Cena</th><th>Rozhodnutie</th><th>Dôvod</th></tr>' + c_rows + '</table>') if _clog else '<p style="color:#888">Zatiaľ žiadny pokus zaznamenaný (živý cleanup ešte nenarazil na nedodateľný slot, alebo VDT_CLEANUP je vypnuté).</p>'}
+<p style="margin-top:14px;font-size:13px;color:#666">Pozn.: upratovanie automaticky rieši <b>nedodateľnosť</b>; ekonomicky zlé obchody sú tu zvýraznené na kontrolu (obchod je immutable → dá sa len kompenzovať korekciou alebo full regenerovaním).</p>
+<p><a href="/livesim">← Späť do živej simulácie</a></p>
+"""
+    return render_legacy_body(None, f"Diagnostika upratovania {prof} {d}", body)
+
+
 @app.post("/vdt/manual_trade")
 def vdt_manual_trade_endpoint(profile: str = Form(...), slot: str = Form(...),
                               action: str = Form(...), kw: float = Form(...),

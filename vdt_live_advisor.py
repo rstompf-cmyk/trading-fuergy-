@@ -1762,6 +1762,50 @@ def read_cleanup_alerts(max_age_min: int = 20) -> list:
     return out
 
 
+def _cleanup_log_path(profile: str) -> str:
+    _safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in str(profile or ""))
+    return os.path.join(_cleanup_alert_dir(), f"cleanup_log_{_safe}.jsonl")
+
+
+def log_cleanup_attempt(profile: str, entry: Dict[str, Any]) -> None:
+    """Zapíš POKUS o upratovanie do rolling logu (posledných 200) — pre okno diagnostiky
+    (sekcia C: vidíme, že živý cleanup reálne detekuje problém a čo s ním robí)."""
+    try:
+        import json as _json
+        e = dict(entry or {})
+        e["ts"] = dt.datetime.now().isoformat(timespec="seconds")
+        e["profile"] = profile
+        p = _cleanup_log_path(profile)
+        lines = []
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                lines = f.readlines()
+        lines.append(_json.dumps(e, ensure_ascii=False) + "\n")
+        with open(p, "w", encoding="utf-8") as f:
+            f.writelines(lines[-200:])
+    except Exception as _e:
+        print(f"[cleanup-log] zápis zlyhal ({profile}): {_e}")
+
+
+def read_cleanup_log(profile: str, n: int = 60) -> list:
+    """Vráti posledných n pokusov o upratovanie (najnovšie hore)."""
+    import json as _json
+    out = []
+    try:
+        p = _cleanup_log_path(profile)
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                for ln in f.readlines()[-int(n):]:
+                    try:
+                        out.append(_json.loads(ln))
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+    out.reverse()
+    return out
+
+
 def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
     """VDT „Upratovanie" (bezpečnostná sieť, task #82). Kill-switch VDT_CLEANUP=1 (DEFAULT OFF).
 
@@ -1861,6 +1905,15 @@ def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
                 out["alert"] = True
             else:
                 clear_cleanup_alert(profile)   # ešte je čas / nie strata → žiadny alert
+            log_cleanup_attempt(profile, {
+                "udalost": "detekovaný nedodateľný slot",
+                "problem_slot": _prob_slot_str,
+                "smer": ("predaj" if direction == "sell" else "nákup"),
+                "deviation_kw": round(float(tgt["deviation_kw"]), 0),
+                "tau_h": round(float(tgt["tau_h"]), 2),
+                "rozhodnutie": ("ALERT (strata>limit, čaká potvrdenie)" if out.get("alert") else "počkať/nechať"),
+                "cena": (round(float(action_price), 1) if action_price is not None else None),
+                "dovod": dec.get("reason", "")})
             return out
         clear_cleanup_alert(profile)           # ideme upratať → alert netreba
         _kw = float(dec["kw"])
@@ -1876,6 +1929,13 @@ def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
                 "profit_eur": 0.0}
         append_paper_trade(_res)
         out["acted"] = True; out["reason"] = dec.get("reason", "")
+        log_cleanup_attempt(profile, {
+            "udalost": "UPRATANÉ",
+            "slot": _slot_str, "problem_slot": _prob_slot_str,
+            "smer": ("predaj" if direction == "sell" else "nákup"),
+            "kw": round(_kw, 0),
+            "cena": (round(float(action_price), 1) if action_price is not None else None),
+            "rozhodnutie": "UPRATAŤ", "dovod": dec.get("reason", "")})
         print(f"[VDT-CLEANUP] {profile} {_slot_str} {_act} {_kw:.0f}kW → {dec.get('reason','')}")
         return out
     except Exception as e:
@@ -2104,6 +2164,122 @@ def simulate_cleanup_for_day(profile: str, day: str) -> Dict[str, Any]:
         return out
     except Exception as e:
         out["reason"] = f"cleanup sim zlyhal: {e}"
+        return out
+
+
+def analyze_day_problems(profile: str, day: str) -> Dict[str, Any]:
+    """DIAGNOSTIKA UPRATOVANIA (2026-07-04) — report-only (NIČ nezapisuje). Vráti, čo systém
+    považuje za problém a čo by s tým cleanup spravil. Dve kategórie:
+      A) NEDODATEĽNOSŤ: walk-forward slot po slote — kde committed nominácia (DAM+VDT) vyjde
+         mimo [soc_min,soc_max] + rozhodnutie decide_cleanup (upratať/počkať).
+      B) EKONOMIKA: (1) čistá pozícia (nakúpené vs predané kWh → otvorená dlhá/krátka pozícia),
+         (2) drahé/nekryté NÁKUPY — nákup pri cene, ktorá sa v budúcnosti nedá ziskovo predať
+         (best_future_sell < nákup + min_spread), zoradené podľa ceny."""
+    import math as _m
+    out = {"ok": False, "reason": "", "deliverability": [], "economic": [], "position": {}, "summary": {}}
+    try:
+        day = str(day)[:10]
+        import vdt_state as _vs
+        import core.soc_use_audit as _sua
+        import profiles as _pr
+        from core.vdt_cleanup import detect_undeliverable_target, decide_cleanup
+        st = _vs.compute_current_state(profile, today=dt.date.fromisoformat(day))
+        if not st or not st.get("ok"):
+            out["reason"] = "stav profilu nedostupný"; return out
+        cap = float(st.get("batt_kwh") or 0.0)
+        if cap <= 0:
+            out["reason"] = "batt_kwh≤0"; return out
+        eff_c = float(st.get("eff_c") or 0.95); eff_d = float(st.get("eff_d") or 0.95)
+        soc_min = float(st.get("soc_min_pct") or 5.0); soc_max = float(st.get("soc_max_pct") or 100.0)
+        soc_start = float(st.get("start_soc_pct") or 50.0)
+        dam = list(st.get("dam_nomination_kwh") or [0.0] * 96)
+        vdt = list(st.get("vdt_realized_kwh") or [0.0] * 96)
+        while len(dam) < 96: dam.append(0.0)
+        while len(vdt) < 96: vdt.append(0.0)
+        sched = [float(dam[i]) + float(vdt[i]) for i in range(96)]
+        _pl = (_pr.load_profile(profile) or {}).get("plan") or {}
+        batt_kw = float(_pl.get("batt_kw", 0.0) or 0.0)
+        min_spread = float(_pl.get("min_spread", _pl.get("min_spread_eur", 5.0)) or 5.0)
+        horizon_h = float(_pl.get("cleanup_horizon_h", 6.0) or 6.0)
+        deadband_kw = float(_pl.get("cleanup_deadband_kw", 50.0) or 50.0)
+        max_loss = float(_pl.get("cleanup_max_loss_eur_mwh", 20.0) or 20.0)
+        prices = _vs.get_okte_vdt_price_curve(day)
+
+        def _slot(i):
+            _h0, _m0 = divmod(int(i) * 15, 60); _h1, _m1 = divmod(int(i) * 15 + 15, 60)
+            return f"{_h0:02d}:{_m0:02d}-{_h1:02d}:{_m1:02d}"
+
+        # A) NEDODATEĽNOSŤ — walk-forward (report only)
+        corr = [0.0] * 96
+        for si in range(96):
+            _sch = [dam[i] + vdt[i] + corr[i] for i in range(96)]
+            cbase = _sua.simulate_soc_clipped(soc_start, _sch, cap, eff_c=eff_c, eff_d=eff_d,
+                                              lo_pct=soc_min, hi_pct=soc_max)
+            soc_si = float(cbase[si])
+            sim = [0.0] * si + _sch[si:]
+            path = _sua.simulate_soc_unclipped(soc_si, sim, cap, eff_c=eff_c, eff_d=eff_d)
+            tgt = detect_undeliverable_target(path, si, soc_min_pct=soc_min, soc_max_pct=soc_max,
+                                              batt_kwh=cap, batt_kw=batt_kw)
+            if not tgt:
+                continue
+            direction = tgt["direction"]; ap = prices[si]; rp = prices[int(tgt["problem_slot"])]
+            rec = {"slot": _slot(si), "problem_slot": _slot(tgt["problem_slot"]),
+                   "kind": ("preplnenie (SOC>max)" if tgt.get("kind") == "over_charge" else "vyčerpanie (SOC<min)"),
+                   "direction": ("predaj" if direction == "sell" else "nákup"),
+                   "deviation_kw": round(float(tgt["deviation_kw"]), 0),
+                   "tau_h": round(float(tgt["tau_h"]), 2),
+                   "price_now": (round(ap, 1) if _m.isfinite(ap) else None),
+                   "price_problem": (round(rp, 1) if _m.isfinite(rp) else None)}
+            if _m.isfinite(ap) and _m.isfinite(rp):
+                _max = max(0.0, batt_kw - abs(_sch[si])) if batt_kw > 0 else 0.0
+                dec = decide_cleanup(tgt["deviation_kw"], tgt["tau_h"], direction=direction,
+                                     action_price_eur=ap, ref_price_eur=rp, horizon_h=horizon_h,
+                                     min_spread_eur=min_spread, max_loss_eur=max_loss,
+                                     deadband_kw=deadband_kw, max_action_kw=_max)
+                rec["decision"] = ("UPRATAŤ" if dec.get("act") else "počkať/nechať")
+                rec["reason"] = dec.get("reason", "")
+                if dec.get("act"):
+                    kw = float(dec["kw"])
+                    corr[si] += (kw * 0.25) if direction == "sell" else -(kw * 0.25)
+            else:
+                rec["decision"] = "nezasahovať"; rec["reason"] = "chýba OKTE VDT cena pre slot"
+            out["deliverability"].append(rec)
+
+        # B) EKONOMIKA — čistá pozícia + drahé/nekryté nákupy
+        buy_kwh = sum(-sched[i] for i in range(96) if sched[i] < 0)
+        sell_kwh = sum(sched[i] for i in range(96) if sched[i] > 0)
+        net = buy_kwh - sell_kwh   # + = otvorená dlhá pozícia (nakúpené viac než predané)
+        out["position"] = {"buy_kwh": round(buy_kwh, 0), "sell_kwh": round(sell_kwh, 0),
+                           "net_kwh": round(net, 0),
+                           "stav": ("otvorená DLHÁ pozícia (kúpené viac než predané)" if net > 1
+                                    else ("otvorená KRÁTKA pozícia" if net < -1 else "vyrovnané"))}
+        for i in range(96):
+            if sched[i] >= -0.01:
+                continue   # len nákupy
+            bk = -sched[i]; bp = prices[i]
+            if not _m.isfinite(bp):
+                continue
+            fut = [prices[j] for j in range(i + 1, 96) if _m.isfinite(prices[j])]
+            best_sell = max(fut) if fut else None
+            _predatelne = (best_sell is not None and best_sell >= bp + min_spread)
+            if not _predatelne:
+                out["economic"].append({
+                    "slot": _slot(i), "kw": round(bk * 4, 0), "kwh": round(bk, 0),
+                    "buy_price": round(bp, 1),
+                    "best_future_sell": (round(best_sell, 1) if best_sell is not None else None),
+                    "min_spread": round(min_spread, 1),
+                    "deficit_eur_mwh": round(bp + min_spread - (best_sell if best_sell is not None else bp), 1),
+                    "riziko_eur": round(bk / 1000.0 * (bp - (best_sell if best_sell is not None else bp)), 1),
+                    "navrh": "nekryté / neziskové — obchod je immutable → dá sa len kompenzovať korekciou (predať späť pri strate) alebo full regen",
+                })
+        out["economic"].sort(key=lambda r: -(r.get("buy_price") or 0))
+        out["ok"] = True
+        out["summary"] = {"nedodatelne": len(out["deliverability"]),
+                          "ekonomicky_zle": len(out["economic"]),
+                          "net_kwh": round(net, 0)}
+        return out
+    except Exception as e:
+        out["reason"] = f"analýza zlyhala: {e}"
         return out
 
 
