@@ -5628,7 +5628,13 @@ def _livesim_live_minutes():
         else:
             df["isot_eur"] = df["ts15"].map(dtmap)        # fallback: reálny day-ahead
         df["zco_eur"] = df["ts15"].map(zmap)              # odhad ZCO (len kde už publikované)
-        df["dt_real_eur"] = df["ts15"].map(dtmap)         # REÁLNY clearovaný day-ahead (na porovnanie s predikciou)
+        df["dt_real_eur"] = df["ts15"].map(dtmap)         # REÁLNY clearovaný day-ahead
+        # DT-15MIN (2026-07-04, user „všetko + vyhodnocovanie len 15-min"): ak je DAM zdroj HODINOVÝ
+        # (cena len na :00), sub-sloty :15/:30/:45 sú NaN → v evaluácii padli na 0 (zlé). Doplň ich
+        # tou istou hodinovou cenou (upsample v rámci hodiny) → DT realita aj vyhodnotenie sú 15-min.
+        # Ak je zdroj už 15-min, ffill nič nemení (žiadne NaN). limit=59 = drž len v rámci 1 hodiny.
+        df["dt_real_eur"] = df["dt_real_eur"].ffill(limit=59)
+        df["isot_eur"] = df["isot_eur"].ffill(limit=59)   # to isté pre plánovú/predikovanú cenu
         vmap = {}
         if vdt is not None and not vdt.empty and "ts" in vdt and "cena_EUR" in vdt:
             vmap = {pd.Timestamp(t).floor("15min"): float(c) for t, c in zip(vdt["ts"], vdt["cena_EUR"])}
