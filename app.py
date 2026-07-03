@@ -3414,7 +3414,9 @@ function renderFleet(d){
           +'</table>'
         +'</div>'
         +'<div class="cright" onclick="event.stopPropagation();goPlan(\\''+esc(p.name)+'\\')" style="cursor:pointer" title="Otvoriť plán profilu">'
-          +'<div class="leg"><span><i style="background:#639922"></i> DT plán</span><span><i style="background:#BA7517"></i> VDT</span><span><i style="background:#888780;width:14px;height:2px;border-radius:0"></i> SOC</span></div>'
+          +'<div class="leg"><span><i style="background:#639922"></i> DT plán</span><span><i style="background:#BA7517"></i> VDT</span>'
+          +(real?'<span><i style="background:#C62828;width:14px;height:2px;border-radius:0"></i> reálny výkon</span><span><i style="background:#E65100;width:14px;height:2px;border-radius:0"></i> reálny SOC</span>':'<span><i style="background:#888780;width:14px;height:2px;border-radius:0"></i> SOC plán</span>')
+          +'</div>'
           +'<div class="mini"><canvas id="mc'+i+'"></canvas></div>'
         +'</div>'
       +'</div>'
@@ -3425,11 +3427,15 @@ function renderFleet(d){
     (d.profiles||[]).forEach(function(p,i){
       var c=p.chart||{}; var el=document.getElementById('mc'+i); if(!el)return;
       if(_fcharts[i]){try{_fcharts[i].destroy();}catch(e){}}
-      _fcharts[i]=new Chart(el,{plugins:[fNowLine],data:{labels:(c.labels||[]).map(function(_,k){return k;}),datasets:[
-        {type:'bar',data:c.dt||[],backgroundColor:'rgba(99,153,34,.25)',borderColor:'#639922',borderWidth:1,yAxisID:'y',order:2},
-        {type:'bar',data:c.vdt||[],backgroundColor:'rgba(186,117,23,.85)',borderColor:'#BA7517',borderWidth:0,yAxisID:'y',order:1},
-        {type:'line',data:c.soc||[],borderColor:'#888780',borderDash:[4,3],borderWidth:1.4,pointRadius:0,yAxisID:'y1',tension:.3,order:0}
-      ]},options:{responsive:true,maintainAspectRatio:false,animation:false,
+      var dss=[
+        {type:'bar',data:c.dt||[],backgroundColor:'rgba(99,153,34,.25)',borderColor:'#639922',borderWidth:1,yAxisID:'y',order:3},
+        {type:'bar',data:c.vdt||[],backgroundColor:'rgba(186,117,23,.85)',borderColor:'#BA7517',borderWidth:0,yAxisID:'y',order:2},
+        {type:'line',data:c.soc||[],borderColor:'#bdbdbd',borderDash:[4,3],borderWidth:1.1,pointRadius:0,yAxisID:'y1',tension:.3,order:1}
+      ];
+      // REAL profil: nameraný výkon (červená) + nameraný SOC (oranžová) cez plán
+      if(c.batt_real&&c.batt_real.length){dss.push({type:'line',data:c.batt_real,borderColor:'#C62828',borderWidth:1.6,pointRadius:0,yAxisID:'y',tension:.15,spanGaps:false,order:0});}
+      if(c.soc_real&&c.soc_real.length){dss.push({type:'line',data:c.soc_real,borderColor:'#E65100',borderWidth:1.9,pointRadius:0,yAxisID:'y1',tension:.15,spanGaps:false,order:0});}
+      _fcharts[i]=new Chart(el,{plugins:[fNowLine],data:{labels:(c.labels||[]).map(function(_,k){return k;}),datasets:dss},options:{responsive:true,maintainAspectRatio:false,animation:false,
         plugins:{legend:{display:false},tooltip:{enabled:false}},
         scales:{x:{display:false},y:{position:'left',grid:{color:'rgba(128,128,128,.12)'},ticks:{font:{size:8},callback:function(v){return v/1000+'M';}}},
                 y1:{position:'right',min:0,max:100,grid:{display:false},ticks:{font:{size:8},callback:function(v){return v+'%';}}}}}});
@@ -3464,6 +3470,83 @@ def _get_cached_today_trace(profile: str):
         except Exception:
             pass
     return None
+
+
+_FLEET_REAL_CACHE = {}                       # {(profile, day): (mono_ts, data|None)}
+_FLEET_REAL_LOCK = _thr.Lock()
+_FLEET_REAL_TTL_S = 45.0
+
+
+def _fleet_real_overlay(profile: str, day_iso: str):
+    """Reálne NAMERANÉ batt kW + SOC % pre REÁLNY profil (CDC alebo Bender) — aby
+    fleet prehľad ukazoval realitu, nie plán. Vracia 96 slotov pre daný deň + „teraz".
+    TTL cache 45 s: fleet endpoint pollujeme každých 10 s, takže na hardvér (CDC/Bender)
+    sa siahne max raz za TTL na profil. Vracia dict alebo None:
+      {"soc_now": float|None, "batt_now": float|None,
+       "soc_96": [96×(float|None)], "batt_96": [96×(float|None)]}
+    Zdroj = rovnaké kanály ako /livesim realio overlay: CDC fetch_history_range
+    (batt_power_kw, batt_soc_pct; TZ už zarovnaný na lokál) alebo Bender read_recent."""
+    import time as _t
+    _key = (profile, day_iso)
+    _mono = _t.monotonic()
+    with _FLEET_REAL_LOCK:
+        _c = _FLEET_REAL_CACHE.get(_key)
+        if _c and (_mono - _c[0]) < _FLEET_REAL_TTL_S:
+            return _c[1]
+    data = None
+    try:
+        import datetime as _dt_ov
+        rdf = None
+        _cdc_ov = _cdc_battery_for_profile(profile)
+        if _cdc_ov:
+            import cdc as _cdc_ovm
+            _ccfg_ov = _cdc_ovm.load_system_config(_cdc_ov.get("country"))
+            _ccfg_ov["enabled"] = True
+            _ccfg_ov["timeout_s"] = min(int(_ccfg_ov.get("timeout_s", 15) or 15), 6)
+            _pfx_ov = _cdc_ov.get("cdc_prefix")
+            try:
+                _hist_ov = _cdc_ovm.fetch_history_range(
+                    _pfx_ov, _dt_ov.datetime.now() - _dt_ov.timedelta(days=1),
+                    _dt_ov.datetime.now(), step=60, cfg=_ccfg_ov,
+                    keys=["batt_power_kw", "batt_soc_pct"])
+                if _hist_ov is not None and not _hist_ov.empty:
+                    rdf = _hist_ov.reset_index()
+            except Exception:
+                rdf = None
+        else:
+            try:
+                import realio as _rio_ov
+                rdf = _rio_ov.read_recent(n_minutes=1440)
+            except Exception:
+                rdf = None
+        if rdf is not None and not rdf.empty and "time" in rdf.columns:
+            rdf = rdf.copy()
+            rdf["time"] = pd.to_datetime(rdf["time"], errors="coerce")
+            rdf = rdf.dropna(subset=["time"])
+            _d = rdf[rdf["time"].dt.strftime("%Y-%m-%d") == day_iso]
+            soc_96 = [None] * 96
+            batt_96 = [None] * 96
+            if not _d.empty:
+                _sl = (_d["time"].dt.hour * 4 + _d["time"].dt.minute // 15).astype(int)
+                _d = _d.assign(_slot=_sl.values)
+                if "batt_power_kw" in _d.columns:
+                    for _k, _v in _d.groupby("_slot")["batt_power_kw"].mean().items():
+                        if 0 <= int(_k) < 96 and pd.notna(_v):
+                            batt_96[int(_k)] = round(float(_v), 1)
+                if "batt_soc_pct" in _d.columns:
+                    for _k, _v in _d.groupby("_slot")["batt_soc_pct"].mean().items():
+                        if 0 <= int(_k) < 96 and pd.notna(_v):
+                            soc_96[int(_k)] = round(float(_v), 1)
+            soc_now = next((x for x in reversed(soc_96) if x is not None), None)
+            batt_now = next((x for x in reversed(batt_96) if x is not None), None)
+            data = {"soc_now": soc_now, "batt_now": batt_now,
+                    "soc_96": soc_96, "batt_96": batt_96}
+    except Exception as _e_ov:
+        print(f"[_fleet_real_overlay] {profile}: {_e_ov}")
+        data = None
+    with _FLEET_REAL_LOCK:
+        _FLEET_REAL_CACHE[_key] = (_mono, data)
+    return data
 
 
 def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
@@ -3620,6 +3703,30 @@ def _fleet_state(date_iso: str = None, date_to: str = None) -> dict:
             except Exception as _e_hist:
                 print(f"[_fleet_state hist] {name}/{day_iso}: {_e_hist}")
         rec["chart"] = {"labels": _lab, "dt": _dt, "vdt": _vdt, "soc": _soc}
+
+        # REAL profil (CDC/Bender) DNES: prekry PLÁN reálnym MERANÍM — karta „Výkon
+        # teraz"/„SOC" aj graf ukazujú realitu (nameraný batt kW + SOC %), nie plánovú
+        # projekciu. TTL-cache siaha na hardvér max raz za 45 s. Sim profily nedotknuté.
+        if is_today and rec["mode"] == "real":
+            try:
+                _ro = _fleet_real_overlay(name, day_iso)
+            except Exception:
+                _ro = None
+            if _ro:
+                if _ro.get("soc_now") is not None:
+                    rec["soc_pct"] = _ro["soc_now"]
+                if _ro.get("batt_now") is not None:
+                    rec["batt_kw_now"] = _ro["batt_now"]
+                rec["chart"]["soc_real"] = _ro.get("soc_96") or []
+                rec["chart"]["batt_real"] = _ro.get("batt_96") or []
+                rec["real_overlay"] = True
+                try:
+                    _cap_r = float(_pl.get("batt_kwh") or 0.0)
+                    if rec["soc_pct"] is not None and _cap_r > 0:
+                        _smax_r = rec["soc_max"] - rec["soc_reserve_pct"]
+                        rec["free_kwh"] = max(0.0, (_smax_r - float(rec["soc_pct"])) / 100.0 * _cap_r)
+                except Exception:
+                    pass
 
         # Ekonomika za deň (alebo SÚČET za rozsah ak date_to) — effect_db
         if _edb:
