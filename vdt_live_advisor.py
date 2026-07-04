@@ -1855,13 +1855,54 @@ def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
             out["reason"] = "žiadny nedodateľný slot (OK)"
             return out
         obps = result.get("orderbook_per_slot") or []
+        # DAM (DT) cenový FALLBACK (2026-07-04): keď orderbook (live OKTE VDT bid/ask) nie je
+        # k dispozícii (sim profil / mimo obchodných hodín) → cleanup zakaždým skončil „niet
+        # referencie ceny → nezasahuj" a NIKDY nezasiahol. Dizajn: ref = cena obchodu, inak DT
+        # cena v čase problému. Doplníme DAM clearing cenu slotu ako referenciu (propose_cleanup
+        # beží len na SK — viď _is_sk_market gate vyššie → OKTE DT).
+        _dam_px = None
+        try:
+            import seps_sk as _ss_cl
+            import numpy as _np_cl
+            _okte_cl = _ss_cl.load_okte_dt_for_day(_today) or {}
+            _arr_cl = _np_cl.full(96, _np_cl.nan)
+            for _k_cl, _v_cl in _okte_cl.items():
+                _t_cl = dt.datetime.fromisoformat(str(_k_cl)) if not hasattr(_k_cl, "hour") else _k_cl
+                if _t_cl.date().isoformat() == _today:
+                    _ix_cl = _t_cl.hour * 4 + _t_cl.minute // 15
+                    if 0 <= _ix_cl < 96:
+                        _arr_cl[_ix_cl] = float(_v_cl)
+            if _np_cl.isfinite(_arr_cl).any():
+                # ffill+bfill cez chýbajúce sloty
+                _last = None
+                for _i in range(96):
+                    if _np_cl.isfinite(_arr_cl[_i]):
+                        _last = _arr_cl[_i]
+                    elif _last is not None:
+                        _arr_cl[_i] = _last
+                _first = next((x for x in _arr_cl if _np_cl.isfinite(x)), None)
+                if _first is not None:
+                    _arr_cl = _np_cl.where(_np_cl.isfinite(_arr_cl), _arr_cl, _first)
+                _dam_px = [float(x) for x in _arr_cl]
+        except Exception as _e_dam:
+            print(f"[propose_cleanup] DAM fallback zlyhal: {_e_dam}")
+            _dam_px = None
 
         def _price(slot_i, side):
             try:
                 d = obps[int(slot_i)] or {}
-                return float(d.get("bid") if side == "sell" else d.get("ask"))
+                _p = d.get("bid") if side == "sell" else d.get("ask")
+                if _p is not None:
+                    return float(_p)
             except Exception:
-                return None
+                pass
+            # FALLBACK: DAM (DT) cena slotu
+            try:
+                if _dam_px is not None:
+                    return float(_dam_px[int(slot_i)])
+            except Exception:
+                pass
+            return None
         direction = tgt["direction"]
         action_price = _price(cur_slot, direction)
         ref_price = _price(tgt["problem_slot"], direction)     # cena obchodu v čase problému
