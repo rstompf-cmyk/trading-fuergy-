@@ -508,12 +508,11 @@ def write_series(prefix: str, logical: str, series: List, market: Optional[str] 
     # Časový formát zápisu je konfigurovateľný (cfg['write_time_fmt']) — server môže
     # vyžadovať inú podobu časovej značky; default zrkadlí read response "DD.MM.YYYY HH:MM:SS".
     _tf = cfg.get("write_time_fmt") or "%d.%m.%Y %H:%M:%S"
-    # TZ-FIX-WRITE (2026-07-04): CDC server hlási/očakáva čas v inej zóne (tz_offset_h) než lokálny
-    # plán (Europe/Bratislava). READ to už rieši (fetch_history_range: query = local − offset,
-    # výsledok + offset). WRITE to NErobil → setpointy boli posunuté o tz_offset_h. Zrkadlovo k read
-    # prevedieme lokálny plánový čas → serverový (− offset) PRED zápisom. Ak offset=0, nič sa nemení.
-    _tz_off = float(cfg.get("tz_offset_h", 0) or 0)
-    payload = {tag: [{"time": (t - dt.timedelta(hours=_tz_off)).strftime(_tf), "value": v * scale}
+    # TZ-WRITE (2026-07-04, revert): ZÁPIS ide v ČISTOM LOKÁLNOM čase (Europe/Bratislava). CDC server
+    # pri zápise berie časovú značku doslova na svojich hodinách = lokál → žiadny offset. (Dôkaz:
+    # plán 9:00 sa s − offset vykonal reálne o 8:00 = 1 h skoro.) `tz_offset_h` platí LEN pre ČÍTANIE
+    # histórie (fetch_history_range: server hlási v inej zóne), NIE pre zápis. Zápis nikdy neposúvame.
+    payload = {tag: [{"time": t.strftime(_tf), "value": v * scale}
                      for (t, v) in series]}
     out["payload_sample"] = payload[tag][:3]
     # MANUÁLNY export: stačí enabled+control_enabled (per-batéria prepínač zápisu),
