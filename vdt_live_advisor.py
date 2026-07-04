@@ -1904,14 +1904,40 @@ def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
                 pass
             return None
         direction = tgt["direction"]
-        action_price = _price(cur_slot, direction)
+        # VDT-GATE-LEAD (2026-07-04, user): VDT/intraday brána sa zatvára ~gate_lead min PRED
+        # dodávkou → korekciu NEMOŽNO dať do už bežiaceho (cur) slotu. Umiestni ju do PRVÉHO
+        # ešte obchodovateľného slotu (štart ≥ now + gate_lead). Ak taký slot vyjde až ZA
+        # problémom (brána pre všetky pred-problémové sloty zatvorená) → nedá sa upratať.
+        import math as _math_cl
+        _gate_lead = float(_pl.get("cleanup_gate_lead_min", 30.0) or 30.0)
+        _now_cl = dt.datetime.now()
+        _trade_slot = int(_math_cl.ceil((_now_cl.hour * 60 + _now_cl.minute + _gate_lead) / 15.0))
+        _trade_slot = max(int(cur_slot) + 1, _trade_slot)
+        _prob_i = int(tgt["problem_slot"])
+        _ph0g, _pm0g = divmod(_prob_i * 15, 60); _ph1g, _pm1g = divmod(_prob_i * 15 + 15, 60)
+        _prob_str_g = f"{_ph0g:02d}:{_pm0g:02d}-{_ph1g:02d}:{_pm1g:02d}"
+        if _trade_slot > 95 or _trade_slot >= _prob_i:
+            log_cleanup_attempt(profile, {
+                "udalost": "detekovaný nedodateľný slot",
+                "problem_slot": _prob_str_g,
+                "smer": ("predaj" if direction == "sell" else "nákup"),
+                "deviation_kw": round(float(tgt["deviation_kw"]), 0),
+                "tau_h": round(float(tgt["tau_h"]), 2),
+                "rozhodnutie": "počkať/nechať",
+                "cena": None,
+                "dovod": f"VDT brána zatvorená — obchodovateľné až od slotu ≥ {_gate_lead:.0f} min "
+                         f"pred dodávkou; pre tento problém už neskoro"})
+            clear_cleanup_alert(profile)
+            out["reason"] = "VDT brána zatvorená (≤ gate_lead do dodávky)"
+            return out
+        action_price = _price(_trade_slot, direction)         # cena v OBCHODOVATEĽNOM slote
         ref_price = _price(tgt["problem_slot"], direction)     # cena obchodu v čase problému
         horizon_h = float(_pl.get("cleanup_horizon_h", 6.0) or 6.0)
         deadband_kw = float(_pl.get("cleanup_deadband_kw", 50.0) or 50.0)
         max_loss = float(_pl.get("cleanup_max_loss_eur_mwh", 20.0) or 20.0)
         alert_h = float(_pl.get("cleanup_alert_h", 1.0) or 1.0)
         min_spread = float(_pl.get("min_spread", _pl.get("min_spread_eur", 5.0)) or 5.0)
-        max_action_kw = max(0.0, batt_kw - abs(float(sched[cur_slot]))) if batt_kw > 0 else 0.0
+        max_action_kw = max(0.0, batt_kw - abs(float(sched[_trade_slot]))) if batt_kw > 0 else 0.0
         dec = decide_cleanup(tgt["deviation_kw"], tgt["tau_h"], direction=direction,
                              action_price_eur=action_price, ref_price_eur=ref_price,
                              horizon_h=horizon_h, min_spread_eur=min_spread,
@@ -1959,8 +1985,8 @@ def propose_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
         clear_cleanup_alert(profile)           # ideme upratať → alert netreba
         _kw = float(dec["kw"])
         _act = "discharge" if direction == "sell" else "charge"
-        _h0, _m0 = divmod(cur_slot * 15, 60)
-        _h1, _m1 = divmod(cur_slot * 15 + 15, 60)
+        _h0, _m0 = divmod(_trade_slot * 15, 60)         # OBCHODOVATEĽNÝ slot (nie cur, brána)
+        _h1, _m1 = divmod(_trade_slot * 15 + 15, 60)
         _slot_str = f"{_h0:02d}:{_m0:02d}-{_h1:02d}:{_m1:02d}"
         _res = {"ok": True, "profile": profile, "ts": result.get("ts", ""),
                 "current": {"slot": _slot_str, "action": _act, "kw": _kw,
