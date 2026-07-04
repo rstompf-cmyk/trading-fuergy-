@@ -141,6 +141,11 @@ class Profile(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     mode: Mapped[str] = mapped_column(String(16), nullable=False)         # 'simulation' | 'real'
+    # PLAN-SOURCE-DB: 'predicted' (D-1 predikcia) | 'dentrh' (reálny denný trh 15-min).
+    # FIXNÉ pri vzniku (ako mode). Bez tohto stĺpca load_profile spadol na 'predicted' pre
+    # simuláciu → voľba „Reálny denný trh 15-min" sa po uložení stratila.
+    plan_source: Mapped[str] = mapped_column(String(16), default="predicted",
+                                              server_default="predicted", nullable=False)
     note: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[str] = mapped_column(String(32), nullable=False)
     updated_at: Mapped[str] = mapped_column(String(32), nullable=False)
