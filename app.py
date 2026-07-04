@@ -16753,11 +16753,18 @@ def realio_batt_plan_export_preview(day: str = "", profile: str = ""):
         prof = profile or _ps.resolve_profile()
     except Exception:
         prof = "default"
-    # CDC vs Bender cieľ (len pre popisky) — CDC profil zapíše regulačné pásma, nie Bender kW.
+    # CDC profil → presmeruj na OKNO REGULÁCIE CDC (správny CDC pohľad: pásma RL/SL, SOC, write
+    # toggle). Bender profily ostávajú na tomto (Bender) náhľade so surovými kW.
+    _tgt_name = "Bender"
     try:
-        _tgt_name = "CDC" if _cdc_battery_for_profile(prof) else "Bender"
+        _cdc_exp_b = _cdc_battery_for_profile(prof)
     except Exception:
-        _tgt_name = "Bender"
+        _cdc_exp_b = None
+    if _cdc_exp_b and _cdc_exp_b.get("id") is not None:
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(
+            url=f"/customers/battery/regulation?id={int(_cdc_exp_b['id'])}&mode=battery&day={day}",
+            status_code=303)
 
     plan_15min_kw = [0.0] * 96
     plan_soc_pct = [None] * 96
