@@ -2569,6 +2569,75 @@ def _trace_from_db(profile, day):
         return None
 
 
+def future_plan_trace(profile, day):
+    """FUTURE-PLAN-TRACE (2026-07-04): syntetický 96-slot (15-min) trace z uloženého D-1 plánu
+    pre BUDÚCI deň (alebo minulý bez simulácie) — aby /livesim + /realio zobrazili PLÁN batérie,
+    SOC plán a (cez VDT overlay volajúceho) uzavreté VDT aj keď reálny minútový trace ešte
+    neexistuje. Reálne meranie neexistuje → batt/soc = PLÁN (projekcia), RT/€ = 0. Rovnaká
+    schéma stĺpcov ako `_trace_from_db` (aby /livesim graf nepadol na chýbajúcom stĺpci).
+    Vracia DataFrame alebo None ak plán pre deň neexistuje."""
+    if profile is None or day is None:
+        return None
+    try:
+        import plan_store as _ps_fp
+        _day = str(day)[:10]
+        _pl = (_ps_fp.load_plan_safe(_day, 15, "dentrh")
+               or _ps_fp.load_plan_safe(_day, 15, "plan"))
+        if not _pl:
+            return None
+        _sch = _pl.get("schedule", {}) or {}
+        _batt = _sch.get("batt_kw") or []
+        if not _batt:
+            return None
+        n = min(96, len(_batt))
+        _d0 = pd.Timestamp(_day)
+        _soc = _sch.get("soc_pct") or []
+
+        def _a(key, default=0.0, scale=1.0):
+            _s = _sch.get(key) or []
+            return [(float(_s[i]) * scale if i < len(_s) and _s[i] is not None else default)
+                    for i in range(n)]
+        _batt_a = [float(_batt[i] or 0.0) for i in range(n)]
+        _soc_a = [float(_soc[i]) if i < len(_soc) and _soc[i] is not None else 0.0 for i in range(n)]
+        _price_a = _a("price_eur") if _sch.get("price_eur") else _a("cena_EUR")
+        _ftv_kw = _a("pv_kwh", scale=4.0)          # kWh/15min → kW (×4)
+        _load_kw = _a("load_kwh", scale=4.0)
+        _grid_a = _a("grid_kwh")
+        _cu_a = _a("cu_kwh") if _sch.get("cu_kwh") else _a("curtail_kwh")
+        df = pd.DataFrame({"time": [_d0 + pd.Timedelta(minutes=15 * i) for i in range(n)]})
+        df["date"] = df["time"].dt.strftime("%Y-%m-%d")
+        # nulové/prázdne (deň ešte neprebehol — žiadna realita ani €)
+        for _c in ("dt_rev_min", "rt_rev_min", "rt_rev_realistic_min", "vdt_arb_min",
+                   "baseline_per_min_eur", "zco_eur", "vdt_eur", "sys_MW", "soc_kwh",
+                   "budget_left_kwh", "rt_dir", "rt_power_pct", "mw_sig", "avg_react",
+                   "band_dis", "band_chg", "plan_batt_vdt_kw", "ftv_min_curtailed_kw",
+                   "plan_grid_vdt_kwh", "cum_dt", "cum_rt", "cum_total"):
+            df[_c] = 0.0
+        df["rt_reason"] = ""
+        df["dt_eur"] = _price_a
+        df["dt_real_eur"] = _price_a
+        df["ftv_kw"] = _ftv_kw
+        df["ftv_min_real_kw"] = _ftv_kw
+        df["ftv_hour_plan_kw"] = _ftv_kw
+        df["load_min_real_kw"] = _load_kw
+        df["load_plan_kw"] = _load_kw
+        df["plan_batt_kw"] = _batt_a
+        df["plan_batt_dam_kw"] = _batt_a
+        df["batt_kw_realistic"] = _batt_a          # budúcnosť: realita = plán (projekcia)
+        df["nomination_batt_kw"] = _batt_a
+        df["exec_batt_kw"] = _batt_a
+        df["plan_grid_kwh"] = _grid_a
+        df["plan_grid_dam_kwh"] = _grid_a
+        df["nomination_grid_kwh"] = _grid_a
+        df["plan_curtail_kwh"] = _cu_a
+        df["soc_pct"] = _soc_a
+        df["soc_pct_plan"] = _soc_a
+        return df
+    except Exception as _e_fp:
+        print(f"[future_plan_trace] {profile}/{day}: {_e_fp}")
+        return None
+
+
 def load_series(case: str, port: str = "8000", day=None, max_points: int = 2000, profile=None):
     """Načíta rady pre grafy. day=None → celé (decimované); inak len daný deň (jemné).
     profile=None → aktívny profil; inak konkrétny profil (per-profil súbory, LIVESIM-PER-PROFILE).

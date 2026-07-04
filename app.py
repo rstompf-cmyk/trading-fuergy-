@@ -7695,6 +7695,17 @@ th{background:#1F4E78;color:#fff} td:first-child{text-align:left} .wrap{max-heig
             dview = tdf
         else:
             dview = lsim.load_series(case, port=_PORT, day=view_day, max_points=2000, profile=_eff_prof) if view_day else dfull
+        # FUTURE-PLAN (2026-07-04): budúci deň (alebo minulý bez simulácie) nemá minútový trace →
+        # postav syntetický 96-slot trace z uloženého D-1 plánu, nech /livesim + /realio zobrazia
+        # PLÁN batérie + SOC plán (a nižšie VDT overlay dokreslí uzavreté VDT obchody). Reálne
+        # hodnoty ostávajú prázdne/plán (deň ešte neprebehol).
+        if view_day and (dview is None or (hasattr(dview, "empty") and dview.empty)):
+            try:
+                _fpt = lsim.future_plan_trace(_eff_prof, view_day)
+                if _fpt is not None and not _fpt.empty:
+                    dview = _fpt
+            except Exception as _e_fpt:
+                print(f"[livesim future-plan] {_eff_prof}/{view_day}: {_e_fpt}")
         if os.environ.get("LIVESIM_TIMING") == "1":
             print(f"[RENDER-TIMING] {case} load_series = {(_t_rt.perf_counter()-_t_render_ls)*1000:.0f}ms "
                   f"dfull_rows={len(dfull) if dfull is not None else 0}")
