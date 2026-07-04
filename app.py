@@ -8843,7 +8843,7 @@ def _livesim_body(r, dfull, dview, view_day, days, realio_overlay: bool = False,
             _agg_src = None
     if _agg_src is None and dview is not None and not dview.empty:
         # Fallback: decimovaný dview (môže byť 2-3× podhodnotené)
-        _t = _eff(dview, profile=_active_profile, day=view_day, joint_flags=_eff_joint)
+        _t = _eff(dview, profile=_active_profile_eff, day=view_day, joint_flags=_eff_joint)
         d_dt = _t["dt_eur"]; d_rt = _t["rt_eur"]
         d_ftv = float(dview["ftv_kw"].fillna(0).sum()) / 60.0
 
