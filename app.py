@@ -16753,6 +16753,11 @@ def realio_batt_plan_export_preview(day: str = "", profile: str = ""):
         prof = profile or _ps.resolve_profile()
     except Exception:
         prof = "default"
+    # CDC vs Bender cieľ (len pre popisky) — CDC profil zapíše regulačné pásma, nie Bender kW.
+    try:
+        _tgt_name = "CDC" if _cdc_battery_for_profile(prof) else "Bender"
+    except Exception:
+        _tgt_name = "Bender"
 
     plan_15min_kw = [0.0] * 96
     plan_soc_pct = [None] * 96
@@ -16910,14 +16915,14 @@ def realio_batt_plan_export_preview(day: str = "", profile: str = ""):
 
         # Edit form
         f"<form method='post' action='/realio/batt_plan_export/submit' "
-        f"onsubmit=\"return confirm('Naozaj zapísať 96 setpointov pre {day} na Bender? Toto sa nedá vrátiť!');\">"
+        f"onsubmit=\"return confirm('Naozaj zapísať 96 setpointov pre {day} na {_tgt_name}? Toto sa nedá vrátiť!');\">"
         f"<input type='hidden' name='day' value='{day}'>"
         f"{''.join(rows_html)}"
         f"<div style='display:flex;gap:12px;margin:20px 0;align-items:center'>"
         f"<button type='submit' "
         f"style='padding:12px 24px;background:#C62828;color:#fff;border:0;border-radius:8px;"
         f"cursor:pointer;font-size:15px;font-weight:600'>"
-        f"✓ Potvrdiť a zapísať na Bender</button>"
+        f"✓ Potvrdiť a zapísať na {_tgt_name}</button>"
         f"<a href='/realio?tab=riadenie' "
         f"style='padding:12px 24px;background:#5E35B1;color:#fff;text-decoration:none;border-radius:8px;"
         f"font-size:15px;font-weight:600'>✗ Zrušiť</a>"
@@ -16950,6 +16955,33 @@ async def realio_batt_plan_export_submit(request: Request):
             plan_kw.append(float(v) if v is not None else 0.0)
         except (TypeError, ValueError):
             plan_kw.append(0.0)
+
+    # CDC vs Bender routing (2026-07-04): CDC-backed profil zapisuje cez CDC regulačné pásma
+    # (RL/SL z uloženého plánu), NIE cez Bender realio.write_battery_plan_15min. Gated per-batéria
+    # `control_enabled` — bez povolenia = DRY-RUN (nezapíše na HW).
+    import html as _html
+    _cdc_b = None
+    try:
+        from core.profile_resolver import get_active as _ga_exp
+        _cdc_b = _cdc_battery_for_profile(_ga_exp())
+    except Exception:
+        _cdc_b = None
+    if _cdc_b and _cdc_b.get("cdc_prefix"):
+        try:
+            import cdc as _cdc_exp, cdc_reg_plan as _crp_exp
+            _cfg_exp = _cdc_exp.load_system_config(_cdc_b.get("country"))
+            _cfg_exp["enabled"] = True
+            _cfg_exp["control_enabled"] = _cdc_write_enabled(_cdc_b.get("id"))
+            _rows_exp = _crp_exp.build_band_table(_cdc_b, day, mode="battery", rt="fixed")
+            res = _cdc_exp.write_band_table(_cdc_b["cdc_prefix"], _rows_exp, day, cfg=_cfg_exp)
+            if res.get("ok") or res.get("dry_run"):
+                _note = ("DRY-RUN — nezapísané na HW (povoľ zápis v okne regulácie batérie)"
+                         if res.get("dry_run") else "Zapísané do batérie cez CDC (regulačné pásma RL/SL).")
+                return _realio_page(f"✓ CDC export ({_cdc_b.get('cdc_prefix')}): {_note}", "ok", tab="riadenie")
+            return _realio_page(f"⚠ CDC export NEúspešný: {_html.escape(str(res.get('msg','?')))}", "err", tab="riadenie")
+        except Exception as _e_cdc_exp:
+            import traceback as _tb_exp
+            return _realio_page(f"⚠ CDC export zlyhal: {_html.escape(str(_e_cdc_exp))}", "err", tab="riadenie")
 
     try:
         import realio as _rio
