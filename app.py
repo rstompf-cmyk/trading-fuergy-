@@ -4988,6 +4988,7 @@ a{{color:#1F4E78}}</style></head><body>
                 pv_h = np.concatenate([pv_h, np.zeros(24 - len(pv_h))])
         else:
             pv_h = np.zeros(24)                                # batt-only: žiadny FTV
+            cal = 1.0                                          # bez FTV = žiadna kalibrácia (fix UnboundLocalError 'cal' pri kwp=0)
         pv15 = np.repeat(pv_h[:24], 4) / 4.0                  # → 96 × 15-min slotov
         n = min(len(pv15), len(price15))
         mult96_use = np.asarray(mult96, dtype=float)[:n]
