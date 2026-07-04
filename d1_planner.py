@@ -245,6 +245,8 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
     # ≤ floor (silno záporné) ostávajú reálne → LP prirodzene preferuje plné nabitie (platia
     # nám za odber). Default 0.0 = vypnuté (golden bit-exact). Aktivuje sa len záporným prahom.
     neg_price_floor = float(pp.get("plan_neg_price_floor_eur", 0.0) or 0.0)
+    # CHARGE-EARLY (2026-07-04): jemný tie-breaker preferujúci skoršie nabíjanie (0 = vyp).
+    charge_early_w = float(pp.get("plan_charge_early_w", 0.0) or 0.0)
     # Stropy denného obchodovania (kWh/deň). Override z volania má prednosť pred profile defaultom.
     # 0 alebo None znamená "bez stropu".
     def _opt_float(v):
@@ -354,6 +356,7 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
             dt=dt_h, load_kwh=load_kwh,
             max_export_kwh_day=max_export_kwh_day,
             max_import_kwh_day=max_import_kwh_day,
+            charge_early_w=charge_early_w,
         )
     except Exception as e:
         return {"ok": False, "error": f"optimize_day zlyhal: {e}",

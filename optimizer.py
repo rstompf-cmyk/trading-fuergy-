@@ -78,7 +78,8 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
                  max_export_kwh_day=None, max_import_kwh_day=None,
                  soc_reserve_pct=0.0,
                  rt_grid_reserve_pct=0.0,
-                 batt_dis_cap_kw=None, batt_chg_cap_kw=None):
+                 batt_dis_cap_kw=None, batt_chg_cap_kw=None,
+                 charge_early_w=0.0):
     """`load_kwh` = spotreba zákazníka [kWh/perióda] (net-meter setup): pv + di + im − ex − ch − cu = load.
     Ak má profil naimportovanú spotrebu, predáva sa najprv self-consumption (zadarmo),
     zvyšok ide do siete/batérie. Pri load > pv treba import alebo battery discharge.
@@ -141,6 +142,15 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
         c[idx(3, t)] = (pr[t]+grid_fee)/1000.0       # import: -(cena+poplatok)
         c[idx(0, t)] = pen                           # nábeh: bráni cyklu pod prahom min_spread
         c[idx(1, t)] = pen                           # výboj: rovnako
+    # CHARGE-EARLY (2026-07-04, opt-in): jemný tie-breaker preferujúci SKORŠIE nabíjanie
+    # (robustnosť — nabi kým je lacno/svieti, necakaj na koniec okna). Lineárne rastúci
+    # náklad na nabíjanie od 0 (prvý slot) po charge_early_w €/MWh (posledný slot). Rozhoduje
+    # LEN medzi takmer rovnako lacnými slotmi (napr. poludňajšia nula) — reálny spread > w
+    # ho prebije, takže needáva ekonomiku. Default 0 = golden bit-exact.
+    _ce_w = float(charge_early_w or 0.0)
+    if _ce_w > 0 and T > 1:
+        for t in range(T):
+            c[idx(0, t)] += _ce_w / 1000.0 * (t / (T - 1))
 
     # rovnosti: bilancia uzla + dynamika SOC
     # NET-METER: pv + di + im − ex − ch − cu = load  →  b_eq = load − pv

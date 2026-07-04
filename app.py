@@ -4494,6 +4494,7 @@ def _dentrh_form(msg=""):
                "soc_min", "soc_max", "soc_init", "terminal_soc",
                "grid_kw", "grid_kw_import", "grid_kw_export",
                "grid_fee", "cycle_cost", "min_spread", "plan_neg_price_floor_eur",
+               "plan_charge_early_w",
                "max_export_kwh_day", "max_import_kwh_day",
                "zco_bias_w", "vdt_engine", "vdt_pair_priority", "export_col", "export_mult")
     for _k in _SHARED:
@@ -4763,6 +4764,9 @@ Ak zvolíš <b>dnešný deň</b>, dole uvidíš aj odporúčanie pre aktuálny 1
 {_field("Mierny mínus ber ako 0 do [€/MWh, 0=vyp, napr. −40]","plan_neg_price_floor_eur",f.get('plan_neg_price_floor_eur', 0))}
 <div style="margin:2px 0 8px;padding:6px 10px;background:#eef5e0;border-left:3px solid #639922;border-radius:4px;font-size:12px;color:#33691e">
 💡 Ceny medzi týmto prahom a 0 (napr. −40…0) plán berie <b>ako 0</b> — „je jedno či je trochu záporná". Plán sa tak neprilepí na najzápornejší slot a nabíjanie sa môže rozložiť/začať skôr. Ceny <b>pod</b> prahom (silno záporné) ostávajú reálne → plná preferencia nabíjania. 0 = vypnuté.</div>
+{_field("Nabíjaj skôr — váha [€/MWh, 0=vyp, napr. 3]","plan_charge_early_w",f.get('plan_charge_early_w', 0))}
+<div style="margin:2px 0 8px;padding:6px 10px;background:#e3f2fd;border-left:3px solid #1565C0;border-radius:4px;font-size:12px;color:#0d47a1">
+💡 Keď sú ceny v okne ~rovnaké (poludňajšia nula), plán uprednostní <b>skoršie nabíjanie</b> (poistka — nabi kým svieti/je lacno). Váha = max sila v €/MWh; reálny spread väčší než váha ju prebije, takže sa <b>needáva ekonomika</b> (nenabije drahšie skoro). 0 = vypnuté.</div>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
 <span>Nabíjať zo siete</span><input name="allow_grid_charge" type="checkbox" checked></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
@@ -4839,6 +4843,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
            grid_fee: float = Form(...),
            cycle_cost: float = Form(...), min_spread: float = Form(default=30.0),
            plan_neg_price_floor_eur: float = Form(default=0.0),
+           plan_charge_early_w: float = Form(default=0.0),
            allow_grid_charge: str = Form(default=""), allow_curtail: str = Form(default=""),
            block_neg_import: str = Form(default=""),
            no_planned_discharge: str = Form(default=""),
@@ -4867,6 +4872,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
     _mex = float(max_export_kwh_day) if max_export_kwh_day and max_export_kwh_day > 0 else None
     _mim = float(max_import_kwh_day) if max_import_kwh_day and max_import_kwh_day > 0 else None
     zbw = float(zco_bias_w or 0.0)
+    cew = float(plan_charge_early_w or 0.0)   # CHARGE-EARLY tie-breaker (0 = vyp)
     # Bug #622 (Krok A): SOC carryover z livesim trace pre /dentrh.
     # Override user-vstupu `soc_init` reálnym SOC po predošlom dni — D-1 plán
     # nesmie predpokladať ideálnu trajektóriu, lebo večerné nominácie potom
@@ -4899,6 +4905,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                             grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                             grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
                             plan_neg_price_floor_eur=float(plan_neg_price_floor_eur or 0.0),
+                            plan_charge_early_w=float(plan_charge_early_w or 0.0),
                             allow_grid_charge=agc, allow_curtail=acu, block_neg_import=bni,
                             no_planned_discharge=npd,
                             max_export_kwh_day=float(max_export_kwh_day or 0),
@@ -4918,6 +4925,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
                           plan_neg_price_floor_eur=float(plan_neg_price_floor_eur or 0.0),
+                          plan_charge_early_w=float(plan_charge_early_w or 0.0),
                           max_export_kwh_day=float(max_export_kwh_day or 0),
                           max_import_kwh_day=float(max_import_kwh_day or 0),
                           zco_bias_w=zbw,
@@ -5004,6 +5012,17 @@ a{{color:#1F4E78}}</style></head><body>
         # ZCO bias — ak zbw>0, LP rozhoduje na biased cene; settle stále na pôvodnej
         import livesim as _lsim
         decision_price15 = _lsim._apply_zco_bias(price15[:n], d, float(pv15[:n].sum()), 15, zbw)
+        # NEG-PRICE-FLOOR (2026-07-04): mierny mínus (floor, 0) → 0 pre ROZHODOVANIE LP
+        # (settle_price ostáva reálny). Rovnaký zmysel ako v d1_planner — plán sa neprilepí na
+        # najzápornejší slot, nabíjanie sa môže rozložiť skôr. Default 0 = vypnuté.
+        _npf_d = float(plan_neg_price_floor_eur or 0.0)
+        if _npf_d < 0.0:
+            decision_price15 = np.asarray(decision_price15, float).copy()
+            _m_npf = (decision_price15 < 0.0) & (decision_price15 > _npf_d)
+            _n_npf = int(_m_npf.sum())
+            decision_price15[_m_npf] = 0.0
+            if _n_npf:
+                print(f"[NEG-PRICE-FLOOR /dentrh] {d}: {_n_npf} slotov ({_npf_d:.0f}, 0) €/MWh → 0")
         # baseline (NÁVRH) bez overridu
         sch_base, summ_base = optimize_day(pv15[:n], decision_price15, dt=0.25,
                                  settle_price=price15[:n],
@@ -5018,7 +5037,8 @@ a{{color:#1F4E78}}</style></head><body>
                                  min_spread_eur=min_spread, block_neg_import=bni,
                                  block_planned_discharge=npd,
                                  load_kwh=load96,
-                                 max_export_kwh_day=_mex, max_import_kwh_day=_mim)
+                                 max_export_kwh_day=_mex, max_import_kwh_day=_mim,
+                                 charge_early_w=cew)
         if np.allclose(mult96_use, 1.0):
             sch, summ = sch_base, summ_base
         else:
@@ -5036,7 +5056,8 @@ a{{color:#1F4E78}}</style></head><body>
                                  min_spread_eur=min_spread, block_neg_import=bni,
                                  batt_kw_override=mult96_use,
                                  block_planned_discharge=npd,
-                                 max_export_kwh_day=_mex, max_import_kwh_day=_mim)
+                                 max_export_kwh_day=_mex, max_import_kwh_day=_mim,
+                                 charge_early_w=cew)
     except Exception as e:
         return _dentrh_form(f"Chyba pri výpočte: {e}")
 
@@ -17264,6 +17285,8 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
          block_neg_import: str = Form(default=""),
          no_planned_discharge: str = Form(default=""),
          zco_bias_w: float = Form(default=0.0),
+         plan_neg_price_floor_eur: float = Form(default=0.0),
+         plan_charge_early_w: float = Form(default=0.0),
          # POZOR: pre checkboxy MUSÍ byť default="" — neoznačený checkbox neposiela field v POST,
          # FastAPI by inak vrátil "on" (=True) a odčiarknutie by nefungovalo.
          rt_freedom: str = Form(default=""),
@@ -17314,6 +17337,7 @@ def plan(date: str = Form(...), lat: float = Form(...), lon: float = Form(...),
     _vdt_pair_priority_p = str(vdt_pair_priority or "closest").lower()
     if _vdt_pair_priority_p not in ("closest", "profit", "balanced"):
         _vdt_pair_priority_p = "closest"
+    cew = float(plan_charge_early_w or 0.0)   # CHARGE-EARLY tie-breaker (0 = vyp)
     # #27: rozsah dní pre VDT oceňovanie reálnymi uzavretými cenami (len história).
     _vdt_cl_from = str(vdt_closed_from or "")[:10]
     _vdt_cl_to = str(vdt_closed_to or "")[:10]
@@ -17590,7 +17614,8 @@ a{{color:#1F4E78}}</style></head><body>
                                  block_neg_import=bool(block_neg_import),
                                  block_planned_discharge=npd,
                                  load_kwh=load24,
-                                 max_export_kwh_day=_mex, max_import_kwh_day=_mim)
+                                 max_export_kwh_day=_mex, max_import_kwh_day=_mim,
+                                 charge_early_w=cew)
         # ak override nemá efekt (všetko 1.0), ušetríme druhý LP run
         if np.allclose(np.asarray(mult24, dtype=float), 1.0):
             sch, summ = sch_base, summ_base
@@ -17613,7 +17638,8 @@ a{{color:#1F4E78}}</style></head><body>
                                  batt_kw_override=mult24,
                                  block_planned_discharge=npd,
                                  load_kwh=load24,
-                                 max_export_kwh_day=_mex, max_import_kwh_day=_mim)
+                                 max_export_kwh_day=_mex, max_import_kwh_day=_mim,
+                                 charge_early_w=cew)
     except Exception as e:
         return form_page(f"Chyba pri generovaní: {e}")
 
