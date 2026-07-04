@@ -4493,7 +4493,7 @@ def _dentrh_form(msg=""):
                "batt_kw", "batt_kwh", "eff_c", "eff_d",
                "soc_min", "soc_max", "soc_init", "terminal_soc",
                "grid_kw", "grid_kw_import", "grid_kw_export",
-               "grid_fee", "cycle_cost", "min_spread",
+               "grid_fee", "cycle_cost", "min_spread", "plan_neg_price_floor_eur",
                "max_export_kwh_day", "max_import_kwh_day",
                "zco_bias_w", "vdt_engine", "vdt_pair_priority", "export_col", "export_mult")
     for _k in _SHARED:
@@ -4760,6 +4760,9 @@ Ak zvolíš <b>dnešný deň</b>, dole uvidíš aj odporúčanie pre aktuálny 1
 {_field("Náklad cyklu [€/MWh]","cycle_cost",f['cycle_cost'])}{_field("Min. cenový rozdiel [€/MWh]","min_spread",f['min_spread'])}
 {_field("Max DAM export [kWh/deň, 0=bez stropu]","max_export_kwh_day",f.get('max_export_kwh_day', 0))}{_field("Max DAM import [kWh/deň, 0=bez stropu]","max_import_kwh_day",f.get('max_import_kwh_day', 0))}
 {_field("Bias plánu o ZCO (váha 0–1)","zco_bias_w",f.get('zco_bias_w', 0.0))}
+{_field("Mierny mínus ber ako 0 do [€/MWh, 0=vyp, napr. −40]","plan_neg_price_floor_eur",f.get('plan_neg_price_floor_eur', 0))}
+<div style="margin:2px 0 8px;padding:6px 10px;background:#eef5e0;border-left:3px solid #639922;border-radius:4px;font-size:12px;color:#33691e">
+💡 Ceny medzi týmto prahom a 0 (napr. −40…0) plán berie <b>ako 0</b> — „je jedno či je trochu záporná". Plán sa tak neprilepí na najzápornejší slot a nabíjanie sa môže rozložiť/začať skôr. Ceny <b>pod</b> prahom (silno záporné) ostávajú reálne → plná preferencia nabíjania. 0 = vypnuté.</div>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
 <span>Nabíjať zo siete</span><input name="allow_grid_charge" type="checkbox" checked></label>
 <label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
@@ -4835,6 +4838,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
            grid_kw_import: float = Form(default=None), grid_kw_export: float = Form(default=None),
            grid_fee: float = Form(...),
            cycle_cost: float = Form(...), min_spread: float = Form(default=30.0),
+           plan_neg_price_floor_eur: float = Form(default=0.0),
            allow_grid_charge: str = Form(default=""), allow_curtail: str = Form(default=""),
            block_neg_import: str = Form(default=""),
            no_planned_discharge: str = Form(default=""),
@@ -4894,6 +4898,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                             rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                             grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                             grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
+                            plan_neg_price_floor_eur=float(plan_neg_price_floor_eur or 0.0),
                             allow_grid_charge=agc, allow_curtail=acu, block_neg_import=bni,
                             no_planned_discharge=npd,
                             max_export_kwh_day=float(max_export_kwh_day or 0),
@@ -4912,6 +4917,7 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                           rt_grid_reserve_pct=float(rt_grid_reserve_pct or 0.0),
                           grid_kw=grid_kw, grid_kw_import=gki, grid_kw_export=gke,
                           grid_fee=grid_fee, cycle_cost=cycle_cost, min_spread=min_spread,
+                          plan_neg_price_floor_eur=float(plan_neg_price_floor_eur or 0.0),
                           max_export_kwh_day=float(max_export_kwh_day or 0),
                           max_import_kwh_day=float(max_import_kwh_day or 0),
                           zco_bias_w=zbw,

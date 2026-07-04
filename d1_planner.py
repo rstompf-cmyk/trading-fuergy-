@@ -239,6 +239,12 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
     # (napr. nabíjanie večer pri 152 na predaj 180). pen=(cycle_cost+min_spread)/2/1000
     # zvýši prah round-trip cyklu. Default 0 = golden bit-exact (back-compat).
     min_spread_eur = float(pp.get("min_spread", pp.get("min_spread_eur", 0.0)) or 0.0)
+    # NEG-PRICE-FLOOR (2026-07-04, user): pre tento typ plánu ber mierne záporné ceny
+    # (floor < cena < 0, napr. −40 €/MWh) ako 0 — „je jedno či je trochu záporná". Tým sa
+    # plán neprilepí na najzápornejší slot a nabíjanie sa môže rozložiť/začať skôr; ceny
+    # ≤ floor (silno záporné) ostávajú reálne → LP prirodzene preferuje plné nabitie (platia
+    # nám za odber). Default 0.0 = vypnuté (golden bit-exact). Aktivuje sa len záporným prahom.
+    neg_price_floor = float(pp.get("plan_neg_price_floor_eur", 0.0) or 0.0)
     # Stropy denného obchodovania (kWh/deň). Override z volania má prednosť pred profile defaultom.
     # 0 alebo None znamená "bez stropu".
     def _opt_float(v):
@@ -322,6 +328,16 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
 
     # 4. Load profile
     load_kwh = _load_load_profile(prof, date, slots=slots)
+
+    # NEG-PRICE-FLOOR: mierny mínus (floor, 0) → 0 (pred LP). Vypnuté keď floor >= 0.
+    if neg_price_floor < 0.0:
+        prices = np.asarray(prices, float).copy()
+        _mask_np = (prices < 0.0) & (prices > neg_price_floor)
+        _n_clamp = int(_mask_np.sum())
+        prices[_mask_np] = 0.0
+        if _n_clamp:
+            print(f"[NEG-PRICE-FLOOR] {prof} {date}: {_n_clamp} slotov ({neg_price_floor:.0f}, 0) "
+                  f"€/MWh → 0 (mierny mínus ignorovaný, nabíjanie sa môže rozložiť skôr)")
 
     # 5. Spusti optimize_day
     try:
