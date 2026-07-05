@@ -555,13 +555,22 @@ def audit_action(profile: str,
                 _sim_start_soc,
                 ([0.0] * _sim_offset + list(scheduled_kwh[_sim_offset:])) if _sim_offset > 0 else list(scheduled_kwh),
                 cap, eff_c=eff_c, eff_d=eff_d, lo_pct=soc_min, hi_pct=soc_max)
-            _soc_at_si = float(_cbase[si])
+            # VDT-DELIVERABLE-FORWARD (2026-07-05): rezervuj voči NAJHORŠIEMU BUDÚCEMU bodu
+            # committed krivky (slot obchodu → koniec dňa), nie len voči vlastnému slotu.
+            # Inak predaj v skorom večernom slote (SOC ešte vysoký) prejde, ale uberie energiu,
+            # ktorú DAM plán potrebuje na NESKORŠIE vybíjanie → tie sloty padnú pod min → cleanup.
+            # charge: strop = MAX budúceho SOC (nesmie sa preplniť); discharge: podlaha = MIN
+            # budúceho SOC (nesmie vyčerpať pod min). soc_path[si+1..97] = SOC po slotoch.
+            _fwd = [float(x) for x in _cbase[si + 1:97]] or [float(_cbase[si])]
             if direction == "charge":
-                _head_pct = max(0.0, (soc_max - _buf) - _soc_at_si)
+                _soc_ref = max(_fwd)                       # najvyšší budúci bod
+                _head_pct = max(0.0, (soc_max - _buf) - _soc_ref)
                 _deliv_cap = _head_pct / 100.0 * cap / max(eff_c, 0.01)
             else:
-                _head_pct = max(0.0, _soc_at_si - (soc_min + _buf))
+                _soc_ref = min(_fwd)                       # najnižší budúci bod
+                _head_pct = max(0.0, _soc_ref - (soc_min + _buf))
                 _deliv_cap = _head_pct / 100.0 * cap * max(eff_d, 0.01)
+            _soc_at_si = _soc_ref
         except Exception:
             _deliv_cap = None
 
