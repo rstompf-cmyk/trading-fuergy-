@@ -110,12 +110,19 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     if load.size < T:
         load = np.concatenate([load, np.zeros(T - load.size)])
     _has_load = bool(load.sum() > 1e-6)
-    # Bug SOC-RESERVE-AUDIT-ONLY (2026-06-10): reserve sa NEAPLIKUJE na LP plánovanie.
-    # Plán pracuje s celou kapacitou [soc_min, soc_max] (typicky 5%-100%).
-    # Reserve ostáva aktívna IBA v core/soc_use_audit.py pre RT/VDT/auto_control audit.
+    # PLAN-SOC-RESERVE (2026-07-05, user): reserve sa aplikuje AJ na PLÁN (nie len audit) — plán
+    # nevybíja pod (soc_min + reserve), čím necháva SOC headroom pre VDT páry (koniec „obchodov
+    # mimo SOC" + cleanup churnu). Predtým (Bug SOC-RESERVE-AUDIT-ONLY 2026-06-10) bol reserve len
+    # pre RT/VDT/auto_control audit. Floor = min+reserve, ale NIKDY nad štart soc0 → žiadna
+    # infeasibilita keď profil štartuje nízko. Default reserve 0 = golden bit-exact.
+    # Kill-switch PLAN_SOC_RESERVE=0 → späť na audit-only správanie.
     _soc_reserve_pct = max(0.0, min(50.0, float(soc_reserve_pct or 0.0)))
     socmin, socmax = batt_kwh * float(soc_min_pct) / 100, batt_kwh * float(soc_max_pct) / 100
     soc0 = batt_kwh * float(soc_init_pct) / 100
+    import os as _os_res
+    _plan_socmin = socmin
+    if _soc_reserve_pct > 0 and _os_res.environ.get("PLAN_SOC_RESERVE", "1") != "0":
+        _plan_socmin = min(socmin + batt_kwh * _soc_reserve_pct / 100.0, soc0)
     if terminal_soc_pct is not None:
         term = batt_kwh * float(terminal_soc_pct) / 100
     else:
@@ -223,7 +230,9 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     # "nabíj v D-1, vybitie nechaj na RT").
     _term_floor = socmin if block_planned_discharge else term
     for t in range(T):                                       # soc
-        lo = _term_floor if t == T-1 else socmin
+        # PLAN-SOC-RESERVE: medzislotová podlaha = _plan_socmin (min+reserve, capnuté na soc0).
+        # Terminál ostáva na _term_floor (rešpektuje explicitný terminal_soc / block-discharge).
+        lo = _term_floor if t == T-1 else _plan_socmin
         bounds.append((lo, socmax))
 
     # voliteľné inequality stropy: zbieram riadky do listu
