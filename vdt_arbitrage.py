@@ -80,9 +80,28 @@ def build_backtest_snapshot(date: dt.date) -> pd.DataFrame:
     return df
 
 
+_SNAP_CACHE = {}   # {date_iso: (mono_ts, df)} — TTL cache drahých OKTE DAM+IDM fetchov
+
+
 def _build_day_snapshot(date: dt.date) -> pd.DataFrame:
-    """Postaví 96-slot DataFrame pre 1 deň s DAM + IDM cenami."""
-    import okte_sk
+    """Postaví 96-slot DataFrame pre 1 deň s DAM + IDM cenami.
+
+    SNAP-CACHE (2026-07-06): OKTE DAM+IDM fetch je drahý (network + zlyhania pri nepublikovaných
+    budúcich dňoch) a volal sa per-profil per-tick (VDT worker: 12 profilov → 19 s/tick, log
+    zaplavený „DAM 2026-07-07 prázdna"). Cache per deň: dnešok 60 s (+refresh is_past/is_live),
+    ostatné dni 15 min. Live orderbook (bid/ask) sa fetchuje inde → cache clearingu ho neovplyvní."""
+    import okte_sk, time as _t
+    _k = date.isoformat()
+    _now_mono = _t.monotonic()
+    _is_today = (date == dt.date.today())
+    _c = _SNAP_CACHE.get(_k)
+    if _c and (_now_mono - _c[0]) < (60.0 if _is_today else 900.0):
+        _cdf = _c[1].copy()
+        _n = pd.Timestamp.now()
+        _cdf["is_past"] = _cdf["start_local"].apply(lambda s: pd.Timestamp(s) < _n)
+        _cdf["is_live"] = _cdf.apply(
+            lambda r: pd.Timestamp(r["start_local"]) <= _n < pd.Timestamp(r["end_local"]), axis=1)
+        return _cdf
     now = pd.Timestamp.now()
 
     rows = []
@@ -149,6 +168,7 @@ def _build_day_snapshot(date: dt.date) -> pd.DataFrame:
         lambda r: "IDM" if pd.notna(r["idm_avg"]) else ("DAM" if pd.notna(r["dam_price"]) else "?"),
         axis=1
     )
+    _SNAP_CACHE[_k] = (_now_mono, df.copy())    # SNAP-CACHE: ulož pre ďalšie ticky/profily
     return df
 
 
