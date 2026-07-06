@@ -415,7 +415,27 @@ def parse_wsdl_operations(wsdl_xml: str) -> List[Dict[str, str]]:
     return uniq
 
 
+_OB_CACHE: Dict[Any, Any] = {}   # {delivery_duration: (mono_ts, result)} — OB-CACHE
+_OB_TTL_S = 4.0
+
+
 def get_orderbook(delivery_duration: Optional[int] = None) -> Dict[str, Any]:
+    """OB-CACHE (2026-07-06): tenký TTL wrapper (4 s) nad `_get_orderbook_uncached`. SOAP orderbook
+    fetch je drahý (network) a volal sa PER PROFIL per tick (VDT worker 12 profilov = 12× ten istý
+    trhový orderbook → hlavný podiel na 18 s/tick). Cache = jeden fetch za tick, zdieľaný cez profily;
+    ďalší tick (>4 s) fetchne fresh → VDT stále reaguje na aktuálne ceny. Cachujeme len úspech."""
+    import time as _t
+    _k = delivery_duration
+    _c = _OB_CACHE.get(_k)
+    if _c and (_t.monotonic() - _c[0]) < _OB_TTL_S:
+        return _c[1]
+    _res = _get_orderbook_uncached(delivery_duration)
+    if isinstance(_res, dict) and _res.get("ok"):
+        _OB_CACHE[_k] = (_t.monotonic(), _res)
+    return _res
+
+
+def _get_orderbook_uncached(delivery_duration: Optional[int] = None) -> Dict[str, Any]:
     """**Trhový orderbook** (všetky bids/asks na trhu, anonymizované) cez SOAP IdmOrderBook.
 
     PDF kap. 3.1.5 + 4.4.2 — message-code=810 (CDSREQ-VDT.810).
