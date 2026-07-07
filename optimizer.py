@@ -79,7 +79,8 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
                  soc_reserve_pct=0.0,
                  rt_grid_reserve_pct=0.0,
                  batt_dis_cap_kw=None, batt_chg_cap_kw=None,
-                 charge_early_w=0.0):
+                 charge_early_w=0.0,
+                 vdt_headroom_pct=0.0):
     """`load_kwh` = spotreba zákazníka [kWh/perióda] (net-meter setup): pv + di + im − ex − ch − cu = load.
     Ak má profil naimportovanú spotrebu, predáva sa najprv self-consumption (zadarmo),
     zvyšok ide do siete/batérie. Pri load > pv treba import alebo battery discharge.
@@ -123,6 +124,17 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     _plan_socmin = socmin
     if _soc_reserve_pct > 0 and _os_res.environ.get("PLAN_SOC_RESERVE", "1") != "0":
         _plan_socmin = min(socmin + batt_kwh * _soc_reserve_pct / 100.0, soc0)
+    # VDT-HEADROOM (2026-07-07, user „rezervovať VDT pásmo v pláne"): DAM plán dostane
+    # STROPOVÝ headroom (SOC ≤ soc_max − vdt_headroom_pct) — to pásmo ostane VOĽNÉ pre VDT
+    # dokupy → dokup má kam ísť a committed DAM+VDT neprekročí fyzický strop (koniec „pretečie
+    # cez SOC"). Symetrické k _plan_socmin (podlaha). Cap: NIKDY pod soc0 (aby nevznikla
+    # infeasibilita keď profil štartuje vysoko). Default 0 = golden bit-exact. Kill-switch
+    # PLAN_SOC_RESERVE=0 (zdieľaný). Aplikuje sa LEN na medzislotové sloty; terminál ostáva
+    # na socmax (rešpektuje explicitný terminal_soc).
+    _vdt_headroom_pct = max(0.0, min(50.0, float(vdt_headroom_pct or 0.0)))
+    _plan_socmax = socmax
+    if _vdt_headroom_pct > 0 and _os_res.environ.get("PLAN_SOC_RESERVE", "1") != "0":
+        _plan_socmax = max(socmax - batt_kwh * _vdt_headroom_pct / 100.0, soc0)
     if terminal_soc_pct is not None:
         term = batt_kwh * float(terminal_soc_pct) / 100
     else:
@@ -231,9 +243,11 @@ def optimize_day(pv_kwh, price_eur, *, batt_kw=100.0, batt_kwh=200.0,
     _term_floor = socmin if block_planned_discharge else term
     for t in range(T):                                       # soc
         # PLAN-SOC-RESERVE: medzislotová podlaha = _plan_socmin (min+reserve, capnuté na soc0).
-        # Terminál ostáva na _term_floor (rešpektuje explicitný terminal_soc / block-discharge).
+        # VDT-HEADROOM: medzislotový strop = _plan_socmax (max−headroom, cap na soc0).
+        # Terminál ostáva na _term_floor..socmax (rešpektuje explicitný terminal_soc / block-discharge).
         lo = _term_floor if t == T-1 else _plan_socmin
-        bounds.append((lo, socmax))
+        hi = socmax if t == T-1 else _plan_socmax
+        bounds.append((lo, hi))
 
     # voliteľné inequality stropy: zbieram riadky do listu
     A_ub_rows, b_ub_vals = [], []

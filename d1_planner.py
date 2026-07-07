@@ -289,6 +289,9 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
     charge_early_w = float(pp.get("plan_charge_early_w", 0.0) or 0.0)
     # PLAN-SOC-RESERVE (2026-07-05): reserve pre plán (headroom pre VDT). 0 = vyp/golden.
     soc_reserve_pct = float(pp.get("soc_reserve_pct", 0.0) or 0.0)
+    # VDT-HEADROOM (2026-07-07): stropový headroom v D-1 pláne vyhradený pre VDT dokupy
+    # (SOC ≤ max−headroom) → dokup má miesto, nič nepretečie. 0 = vyp/golden.
+    vdt_headroom_pct = float(pp.get("vdt_headroom_pct", 0.0) or 0.0)
     # Stropy denného obchodovania (kWh/deň). Override z volania má prednosť pred profile defaultom.
     # 0 alebo None znamená "bez stropu".
     def _opt_float(v):
@@ -400,6 +403,7 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
             max_import_kwh_day=max_import_kwh_day,
             charge_early_w=charge_early_w,
             soc_reserve_pct=soc_reserve_pct,
+            vdt_headroom_pct=vdt_headroom_pct,
         )
     except Exception as e:
         return {"ok": False, "error": f"optimize_day zlyhal: {e}",

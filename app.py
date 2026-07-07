@@ -902,6 +902,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
             soc_max_pct=float(fp.get("soc_max", DEF["soc_max"])),
             soc_init_pct=_soc_init_use,
             soc_reserve_pct=float(fp.get("soc_reserve_pct", 0.0) or 0.0),
+            vdt_headroom_pct=float(fp.get("vdt_headroom_pct", 0.0) or 0.0),
             rt_grid_reserve_pct=float(fp.get("rt_grid_reserve_pct", 0.0) or 0.0),
             terminal_soc_pct=_resolve_terminal_soc(date_iso, fp, price_arr),
             grid_kw=float(fp.get("grid_kw", DEF["grid_kw"])),
@@ -1113,6 +1114,7 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                                   soc_max_pct=float(fp.get("soc_max", DEF["soc_max"])),
                                   soc_init_pct=_soc_init_use15,
                                   soc_reserve_pct=float(fp.get("soc_reserve_pct", 0.0) or 0.0),
+                                  vdt_headroom_pct=float(fp.get("vdt_headroom_pct", 0.0) or 0.0),
                                   rt_grid_reserve_pct=float(fp.get("rt_grid_reserve_pct", 0.0) or 0.0),
                                   terminal_soc_pct=_resolve_terminal_soc(
                                       date_iso, fp,
