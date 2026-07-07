@@ -121,6 +121,34 @@ def _build_pv_kwh(profile_params: Dict[str, Any], date: dt.date,
     return np.zeros(slots, dtype=float)
 
 
+def _forecast_degenerate_reason(arr) -> Optional[str]:
+    """ZERO-FORECAST GUARD (2026-07-07): vráti dôvod, ak je forecast cien degenerovaný
+    (samé nuly / plochá krivka = pokazený cenový model alebo prázdna história), inak None.
+
+    Koreň „strata ako hrom" (VW_simulacia_2, 07-05→07-07): autoplan o 09:00 dostal
+    forecast = samé nuly → uložil bezcenný D-1 plán (0..0 ceny → žiadna DAM arbitráž →
+    dt=0). Plán je immutable → nula sa zapiekla. Guard: degenerovaný forecast sa NIKDY
+    nesmie skomitovať — volajúci má radšej zlyhať (plán sa neuloží, autoplan skúsi znova
+    keď sú dáta/model pripravené) než uložiť plochý nulový plán.
+
+    Kill-switch FORECAST_DEGENERATE_GUARD=0.
+    """
+    import os as _os_g
+    if _os_g.environ.get("FORECAST_DEGENERATE_GUARD", "1") == "0":
+        return None
+    a = np.asarray(arr, float)
+    fin = a[np.isfinite(a)]
+    if fin.size < 24:
+        return f"príliš málo platných hodnôt ({fin.size})"
+    nz = int((np.abs(fin) > 0.01).sum())
+    spread = float(fin.max() - fin.min())
+    if nz == 0:
+        return "samé nuly (0 nenulových cien)"
+    if spread < 0.5:
+        return f"plochá krivka (spread {spread:.3f} €/MWh) — žiadny arbitrážny signál"
+    return None
+
+
 def _forecast_prices_15m(pp: Dict[str, Any], date: dt.date, market: str = None) -> np.ndarray:
     """96 × €/MWh PREDIKOVANÝCH cien pre daný deň — IDENTICKÝ forecast ako _gen_one_plan
     (app.py): hodinová ISOT predikcia (market-aware model na _isot_history + počasie) →
@@ -153,6 +181,7 @@ def _forecast_prices_15m(pp: Dict[str, Any], date: dt.date, market: str = None) 
         raise RuntimeError(f"forecast predikcia neúplná pre {d} ({len(ph)}/24)")
     if getattr(_pm, "_clip", None):                              # anti-runaway clip
         ph = np.clip(ph, _pm._clip[0], _pm._clip[1])
+    _out96 = None
     try:
         from price_model_15m import load_cached as _pm15_load
         _m15 = _pm15_load("out/price_model_15m.joblib")
@@ -160,10 +189,21 @@ def _forecast_prices_15m(pp: Dict[str, Any], date: dt.date, market: str = None) 
             p96 = np.asarray(_m15.predict_shape(ph, d, _wx2[["time", "gti", "temp", "cloud"]]), float)[:96]
             if len(p96) >= 96:
                 print(f"[15-MIN] {d.isoformat()}: PREDIKOVANÝ plán (autoplan) → 15-min MODEL na ISOT predikcii")
-                return p96
+                _out96 = p96
     except Exception as _e15:
         print(f"[15-MIN] {d.isoformat()}: 15-min model zlyhal ({_e15}) → flat upsample")
-    return np.repeat(ph, 4)
+    if _out96 is None:
+        _out96 = np.repeat(ph, 4)
+    # ZERO-FORECAST GUARD (2026-07-07): degenerovaný forecast (samé nuly / plochá krivka)
+    # sa NIKDY nesmie skomitovať ako plán. Fail-loud → compute_d1_plan vráti ok:False →
+    # autoplan neuloží → skúsi znova neskôr keď sú dáta/model pripravené. Rieši dt=0.
+    _deg = _forecast_degenerate_reason(_out96)
+    if _deg:
+        raise RuntimeError(
+            f"ZERO-FORECAST GUARD: degenerovaný forecast cien pre {d.isoformat()} "
+            f"({_deg}) → plán sa NEuloží (pokazený model/história). "
+            f"Kill: FORECAST_DEGENERATE_GUARD=0")
+    return _out96
 
 
 def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,

@@ -840,6 +840,17 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
         price_arr = day.pred_isot.values * float(fp.get("price_scale", 1.0))
         if getattr(_pm60, "_clip", None):
             price_arr = np.clip(price_arr, _pm60._clip[0], _pm60._clip[1])
+        # ZERO-FORECAST GUARD (2026-07-07): degenerovaný forecast (nuly/plochá krivka) sa
+        # nesmie skomitovať ako plán (dt=0 = „strata"). Fail-loud. Kill: FORECAST_DEGENERATE_GUARD=0.
+        try:
+            import d1_planner as _d1g60
+            _deg60 = _d1g60._forecast_degenerate_reason(price_arr)
+        except Exception:
+            _deg60 = None
+        if _deg60:
+            raise RuntimeError(
+                f"ZERO-FORECAST GUARD: forecast cien pre {date_iso} degenerovaný "
+                f"({_deg60}) → plán sa negeneruje. Kill: FORECAST_DEGENERATE_GUARD=0")
         zbw = float(fp.get("zco_bias_w", 0.0))
         decision_price = lsim._apply_zco_bias(price_arr, d, float(pv_arr.sum()), 60, zbw)
         npd = bool(fp.get("no_planned_discharge", False))
@@ -1034,6 +1045,19 @@ def _gen_one_plan(date_iso: str, step_min: int, kind: str, fp: dict) -> str:
                         print(f"[15-MIN] {date_iso}: PREDIKOVANÝ plán → flat upsample hodinovej predikcie")
             except Exception as _ep15:
                 print(f"[15-MIN] {date_iso}: cenový fallback (predikcia) zlyhal: {_ep15}")
+            # ZERO-FORECAST GUARD (2026-07-07): degenerovaný predikčný forecast (samé nuly /
+            # plochá krivka = pokazený model/história) sa NESMIE skomitovať — inak vznikne
+            # bezcenný plán (0..0 ceny → žiadna DAM arbitráž → dt=0 = „strata"). Fail-loud.
+            try:
+                import d1_planner as _d1g
+                _degp = _d1g._forecast_degenerate_reason(price15)
+            except Exception:
+                _degp = None
+            if _degp:
+                raise RuntimeError(
+                    f"ZERO-FORECAST GUARD: predikčný forecast cien pre {date_iso} degenerovaný "
+                    f"({_degp}) → plán sa negeneruje (pokazený model/história). "
+                    f"Kill: FORECAST_DEGENERATE_GUARD=0")
         n = min(len(pv15), len(price15))
         npd = bool(fp.get("no_planned_discharge", False))
         rtf = bool(fp.get("rt_freedom", True))
