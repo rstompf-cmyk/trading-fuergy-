@@ -161,14 +161,17 @@ services:
       # FEASIBILITY-UNIFY KROK 3 (2026-06-28): VDT clip cez core.feasibility.gate_extras
       # (1 brána SOC∧grid∧výkon z 1 reálneho SOC) namiesto 3 prekrývajúcich poistiek.
       # LEN DEV na A/B test (prod bez flagu = pôvodné 3 clipy). Po overení re-simom = default.
-      VDT_FEASIBILITY_UNIFIED: "1"
+      # #81 ČISTÝ MATCHER TEST (2026-07-08): VŠETKY VDT clipy OFF na deve → holý párový matcher,
+      # nech vidno, či sám dáva čisté páry (nákup↔predaj) bez krytia DAM a bez orezávania.
+      VDT_FEASIBILITY_UNIFIED: "0"
+      VDT_NOMINATION_CLIP: "0"
       # SOC-CARRYOVER-PLAN (2026-07-02): D-1 plán štartuje z REÁLNEHO prenosového SOC
       # (carried_soc_for_date), nie z fixného soc_init → plán nekáže nabíjať pri 100 %/vybíjať
       # pri 5 % (fantóm, čo SOC-clip maskuje). Test na deve, po overení (Nedodané klesne) = prod.
       SOC_CARRYOVER_PLAN: "1"
       # VDT-CLEANUP (2026-07-02): bezpečnostná sieť — keď vznikne nedodateľný slot, korekčný
-      # obchod (časová decay, break-even/limited-loss). Beží v advisor/run_and_cache.
-      VDT_CLEANUP: "1"
+      # obchod (časová decay, break-even/limited-loss). #81 test = OFF (VDT = len matcher páry).
+      VDT_CLEANUP: "0"
 
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:8000/me"]
@@ -332,7 +335,7 @@ services:
       TZ: "Europe/Bratislava"
       USE_DB: "1"
       VDT_TRADE_CONTROL: "1"
-      VDT_TRADE_SEC: "10"
+      VDT_TRADE_SEC: "5"
       # VDT-CLEANUP (2026-07-02): bezpečnostná sieť aj v živom traderi (per-tick run_and_cache).
       VDT_CLEANUP: "1"
     healthcheck:
