@@ -442,6 +442,13 @@ def audit_action(profile: str,
     except Exception:
         pass
     soc_reserve = max(0.0, min(50.0, soc_reserve))
+    # VDT-HEADROOM-ABSOLUTE (2026-07-08): profilový vdt_headroom_pct (DAM plán ≤ max−h) →
+    # VDT audit môže byť prísnejší (delta filter, viď nižšie), lebo pásmo dá miesto.
+    _vdt_headroom_pct = 0.0
+    try:
+        _vdt_headroom_pct = float((_prof_obj.get("plan") or {}).get("vdt_headroom_pct", 0.0) or 0.0)
+    except Exception:
+        _vdt_headroom_pct = 0.0
     # Bug VDT-SOC-RANGE (2026-06-11, user): VDT obchody sa auditujú proti ČISTÉMU
     # rozsahu batérie z profilu (soc_min..soc_max, štandardne 5-100) — BEZ rezervy.
     # Rezerva je headroom pre RT/auto_control reakciu, nie pre intraday obchod;
@@ -589,7 +596,17 @@ def audit_action(profile: str,
     def _soc_excess(_path):
         return sum(max(0.0, _x - soc_max_eff) + max(0.0, soc_min_eff - _x) for _x in _path)
 
-    if _vdt_noworsen:
+    if (_is_vdt and _vdt_headroom_pct > 0.0
+            and os.environ.get("VDT_HEADROOM_ABSOLUTE", "1") != "0"):
+        # VDT-HEADROOM-ABSOLUTE (2026-07-08, user „VDT nakupuje a nemá na to SOC"): profil s
+        # vyhradeným VDT pásmom (DAM plán ≤ max−h) → DELTA filter: VDT smie robiť len to, čo
+        # NEPRIDÁ novú SOC violáciu (dokup nad strop sa oreže/zamietne; predaj/oprava prejde aj
+        # keď baseline drift). Pásmo zaručí, že to nezablokuje legitímne VDT (na rozdiel od
+        # absolútneho na plnom 5-100 pláne, ktorý blokoval všetko). Kill VDT_HEADROOM_ABSOLUTE=0.
+        _base_viols_set = {(v[0], v[1]) for v in check_violations(
+            _base_path, _base_dirs, soc_min_eff_pct=soc_min_eff,
+            soc_max_eff_pct=soc_max_eff, from_slot=si)}
+    elif _vdt_noworsen:
         _base_viols_set = None                    # signál: použi excess no-worsen (nižšie)
         _base_excess = _soc_excess(_base_path)
     elif _is_vdt:
