@@ -579,6 +579,45 @@ def compute_current_state(profile: str,
             current_soc_source = (f"štart dňa carryover {float(soc_path[0]):.1f}% "
                                   f"(realiz. trace dnes ešte nedostupný)")
 
+    # VDT-NOMINATION-CLIP (2026-07-08, user „VDT nakupuje a nemá na to SOC / pretečie cez SOC"):
+    # committed VDT nominácia (paper trades) sa GREEDY oreže tak, aby SOC trajektória DAM+VDT
+    # z REÁLNEHO SOC NIKDY nevyšla z [soc_min, soc_max]. Deterministické, imúnne voči kumulácii
+    # per-obchodných auditov (tie púšťajú, lebo každý obchod je jednotlivo feasible, spolu nie).
+    # Orezáva LEN VDT (DAM je posvätný trhový záväzok). Aktívne len keď profil rezervuje VDT
+    # pásmo (vdt_headroom_pct>0) — vtedy má VDT vyhradené miesto a clip je poistka na hranici.
+    # Kill-switch VDT_NOMINATION_CLIP=0. Jediný zdroj committed stavu → oprava platí pre audit,
+    # odchýlku aj zobrazenie naraz.
+    try:
+        _hr_nc = 0.0
+        try:
+            import profiles as _pr_nc
+            _hr_nc = float(((_pr_nc.load_profile(profile) or {}).get("plan") or {})
+                           .get("vdt_headroom_pct", 0.0) or 0.0)
+        except Exception:
+            _hr_nc = 0.0
+        if (_hr_nc > 0.0 and os.environ.get("VDT_NOMINATION_CLIP", "1") != "0"
+                and float(cap) > 0 and vdt_kwh and dam_kwh):
+            vdt_kwh = list(vdt_kwh)
+            _soc_nc = float(current_soc)
+            _n_nc = min(96, len(vdt_kwh), len(dam_kwh))
+            _nclip = 0
+            for _i in range(int(cur_idx), _n_nc):
+                _net = float(dam_kwh[_i]) + float(vdt_kwh[_i])          # + vybíjanie, − nabíjanie
+                _ds = (-_net / max(eff_d, 0.01) if _net >= 0 else -_net * eff_c) / float(cap) * 100.0
+                _new = _soc_nc + _ds
+                if _new > soc_max + 1e-9:                               # prekročil strop → menej nabíjaj
+                    vdt_kwh[_i] = float(vdt_kwh[_i]) + (_new - soc_max) / 100.0 * float(cap) / max(eff_c, 0.01)
+                    _new = soc_max; _nclip += 1
+                elif _new < soc_min - 1e-9:                             # pod podlahu → menej vybíjaj
+                    vdt_kwh[_i] = float(vdt_kwh[_i]) - (soc_min - _new) / 100.0 * float(cap) * max(eff_d, 0.01)
+                    _new = soc_min; _nclip += 1
+                _soc_nc = _new
+            if _nclip > 0:
+                print(f"[VDT-NOMINATION-CLIP] {profile}: orezaných {_nclip} slotov "
+                      f"(committed VDT držaný v SOC [{soc_min:.0f},{soc_max:.0f}]%)")
+    except Exception as _e_nc:
+        print(f"[VDT-NOMINATION-CLIP] {profile}: {_e_nc}")
+
     # 6. Data completeness final check
     data_completeness = (len(missing) == 0)
 
