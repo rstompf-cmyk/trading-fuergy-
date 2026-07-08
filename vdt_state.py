@@ -597,24 +597,34 @@ def compute_current_state(profile: str,
             _hr_nc = 0.0
         if (_hr_nc > 0.0 and os.environ.get("VDT_NOMINATION_CLIP", "1") != "0"
                 and float(cap) > 0 and vdt_kwh and dam_kwh):
+            # Model: DAM prvý (posvätný trhový záväzok) → clip SOC na [min,max];
+            # VDT potom vyplní LEN zvyšné feasible miesto. VDT sa VŽDY len znižuje smerom
+            # k nule (nikdy nefabrikuje protiobchod — nákup pri podlahe / predaj pri strope).
             vdt_kwh = list(vdt_kwh)
             _soc_nc = float(current_soc)
             _n_nc = min(96, len(vdt_kwh), len(dam_kwh))
             _nclip = 0
             for _i in range(int(cur_idx), _n_nc):
-                _net = float(dam_kwh[_i]) + float(vdt_kwh[_i])          # + vybíjanie, − nabíjanie
-                _ds = (-_net / max(eff_d, 0.01) if _net >= 0 else -_net * eff_c) / float(cap) * 100.0
-                _new = _soc_nc + _ds
-                if _new > soc_max + 1e-9:                               # prekročil strop → menej nabíjaj
-                    vdt_kwh[_i] = float(vdt_kwh[_i]) + (_new - soc_max) / 100.0 * float(cap) / max(eff_c, 0.01)
-                    _new = soc_max; _nclip += 1
-                elif _new < soc_min - 1e-9:                             # pod podlahu → menej vybíjaj
-                    vdt_kwh[_i] = float(vdt_kwh[_i]) - (soc_min - _new) / 100.0 * float(cap) * max(eff_d, 0.01)
-                    _new = soc_min; _nclip += 1
-                _soc_nc = _new
+                _d = float(dam_kwh[_i])                                  # + vybíjanie, − nabíjanie
+                _dds = (-_d / max(eff_d, 0.01) if _d >= 0 else -_d * eff_c) / float(cap) * 100.0
+                _soc_after_dam = min(soc_max, max(soc_min, _soc_nc + _dds))
+                _v = float(vdt_kwh[_i])
+                if _v < 0:                                              # VDT nákup/nabíjanie
+                    _room = max(0.0, soc_max - _soc_after_dam) / 100.0 * float(cap) / max(eff_c, 0.01)
+                    _vn = -min(-_v, _room)
+                elif _v > 0:                                            # VDT predaj/vybíjanie
+                    _avail = max(0.0, _soc_after_dam - soc_min) / 100.0 * float(cap) * max(eff_d, 0.01)
+                    _vn = min(_v, _avail)
+                else:
+                    _vn = 0.0
+                if abs(_vn - _v) > 1e-6:
+                    _nclip += 1
+                vdt_kwh[_i] = _vn
+                _vds = (-_vn / max(eff_d, 0.01) if _vn >= 0 else -_vn * eff_c) / float(cap) * 100.0
+                _soc_nc = min(soc_max, max(soc_min, _soc_after_dam + _vds))
             if _nclip > 0:
                 print(f"[VDT-NOMINATION-CLIP] {profile}: orezaných {_nclip} slotov "
-                      f"(committed VDT držaný v SOC [{soc_min:.0f},{soc_max:.0f}]%)")
+                      f"(VDT vyplní len feasible miesto po DAM, [{soc_min:.0f},{soc_max:.0f}]%)")
     except Exception as _e_nc:
         print(f"[VDT-NOMINATION-CLIP] {profile}: {_e_nc}")
 

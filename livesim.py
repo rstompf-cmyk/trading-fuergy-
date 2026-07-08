@@ -1549,23 +1549,37 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                                     _smn = float(getattr(cfg, "soc_min", 0.05) or 0.0) * 100.0
                                     _smx = float(getattr(cfg, "soc_max", 1.0) or 1.0) * 100.0
                                     _damsoc = [float(x) for x in sch["soc_pct"].values[:96]]
+                                    _dambatt = [float(_sch_batt_dam_pure.values[_i]) for _i in range(96)]  # kW +vyb −nab
                                     vdt_arr_kw = [float(vdt_arr_kw[i] or 0.0) for i in range(96)]
-                                    _vcum = 0.0; _nc = 0
+                                    # seed = SOC na štarte dňa (spätne z damsoc[0] a DAM v slote 0)
+                                    _d0 = _dambatt[0] * 0.25
+                                    _d0s = (-_d0 / max(_edn, .01) if _d0 >= 0 else -_d0 * _ecn) / _capn * 100.0
+                                    _soc = min(_smx, max(_smn, _damsoc[0] - _d0s))
+                                    _nc = 0
                                     for _i in range(96):
-                                        _v = vdt_arr_kw[_i]                       # + vybíjanie, − nabíjanie (kW)
-                                        _vkwh = _v * 0.25
-                                        _dv = (-_vkwh / max(_edn, .01) if _vkwh >= 0 else -_vkwh * _ecn) / _capn * 100.0
-                                        _vcum += _dv
-                                        _comb = _damsoc[_i] + _vcum
-                                        if _comb > _smx + 1e-9:                   # nad strop → menej nabíjaj
-                                            vdt_arr_kw[_i] = _v + (_comb - _smx) / 100.0 * _capn / max(_ecn, .01) / 0.25
-                                            _vcum -= (_comb - _smx); _nc += 1
-                                        elif _comb < _smn - 1e-9:                 # pod podlahu → menej vybíjaj
-                                            vdt_arr_kw[_i] = _v - (_smn - _comb) / 100.0 * _capn * max(_edn, .01) / 0.25
-                                            _vcum += (_smn - _comb); _nc += 1
+                                        # DAM prvý (posvätný) → clip SOC; VDT vyplní LEN zvyšné feasible miesto,
+                                        # znižuje sa VŽDY len k nule (nefabrikuje protiobchod).
+                                        _db = _dambatt[_i] * 0.25
+                                        _dds = (-_db / max(_edn, .01) if _db >= 0 else -_db * _ecn) / _capn * 100.0
+                                        _sad = min(_smx, max(_smn, _soc + _dds))
+                                        _v = vdt_arr_kw[_i]
+                                        if _v < 0:                                # VDT nákup/nabíjanie
+                                            _room = max(0.0, _smx - _sad) / 100.0 * _capn / max(_ecn, .01)
+                                            _vn = -min(-_v * 0.25, _room) / 0.25
+                                        elif _v > 0:                              # VDT predaj/vybíjanie
+                                            _avail = max(0.0, _sad - _smn) / 100.0 * _capn * max(_edn, .01)
+                                            _vn = min(_v * 0.25, _avail) / 0.25
+                                        else:
+                                            _vn = 0.0
+                                        if abs(_vn - _v) > 1e-6:
+                                            _nc += 1
+                                        vdt_arr_kw[_i] = _vn
+                                        _vk = _vn * 0.25
+                                        _vds = (-_vk / max(_edn, .01) if _vk >= 0 else -_vk * _ecn) / _capn * 100.0
+                                        _soc = min(_smx, max(_smn, _sad + _vds))
                                     if _nc > 0:
                                         print(f"[VDT-NOMINATION-CLIP livesim] {_profile} {d.isoformat()}: "
-                                              f"orezaných {_nc} slotov nominácie (DAM+VDT v SOC [{_smn:.0f},{_smx:.0f}]%)")
+                                              f"orezaných {_nc} slotov nominácie (VDT vyplní feasible miesto po DAM [{_smn:.0f},{_smx:.0f}]%)")
                             except Exception as _e_ncl:
                                 print(f"[VDT-NOMINATION-CLIP livesim] {_e_ncl}")
                             vdt_per_min = [float(vdt_arr_kw[j] or 0.0) for j in pidx15]
