@@ -1529,6 +1529,45 @@ def advance(case: str, start_date, port: str = "8000", now=None, base_case=None,
                         pidx15 = [min(95, max(0, _period_index(t, day, 15))) for t in tr["ts15"]]
                         vdt_arr_kw = _vdt_batt_kw_for(_profile, d.isoformat())   # #27: closed pre históriu v rozsahu
                         if isinstance(vdt_arr_kw, list) and len(vdt_arr_kw) >= 96:
+                            # VDT-NOMINATION-CLIP (2026-07-08, user „počítaj reálnu prácu, nie
+                            # unclipped SOC"): committed VDT (raw, pre nomináciu+odchýlku) greedy
+                            # orež tak, aby DAM_plán_SOC + VDT nikdy nevyšlo z [min,max]. Inak graf
+                            # ukazuje nabíjanie pri 100 % a POKUTA sa počíta voči nedodateľnej
+                            # nominácii. Používa existujúcu DAM SOC krivku (sch.soc_pct), orezáva
+                            # LEN VDT. Gated: headroom profil + kill VDT_NOMINATION_CLIP=0.
+                            # Konzistentné s vdt_state.compute_current_state.
+                            try:
+                                import profiles as _pr_ncl
+                                _hr_ncl = float(((_pr_ncl.load_profile(_profile) or {}).get("plan") or {})
+                                                .get("vdt_headroom_pct", 0.0) or 0.0)
+                                _capn = float(getattr(cfg, "batt_kwh", 0.0) or 0.0)
+                                if (_hr_ncl > 0.0 and os.environ.get("VDT_NOMINATION_CLIP", "1") != "0"
+                                        and _capn > 0 and hasattr(sch, "columns") and "soc_pct" in sch.columns
+                                        and len(sch) >= 96):
+                                    _ecn = float(getattr(cfg, "eff_c", 0.95) or 0.95)
+                                    _edn = float(getattr(cfg, "eff_d", 0.95) or 0.95)
+                                    _smn = float(getattr(cfg, "soc_min", 0.05) or 0.0) * 100.0
+                                    _smx = float(getattr(cfg, "soc_max", 1.0) or 1.0) * 100.0
+                                    _damsoc = [float(x) for x in sch["soc_pct"].values[:96]]
+                                    vdt_arr_kw = [float(vdt_arr_kw[i] or 0.0) for i in range(96)]
+                                    _vcum = 0.0; _nc = 0
+                                    for _i in range(96):
+                                        _v = vdt_arr_kw[_i]                       # + vybíjanie, − nabíjanie (kW)
+                                        _vkwh = _v * 0.25
+                                        _dv = (-_vkwh / max(_edn, .01) if _vkwh >= 0 else -_vkwh * _ecn) / _capn * 100.0
+                                        _vcum += _dv
+                                        _comb = _damsoc[_i] + _vcum
+                                        if _comb > _smx + 1e-9:                   # nad strop → menej nabíjaj
+                                            vdt_arr_kw[_i] = _v + (_comb - _smx) / 100.0 * _capn / max(_ecn, .01) / 0.25
+                                            _vcum -= (_comb - _smx); _nc += 1
+                                        elif _comb < _smn - 1e-9:                 # pod podlahu → menej vybíjaj
+                                            vdt_arr_kw[_i] = _v - (_smn - _comb) / 100.0 * _capn * max(_edn, .01) / 0.25
+                                            _vcum += (_smn - _comb); _nc += 1
+                                    if _nc > 0:
+                                        print(f"[VDT-NOMINATION-CLIP livesim] {_profile} {d.isoformat()}: "
+                                              f"orezaných {_nc} slotov nominácie (DAM+VDT v SOC [{_smn:.0f},{_smx:.0f}]%)")
+                            except Exception as _e_ncl:
+                                print(f"[VDT-NOMINATION-CLIP livesim] {_e_ncl}")
                             vdt_per_min = [float(vdt_arr_kw[j] or 0.0) for j in pidx15]
                 except Exception:
                     pass
