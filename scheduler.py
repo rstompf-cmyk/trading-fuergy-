@@ -405,6 +405,25 @@ def job_vdt_advisor():
                     # s DAM commitom) sa zahodil → ledger nevyvážený. VDT overlay (full_plan − DAM)
                     # je SOC-neutral (párový), takže logujeme extra PODĽA JEHO ZNAMIENKA cez všetky
                     # dnešné sloty → Σ extra ≈ 0 → kúpené ≈ predané. Cena = order-book pre smer extra.
+                    # #81 VDT-COPLAN: pred koherentným zápisom full_plan zmaž BUDÚCE (za gate_lead)
+                    # VDT paper trades → committed VDT = JEDEN koherentný párový plán z tohto tiku,
+                    # nie patchwork zo starých tickov. Uzavreté (v/za gate) ostávajú immutable.
+                    # Kill VDT_COPLAN_CLEAR=0. Matcher plánuje budúcnosť GIVEN uzavreté (base).
+                    try:
+                        import math as _math_cp
+                        _gl_cp = 30.0
+                        try:
+                            _gl_cp = float((_pr.load_profile(prof_name).get("plan") or {})
+                                           .get("cleanup_gate_lead_min", 30.0) or 30.0)
+                        except Exception:
+                            _gl_cp = 30.0
+                        _now_cp = _dt_sx.datetime.now()
+                        _from_slot_cp = int(_math_cp.ceil((_now_cp.hour * 60 + _now_cp.minute + _gl_cp) / 15.0))
+                        _nrem_cp = _adv.clear_future_vdt_paper_trades(prof_name, _day_iso_sx, _from_slot_cp)
+                        if _nrem_cp > 0:
+                            _log("vdt_advisor", f"{prof_name}: #81 clear {_nrem_cp} budúcich VDT slotov (koherentný prepis)")
+                    except Exception as _e_cp:
+                        pass
                     _last_idx_sx = -1
                     for _fp_i, entry in enumerate(fp):
                         sl = str(entry.get("slot", ""))

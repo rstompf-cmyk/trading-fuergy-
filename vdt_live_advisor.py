@@ -1148,6 +1148,69 @@ def _is_sk_market() -> bool:
         return True   # fallback: nepoznáme market — radšej dovoľ (default beh)
 
 
+def clear_future_vdt_paper_trades(profile: str, day_iso: str, from_slot_idx: int) -> int:
+    """#81 VDT-COPLAN: pred koherentným prepísaním budúcich VDT párov zmaž DNEŠNÉ VDT paper
+    trades na slotoch >= from_slot_idx (re-optimalizovateľná BUDÚCNOSŤ, za gate_lead). Uzavreté
+    obchody (< from_slot_idx, v/za gate) sa NEMAŽÚ — VDT-IMMUTABLE (uzavretý obchod = nemenný).
+    Minulé dni nedotknuté. Vráti počet zmazaných riadkov. Kill-switch VDT_COPLAN_CLEAR=0 → no-op.
+
+    Zmysel: matcher každý tik prepočíta koherentnú sadu párov pre budúcnosť; bez tohto clear-u
+    ostával v CSV patchwork z rôznych tickov (staré sloty sa nikdy neprepísali) → rozbité páry.
+    """
+    import csv
+    if os.environ.get("VDT_COPLAN_CLEAR", "1") == "0":
+        return 0
+    if not _is_sk_market():
+        return 0
+    try:
+        path = paper_trades_csv_path(profile)
+    except Exception:
+        return 0
+    if not path or not os.path.exists(path):
+        return 0
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as _f:
+            rows = list(csv.reader(_f))
+    except Exception:
+        return 0
+    if not rows:
+        return 0
+    h = rows[0]
+    ti = h.index("ts") if "ts" in h else 0
+    pi = h.index("profile") if "profile" in h else 1
+    si = h.index("slot") if "slot" in h else 2
+    ai = h.index("action") if "action" in h else 3
+    day10 = str(day_iso)[:10]
+    kept = [h]; removed = 0
+    for r in rows[1:]:
+        if len(r) <= max(ti, pi, si, ai):
+            kept.append(r); continue
+        _slot = str(r[si] or "")
+        _sidx = -1
+        if ":" in _slot and len(_slot) >= 5:
+            try:
+                _sidx = (int(_slot[:2]) * 60 + int(_slot[3:5])) // 15
+            except Exception:
+                _sidx = -1
+        _is_today = (r[ti] or "")[:10] == day10
+        _is_prof = r[pi] == str(profile or "")
+        _is_vdt = str(r[ai] or "").upper() in ("BUY", "SELL", "CHARGE", "DISCHARGE")
+        if _is_today and _is_prof and _is_vdt and _sidx >= int(from_slot_idx):
+            removed += 1
+            continue     # zmaž budúci re-optimalizovateľný VDT obchod
+        kept.append(r)
+    if removed > 0:
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w", newline="", encoding="utf-8") as _f:
+                csv.writer(_f).writerows(kept)
+            os.replace(tmp, path)
+        except Exception as _e_cl:
+            print(f"[clear_future_vdt_paper_trades] {profile}: {_e_cl}")
+            return 0
+    return removed
+
+
 def append_extra_paper_trade(profile: str, slot: str, action: str,
                                 kwh: float, price_eur_mwh: float,
                                 reason: str, soc_pct: float = 0.0,
