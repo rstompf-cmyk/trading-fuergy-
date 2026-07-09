@@ -4535,6 +4535,20 @@ def _dentrh_form(msg=""):
     _rf_default_w = _plan.get("regfilter_param1_default_w", 0) or 0
     _rf_arr = _plan.get("regfilter_param1_w") or []
     _rf_csv = ", ".join(str(int(round(float(x)))) for x in _rf_arr) if (isinstance(_rf_arr, list) and len(_rf_arr) == 96) else ""
+    # REGFILTER 96× 15-min mriežka: prefill z uloženého poľa, inak default hodnota
+    if isinstance(_rf_arr, list) and len(_rf_arr) == 96:
+        _rf_vals96 = [int(round(float(x or 0))) for x in _rf_arr]
+    else:
+        _rf_vals96 = [int(round(float(_rf_default_w or 0)))] * 96
+    def _rf_row(h):
+        _c = "".join(
+            f'<td style="padding:1px"><input class="rf-cell" data-si="{h*4+q}" type="number" step="1" '
+            f'value="{_rf_vals96[h*4+q]}" style="width:74px;padding:3px;border:1px solid #ddd;'
+            f'border-radius:4px;font-size:12px;text-align:right"></td>'
+            for q in range(4))
+        return (f'<tr><td style="font-weight:600;color:#E65100;padding:1px 6px;text-align:right">'
+                f'{h:02d}:</td>{_c}</tr>')
+    _rf_grid_html = "".join(_rf_row(h) for h in range(24))
     def _sel(v, opt):
         return " selected" if v == opt else ""
     # Distribučný poplatok — single source of truth (rovnaké ako form_page)
@@ -4829,8 +4843,34 @@ Ak zvolíš <b>dnešný deň</b>, dole uvidíš aj odporúčanie pre aktuálny 1
 <label style="display:flex;justify-content:space-between;gap:8px;margin:4px 0"><span>Default max odber [W]</span>
 <input name="regfilter_param1_default_w" type="number" step="1" value="{_rf_default_w}" style="padding:4px;border:1px solid #ccc;border-radius:6px"></label>
 </div>
-<label style="display:block;margin:8px 0 2px;color:#666;font-size:13px">Voliteľne: 96× 15-min hodnôt [W] (čiarkou/medzerou oddelené). Prázdne = použije sa default pre celý deň. Vyplnené (presne 96) = per-15-min rozvrh.</label>
-<textarea name="regfilter_param1_csv" rows="3" placeholder="napr. 50000, 50000, 40000, … (96 hodnôt)" style="width:100%;box-sizing:border-box;padding:6px;border:1px solid #ccc;border-radius:6px;font-family:monospace;font-size:12px">{_rf_csv}</textarea>
+<div style="display:flex;gap:10px;align-items:center;margin:10px 0 6px;flex-wrap:wrap">
+<button type="button" id="rf_fill_btn" style="background:#E65100;padding:6px 12px;font-size:13px">↧ Vyplniť default do všetkých slotov</button>
+<span style="color:#666;font-size:13px">96× 15-min hodnôt max odberu [W]. Zadaj default vyššie, klikni „Vyplniť", potom uprav jednotlivé sloty.</span>
+</div>
+<div style="overflow:auto;max-height:360px;border:1px solid #eee;border-radius:8px">
+<table style="border-collapse:collapse;font-size:12px;width:100%">
+<thead><tr style="position:sticky;top:0;background:#fff8e1;z-index:1">
+<th style="padding:5px 6px;text-align:right">Hod</th><th style="padding:5px">:00</th><th style="padding:5px">:15</th><th style="padding:5px">:30</th><th style="padding:5px">:45</th></tr></thead>
+<tbody>{_rf_grid_html}</tbody>
+</table></div>
+<textarea name="regfilter_param1_csv" id="rf_csv" style="display:none">{_rf_csv}</textarea>
+<script>
+(function(){{
+  function rfCollect(){{
+    var arr=[]; document.querySelectorAll('.rf-cell').forEach(function(c){{arr.push(c.value===''?'0':c.value);}});
+    var t=document.getElementById('rf_csv'); if(t) t.value=arr.join(',');
+  }}
+  document.querySelectorAll('.rf-cell').forEach(function(c){{c.addEventListener('input',rfCollect);}});
+  var fb=document.getElementById('rf_fill_btn');
+  if(fb) fb.addEventListener('click',function(){{
+    var d=document.querySelector('input[name=regfilter_param1_default_w]');
+    var dv=(d&&d.value!=='')?d.value:'0';
+    document.querySelectorAll('.rf-cell').forEach(function(c){{c.value=dv;}});
+    rfCollect();
+  }});
+  rfCollect();
+}})();
+</script>
 <p style="color:#666;font-size:13px;margin:6px 0 0">Rozvrh je <b>šablóna</b> — platí každý deň rovnako, kým ho nezmeníš. Na pozadí sa každú minútu skontroluje aktuálny 15-min slot a <b>zapíše len pri zmene</b> hodnoty (rovnaká hodnota = žiadny zápis, žiadny log). Každá zmena sa zaloguje. Reálny zápis na Bender ide len ak je zapnuté aj <code>enabled</code>+<code>control_enabled</code> v <a href="/realio">/realio</a> (poistky).</p></fieldset>
 <fieldset><legend>Export plánu (stĺpec + násobiteľ)</legend><div class="cols">
 <label>Stĺpec na export
