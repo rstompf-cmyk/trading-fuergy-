@@ -954,6 +954,97 @@ def write_setpoint(logical_name: str, value: float, source: str = "manual") -> D
     return out
 
 
+def write_regfilter_param1(value_w: float, source: str = "regfilter_plan",
+                             force: bool = False) -> Dict[str, Any]:
+    """REGFILTER (2026-07-08): zapíše REG_Regulation_Filter_Param1 (max odber zo siete, vo W)
+    na Bender. Hodnota je PRIAMO vo W (bez ×1000, na rozdiel od batt_setpoint_kw).
+
+    CHANGE-ONLY: ak je hodnota rovnaká ako naposledy ÚSPEŠNE zapísaná → NEpíše a NEloguje
+    (force=True to obíde, napr. prvý zápis po povolení). Pri zmene → write + audit log
+    (core.audit_log). Gated enabled+control_enabled (bezpečnostné poistky). Vráti dict s
+    'changed'/'skipped'.
+    """
+    cfg = load_config()
+    out: Dict[str, Any] = {"ok": False, "tag": "", "value": float(value_w),
+                           "changed": False, "skipped": False, "msg": ""}
+    tags_w = cfg.get("tags_write") or {}
+    tag = tags_w.get("regfilter_param1") or "REG_Regulation_Filter_Param1"
+    out["tag"] = tag
+    _last = (cfg.get("last_write") or {}).get("regfilter_param1")
+    # CHANGE-ONLY: rovnaká hodnota ako naposledy zapísaná → skip (bez write, bez log)
+    if (not force) and _last is not None and abs(float(_last) - float(value_w)) < 1e-6:
+        out["ok"] = True; out["skipped"] = True
+        out["msg"] = f"bez zmeny ({float(value_w):.0f} W) — neloguje sa"
+        return out
+    if not cfg.get("enabled"):
+        out["msg"] = "realio modul nie je enabled v configu"
+        return out
+    if not cfg.get("control_enabled"):
+        out["msg"] = "control_enabled=FALSE — write zakázaný (bezpečnostná poistka)"
+        return out
+    ts_ms = _minute_aligned_ms()
+    res = _send_tag_writes(cfg, [{"tag": tag, "value": float(value_w), "time": ts_ms}])
+    out["ok"] = res["ok"]
+    if res["ok"]:
+        cfg.setdefault("last_write", {})
+        cfg["last_write"]["regfilter_param1"] = float(value_w)
+        cfg["last_write"]["regfilter_param1_ts"] = dt.datetime.fromtimestamp(ts_ms / 1000).isoformat(timespec="seconds")
+        cfg["last_write"]["regfilter_param1_source"] = str(source)
+        save_config(cfg)
+        out["changed"] = True
+        # CHANGE-ONLY LOG — len pri reálnej zmene hodnoty
+        try:
+            from core.audit_log import log_event
+            log_event(actor="regfilter_writer", action="param1_change", tag=tag,
+                      old_w=(float(_last) if _last is not None else None),
+                      new_w=float(value_w), source=str(source),
+                      ts=cfg["last_write"]["regfilter_param1_ts"])
+        except Exception as _e_log:
+            print(f"[regfilter] audit log zlyhal: {_e_log}")
+        ts_str = dt.datetime.fromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d %H:%M:00")
+        out["msg"] = (f"✓ REG_Regulation_Filter_Param1 = {float(value_w):.0f} W @ {ts_str} "
+                      f"(zmena z {_last})")
+    else:
+        out["msg"] = res.get("msg") or "write zlyhal — všetky schémy"
+        out["tried"] = res.get("tried", [])
+        out["errors"] = res.get("errors", [])
+    return out
+
+
+def get_regfilter_plan(profile_name: str):
+    """REGFILTER: vráti (values_96_w: list[float] | None, enabled: bool) z profilu (plan sekcia).
+
+    `regfilter_param1_w` = 96×15-min hodnôt max odberu vo W. Je to ŠABLÓNA — platí KAŽDÝ deň,
+    kým ju nezmeníš (= kopíruje sa deň na deň). Ak chýba 96-pole, skúsi jednu default hodnotu
+    `regfilter_param1_default_w` (rovnaká pre celý deň). `regfilter_write_enabled` = povoliť zápis.
+    """
+    try:
+        import profiles as _pr
+        pl = (_pr.load_profile(profile_name) or {}).get("plan") or {}
+        enabled = bool(pl.get("regfilter_write_enabled", False))
+        vals = pl.get("regfilter_param1_w")
+        if isinstance(vals, list) and len(vals) >= 96:
+            return [float(x or 0.0) for x in vals[:96]], enabled
+        dflt = pl.get("regfilter_param1_default_w")
+        if dflt is not None:
+            return [float(dflt)] * 96, enabled
+        return None, enabled
+    except Exception as _e:
+        print(f"[regfilter] get_regfilter_plan zlyhal ({profile_name}): {_e}")
+        return None, False
+
+
+def regfilter_target_now(profile_name: str, now=None):
+    """REGFILTER: aktuálna cieľová hodnota Param1 (W) pre profil podľa 15-min rozvrhu (šablóna
+    platí každý deň). Vráti (value_w: float | None, enabled: bool)."""
+    vals, enabled = get_regfilter_plan(profile_name)
+    if not vals:
+        return None, enabled
+    n = now or dt.datetime.now()
+    si = min(95, max(0, (n.hour * 60 + n.minute) // 15))
+    return float(vals[si]), enabled
+
+
 def write_battery_plan_15min(plan_15min_kw: List[float],
                                  day_iso: str,
                                  source: str = "plan_export") -> Dict[str, Any]:

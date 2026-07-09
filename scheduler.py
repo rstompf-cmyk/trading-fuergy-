@@ -55,6 +55,7 @@ _DEFAULT_CRONS = {
     "historian_login":     "*/45 * * * *",      # každých 45 min — relogin firemný historian (1h session timeout)
     "historian_extend":    "*/5 * * * *",       # každých 5 min — incremental sync SK tagov do CSV
     "realio_poll":         "* * * * *",         # každú minútu — poll real-time FTV/batt z DAMSU + log do CSV
+    "regfilter_apply":     "* * * * *",         # každú minútu — REGFILTER Param1 (max odber W) na Bender, change-only
     "realio_relogin":      "*/25 * * * *",      # každých 25 min — Playwright relogin do dashboardu (cookies expirujú ~30 min)
     "vdt_advisor":         "*/15 * * * *",      # každých 15 min — rolling MPC re-optimization pre VDT (cache do JSON)
     "joint_mpc_tick":      "* * * * *",         # každú min — joint MPC kontrolér (Bug CC2): SOC + DAM + VDT + FTV + Load → joint LP
@@ -603,6 +604,55 @@ def job_realio_poll():
         _log("realio_poll", f"OK ({nn} tagov)")
 
 
+@_safe("regfilter_apply")
+def job_regfilter_apply():
+    """REGFILTER (2026-07-08): minútový background zápis REG_Regulation_Filter_Param1 (max odber
+    zo siete vo W) na Bender podľa 15-min rozvrhu profilu (Trakany real). Rozvrh = šablóna, platí
+    každý deň kým sa nezmení. CHANGE-ONLY: write_regfilter_param1 zapíše + zaloguje LEN pri zmene
+    hodnoty (rovnaká hodnota = nič). Beží v prod web procese (kým appka beží, aj bez okna).
+    Gated: profil regfilter_write_enabled + realio enabled/control_enabled (poistky).
+    Kill-switch REGFILTER_APPLY=0.
+    """
+    import os as _os_rf
+    if _os_rf.environ.get("REGFILTER_APPLY", "1") == "0":
+        return
+    try:
+        import realio as _rio
+        import profiles as _pr
+        import market as _mk
+    except ImportError:
+        return
+    try:
+        if (_mk.active_market() or "").lower() == "cz":
+            return   # Bender/Trakany je SK
+    except Exception:
+        pass
+    try:
+        profs = _pr.list_profiles() or []
+    except Exception:
+        profs = []
+    for prof in profs:
+        pn = prof if isinstance(prof, str) else (prof.get("name") if isinstance(prof, dict) else None)
+        if not pn:
+            continue
+        try:
+            val, enabled = _rio.regfilter_target_now(pn)
+        except Exception:
+            continue
+        if not enabled or val is None:
+            continue
+        try:
+            res = _rio.write_regfilter_param1(float(val), source=f"regfilter_plan:{pn}")
+        except Exception as _e_rf:
+            _log("regfilter_apply", f"{pn}: write zlyhal · {_e_rf}", level="warn")
+            continue
+        if res.get("changed"):
+            _log("regfilter_apply", f"{pn}: Param1 → {float(val):.0f} W (zmena, zapísané+logované)")
+        elif not res.get("ok") and not res.get("skipped"):
+            _log("regfilter_apply", f"{pn}: {res.get('msg','?')}", level="warn")
+        # skipped (bez zmeny) → ticho (neflood-uje log)
+
+
 @_safe("seps_cookies")
 def job_seps_cookies():
     """Obnoví SEPS DAE cookies + XSRF cez headless Chromium (Playwright).
@@ -920,6 +970,7 @@ def start() -> BackgroundScheduler:
         ("historian_login",    job_historian_login,    "Historian relogin"),
         ("historian_extend",   job_historian_extend,   "Historian incremental sync"),
         ("realio_poll",        job_realio_poll,        "Realtime FTV/batt poll"),
+        ("regfilter_apply",    job_regfilter_apply,    "REGFILTER Param1 (max odber W) na Bender"),
         ("realio_relogin",     job_realio_relogin,     "Realio Playwright relogin"),
         ("vdt_advisor",        job_vdt_advisor,        "VDT rolling MPC advisor (15-min)"),
         ("joint_mpc_tick",     job_joint_mpc_tick,     "Joint MPC kontroler (1-min, Bug CC2)"),
@@ -973,6 +1024,7 @@ def run_now(job_id: str):
         "historian_login":    job_historian_login,
         "historian_extend":   job_historian_extend,
         "realio_poll":        job_realio_poll,
+        "regfilter_apply":    job_regfilter_apply,
         "realio_relogin":     job_realio_relogin,
     }
     fn = funcs.get(job_id)
