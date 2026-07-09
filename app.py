@@ -4530,6 +4530,11 @@ def _dentrh_form(msg=""):
     _vdt_prio = str(f.get("vdt_pair_priority", "closest") or "closest").lower()
     _ex_col = str(f.get("export_col", "order_mwh") or "order_mwh")
     _ex_mult = f.get("export_mult", 1000)
+    # REGFILTER (Trakany real): max odber zo siete [W], zapisovaný na Bender na pozadí.
+    _rf_enabled = bool(_plan.get("regfilter_write_enabled", False))
+    _rf_default_w = _plan.get("regfilter_param1_default_w", 0) or 0
+    _rf_arr = _plan.get("regfilter_param1_w") or []
+    _rf_csv = ", ".join(str(int(round(float(x)))) for x in _rf_arr) if (isinstance(_rf_arr, list) and len(_rf_arr) == 96) else ""
     def _sel(v, opt):
         return " selected" if v == opt else ""
     # Distribučný poplatok — single source of truth (rovnaké ako form_page)
@@ -4816,6 +4821,17 @@ Ak zvolíš <b>dnešný deň</b>, dole uvidíš aj odporúčanie pre aktuálny 1
   </select></label>
 </div>
 <p style="color:#666;font-size:13px;margin:6px 0 0"><b>Párový matcher</b>: VDT nákup sa uzavrie LEN spolu so ziskovým predajom (spread ≥ breakeven + min_spread, poplatok len na nabíjaní). Žiadne nepárové nákupy → koniec stratových večerných nákupov. Oba smery (nákup→predaj aj predaj→spätný nákup).</p></fieldset>
+<fieldset style="border-color:#F9A825"><legend style="color:#E65100">🔌 REGFILTER — max odber zo siete (Trakany real, Bender)</legend>
+<label style="display:flex;justify-content:space-between;align-items:center;margin:4px 0;background:#fff8e1;padding:6px 10px;border-radius:6px">
+<span><b>Povoliť automatický zápis</b> Param1 na Bender (na pozadí, kým beží appka)</span>
+<input name="regfilter_write_enabled" type="checkbox" {"checked" if _rf_enabled else ""}></label>
+<div class="cols">
+<label style="display:flex;justify-content:space-between;gap:8px;margin:4px 0"><span>Default max odber [W]</span>
+<input name="regfilter_param1_default_w" type="number" step="1" value="{_rf_default_w}" style="padding:4px;border:1px solid #ccc;border-radius:6px"></label>
+</div>
+<label style="display:block;margin:8px 0 2px;color:#666;font-size:13px">Voliteľne: 96× 15-min hodnôt [W] (čiarkou/medzerou oddelené). Prázdne = použije sa default pre celý deň. Vyplnené (presne 96) = per-15-min rozvrh.</label>
+<textarea name="regfilter_param1_csv" rows="3" placeholder="napr. 50000, 50000, 40000, … (96 hodnôt)" style="width:100%;box-sizing:border-box;padding:6px;border:1px solid #ccc;border-radius:6px;font-family:monospace;font-size:12px">{_rf_csv}</textarea>
+<p style="color:#666;font-size:13px;margin:6px 0 0">Rozvrh je <b>šablóna</b> — platí každý deň rovnako, kým ho nezmeníš. Na pozadí sa každú minútu skontroluje aktuálny 15-min slot a <b>zapíše len pri zmene</b> hodnoty (rovnaká hodnota = žiadny zápis, žiadny log). Každá zmena sa zaloguje. Reálny zápis na Bender ide len ak je zapnuté aj <code>enabled</code>+<code>control_enabled</code> v <a href="/realio">/realio</a> (poistky).</p></fieldset>
 <fieldset><legend>Export plánu (stĺpec + násobiteľ)</legend><div class="cols">
 <label>Stĺpec na export
   <select name="export_col">
@@ -4878,6 +4894,9 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
            zco_bias_w: float = Form(default=0.0),
            vdt_engine: str = Form(default="lp"),
            vdt_pair_priority: str = Form(default="closest"),
+           regfilter_write_enabled: str = Form(default=""),
+           regfilter_param1_default_w: float = Form(default=0.0),
+           regfilter_param1_csv: str = Form(default=""),
            export_col: str = Form(default="order_mwh"),
            export_mult: float = Form(default=1000.0),
            mult_action: str = Form(default=""),
@@ -4899,6 +4918,19 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
     _mim = float(max_import_kwh_day) if max_import_kwh_day and max_import_kwh_day > 0 else None
     zbw = float(zco_bias_w or 0.0)
     cew = float(plan_charge_early_w or 0.0)   # CHARGE-EARLY tie-breaker (0 = vyp)
+    # REGFILTER (Trakany real): povolenie + default max odber [W] + voliteľný 96× rozvrh.
+    _rf_en = bool(regfilter_write_enabled)
+    _rf_def = float(regfilter_param1_default_w or 0.0)
+    _rf_arr96 = None
+    if regfilter_param1_csv and regfilter_param1_csv.strip():
+        import re as _re_rf
+        _rf_vals = [x for x in _re_rf.split(r"[,\s;]+", regfilter_param1_csv.strip()) if x]
+        try:
+            _rf_nums = [float(x) for x in _rf_vals]
+            if len(_rf_nums) == 96:
+                _rf_arr96 = _rf_nums
+        except Exception:
+            _rf_arr96 = None
     # Bug #622 (Krok A): SOC carryover z livesim trace pre /dentrh.
     # Override user-vstupu `soc_init` reálnym SOC po predošlom dni — D-1 plán
     # nesmie predpokladať ideálnu trajektóriu, lebo večerné nominácie potom
@@ -4958,6 +4990,13 @@ def dentrh(date: str = Form(...), lat: float = Form(...), lon: float = Form(...)
                           vdt_engine=_vdt_engine, vdt_pair_priority=_vdt_pair_priority)
     _plan_existing = _ui_load("plan", {}) or {}
     _plan_existing.update(_SHARED_SYNC)
+    # REGFILTER: uložiť do plan (→ profil.plan; číta realio.get_regfilter_plan)
+    _plan_existing["regfilter_write_enabled"] = _rf_en
+    _plan_existing["regfilter_param1_default_w"] = _rf_def
+    if _rf_arr96 is not None:
+        _plan_existing["regfilter_param1_w"] = _rf_arr96
+    else:
+        _plan_existing.pop("regfilter_param1_w", None)   # prázdny textarea = späť na default
     _ui_save("plan", _plan_existing)
     _autosave_active_profile()      # zmeny v /dentrh ihneď premietnuť do aktívneho profilu (ak je)
     _clear_livesim_logs()           # invalidate cached livesim log — fresh prepočet pri ďalšom otvorení /livesim
