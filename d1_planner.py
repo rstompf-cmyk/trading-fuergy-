@@ -423,6 +423,11 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
         row_d = {
             "period_idx": i + 1,
             "period": f"{period_str}-{end_str}",
+            # PRICE-KEY-FIX (2026-07-10): canonical kľúč je `price_eur` (číta ho loader,
+            # sim, DT výpočet, _gen_one_plan). Predtým sa ukladal len `cena_EUR` → uložený
+            # plán mal price_eur=0 → DT sa nezrátal (dt_rev_min=0). `cena_EUR` ostáva alias
+            # v návratovom dicte pre spätnú kompatibilitu.
+            "price_eur": float(prices[i]) if i < len(prices) else None,
             "cena_EUR": float(prices[i]) if i < len(prices) else None,
             "pv_kwh": float(pv_kwh[i]) if i < len(pv_kwh) else 0.0,
             "load_kwh": float(load_kwh[i]) if i < len(load_kwh) else 0.0,
@@ -440,6 +445,15 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
         schedule.append(row_d)
 
     # 7. Save to plan_store — schedule transponujeme na Dict[str, list]
+    # PRICE-GUARD (2026-07-10): plán s nulovými cenami je nepoužiteľný (DT=0) — NIKDY ho
+    # neukladaj (fail-loud → autoplan skúsi znova keď sú ceny k dispozícii). Kombinuje sa
+    # so ZERO-FORECAST GUARD (degenerovaný forecast) + PRICE-KEY-FIX (správny kľúč).
+    if np.all(np.abs(np.asarray(prices, float)) < 1e-9):
+        print(f"[PRICE-GUARD] {prof} {date.isoformat()}: všetky ceny=0 → plán sa NEUKLADÁ "
+              f"(fail-loud, retry neskôr). Kill: FORECAST_DEGENERATE_GUARD=0")
+        return {"ok": False,
+                "error": f"degenerované ceny (samé 0) pre {date.isoformat()} → plán sa neuloží",
+                "date": date.isoformat(), "market": m, "profile": prof}
     if save_to_store:
         try:
             import plan_store as _ps
@@ -461,7 +475,10 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
             # plan_store.save_plan očakáva schedule ako Dict[str, list]
             # — kde key je stĺpec a value je list dĺžky n_slots
             sched_dict = {}
-            for col in ("period", "cena_EUR", "pv_kwh", "load_kwh",
+            # PRICE-KEY-FIX (2026-07-10): ukladáme `price_eur` (canonical, číta ho sim/DT
+            # výpočet). `cena_EUR` ostáva tiež (alias pre staré čítačky). Bez price_eur mal
+            # každý autoplan (compute_d1_plan) plán price_eur=0 → DT=0.
+            for col in ("period", "price_eur", "cena_EUR", "pv_kwh", "load_kwh",
                         "ch_kwh", "di_kwh", "ex_kwh", "im_kwh", "cu_kwh",
                         "soc_pct", "soc_kwh", "batt_kw", "grid_kwh", "order_mwh"):
                 sched_dict[col] = [r.get(col) for r in schedule]
