@@ -570,6 +570,26 @@ def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
     im = np.asarray(schedule.get("_import_kwh", [0.0]*n), float)
     ch = np.asarray(schedule.get("_charge_kw", [0.0]*n), float)
     di = np.asarray(schedule.get("_discharge_kw", [0.0]*n), float)
+    # FLOW-KEY-HEAL (2026-07-10): staré autoplan (compute_d1_plan) plány mali nulové canonical
+    # toky (_charge_kw/_export_kwh) kvôli key-mismatchu → _decompose_dtprof=0 → DT=0. Ak sú
+    # canonical toky nulové, ale batt_kw/grid_kwh nesú pohyb, dopočítaj ich (znamienka overené
+    # na funkčnom pláne: batt_kw=_discharge_kw−_charge_kw, grid_kwh=_export_kwh−_import_kwh).
+    # Self-heal starých plánov BEZ regenerácie. Cena=0 nevadí — sim settlement (1206) použije
+    # reálne ceny. Kill-switch FLOW_KEY_HEAL=0. Pre funkčné plány (toky ≠0) je to no-op.
+    if os.environ.get("FLOW_KEY_HEAL", "1") != "0":
+        _batt_h = np.asarray(schedule.get("batt_kw", [0.0]*n), float)
+        _grid_h = np.asarray(schedule.get("grid_kwh", [0.0]*n), float)
+        _flows_zero = (np.abs(ch).sum() + np.abs(di).sum()
+                       + np.abs(ex).sum() + np.abs(im).sum()) < 1e-6
+        if (_flows_zero and len(_batt_h) == n and len(_grid_h) == n
+                and (np.abs(_batt_h).sum() + np.abs(_grid_h).sum()) > 1e-6):
+            di = np.maximum(_batt_h, 0.0); ch = np.maximum(-_batt_h, 0.0)
+            ex = np.maximum(_grid_h, 0.0); im = np.maximum(-_grid_h, 0.0)
+            # zapíš späť do sch, aby ich videl aj sim real-price settlement (1206+)
+            sch["_charge_kw"] = ch; sch["_discharge_kw"] = di
+            sch["_export_kwh"] = ex; sch["_import_kwh"] = im
+            print(f"[FLOW-KEY-HEAL] {date_iso}: toky dopočítané z batt_kw/grid_kwh "
+                  f"(starý autoplan plán bez canonical tokov)")
     p_params = plan.get("params", {})
     grid_fee = float(p_params.get("grid_fee", getattr(cfg, "grid_fee", 22.0)))
     cycle_cost = float(p_params.get("cycle_cost", getattr(cfg, "cycle_cost", 2.0)))

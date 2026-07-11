@@ -441,6 +441,14 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
             "batt_kw": float(sched_df["batt_kw"].iloc[i]) if "batt_kw" in sched_df.columns else None,
             "grid_kwh": float(sched_df["grid_kwh"].iloc[i]) if "grid_kwh" in sched_df.columns else None,
             "order_mwh": float(sched_df["order_mwh"].iloc[i]) if "order_mwh" in sched_df.columns else None,
+            # FLOW-KEY-FIX (2026-07-10): canonical kľúče, ktoré číta livesim.load_plan_series
+            # (_charge_kw/_discharge_kw = kW; _export_kwh/_import_kwh = kWh). Bez nich mal
+            # autoplan plán nulové toky → _decompose_dtprof=0 → DT=0 (aj pri správnej cene).
+            "_charge_kw": float(ch_kw),
+            "_discharge_kw": float(di_kw),
+            "_export_kwh": float(sched_df["_export_kwh"].iloc[i]) if "_export_kwh" in sched_df.columns else 0.0,
+            "_import_kwh": float(sched_df["_import_kwh"].iloc[i]) if "_import_kwh" in sched_df.columns else 0.0,
+            "_curtail_kwh": float(sched_df["curtail_kwh"].iloc[i]) if "curtail_kwh" in sched_df.columns else 0.0,
         }
         schedule.append(row_d)
 
@@ -480,7 +488,9 @@ def compute_d1_plan(date: dt.date, *, market: Optional[str] = None,
             # každý autoplan (compute_d1_plan) plán price_eur=0 → DT=0.
             for col in ("period", "price_eur", "cena_EUR", "pv_kwh", "load_kwh",
                         "ch_kwh", "di_kwh", "ex_kwh", "im_kwh", "cu_kwh",
-                        "soc_pct", "soc_kwh", "batt_kw", "grid_kwh", "order_mwh"):
+                        "soc_pct", "soc_kwh", "batt_kw", "grid_kwh", "order_mwh",
+                        # FLOW-KEY-FIX: canonical kľúče pre livesim.load_plan_series
+                        "_charge_kw", "_discharge_kw", "_export_kwh", "_import_kwh", "_curtail_kwh"):
                 sched_dict[col] = [r.get(col) for r in schedule]
             # Ukladáme ako kind='dentrh' (15-min) — jednotný formát so stránkou /dentrh.
             # Tým VDT live advisor + /vdt/d1 viewer čítajú TEN ISTÝ plán cez cascade
