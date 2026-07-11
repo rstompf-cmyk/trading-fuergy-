@@ -590,6 +590,20 @@ def _day_plan(cfg, date, mn_day, soc_init_pct=None, plan_params=None):
             sch["_export_kwh"] = ex; sch["_import_kwh"] = im
             print(f"[FLOW-KEY-HEAL] {date_iso}: toky dopočítané z batt_kw/grid_kwh "
                   f"(starý autoplan plán bez canonical tokov)")
+        # PRICE-HEAL (2026-07-11): nulová plánová cena (starý autoplan) → reálny DAM. Nutné pre
+        # DNEŠOK, ktorý DT počíta z tejto plánovej ceny (nie zo settlement vetvy 1206 ako minulé
+        # dni). Reálny DAM je k dispozícii aj pre dnešok (cleared D-1). Nezávislé od tokov.
+        if np.abs(price).sum() < 1e-6:
+            _rp_h = _real_dt_quarterly(date_iso)
+            if _rp_h is None:
+                _rh_h = _real_dt_hourly(date_iso)
+                _rp_h = np.repeat(_rh_h, 4) if _rh_h is not None else None
+            if _rp_h is not None:
+                _rp_h = np.asarray(_rp_h, float)
+                if len(_rp_h) == n:
+                    price = np.where(np.isfinite(_rp_h), _rp_h, 0.0)
+                    sch["price_eur"] = price
+                    print(f"[PRICE-HEAL] {date_iso}: nulová plánová cena → reálny DAM")
     p_params = plan.get("params", {})
     grid_fee = float(p_params.get("grid_fee", getattr(cfg, "grid_fee", 22.0)))
     cycle_cost = float(p_params.get("cycle_cost", getattr(cfg, "cycle_cost", 2.0)))
