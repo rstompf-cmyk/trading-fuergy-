@@ -140,3 +140,22 @@ Nav ostáva mode-aware (skupiny both/sim/real ako dnes v `nav.html`).
 - Livesim Chart.js — zachovať dátové zdroje, meniť len prezentáciu/paletu.
 - Per-profile `resolve_profile()` middleware — nechať tak.
 - URL routy zostávajú.
+
+---
+
+## 9. Obrazovky pokryté v referenčnom mockupe (`FUERGY Redizajn.dc.html`)
+
+Jednotný shell (sticky topbar + zoskupená mode-aware navigácia + kontextový pás profil/mód/trh + červený real-warning). Prepínanie cez navigáciu hore. Detailne rozpracované:
+
+- **Živá simulácia** — KPI hierarchia, 3 grafy, tabuľka slotov, Expert/debug toggle.
+- **Plánovanie** (Plán D-1 / Denný trh) — zbaliteľné sekcie + editovateľný graf priebehu (96 bodov, ťahanie).
+- **Profily** — karty profilov + editor (identita/typ, JSON parametre, distribučné tarify).
+- **Reálne meranie (Realio)** — 3 záložky: Vizualizácia (Energy Flow + sparkliny + odpočty), Reálne riadenie (príprava dát + grafy + bezpečný HW zápis s poistkami), Nastavenie (Bender).
+- **Zákazníci** — tabuľka reálnych batérií (Bender, CDC, regulácia).
+- **CDC konfigurácia** — pripojenie + fleet zariadenia.
+- **Okno regulácie** — timeline dňa + parametre okna (HW zápis).
+- **Flotila** — SOC prstence, výkon, stav online/offline.
+- **Profil dashboard** — súhrn profilu + dnešné KPI + parametre + graf batérie.
+- **Dizajn systém** — paleta, sémantika grafov, typografia, komponenty.
+
+Ostatné routy (RT poradca, VDT Board/Live/D-1, Paper trading, Manager dashboard, Výsledok simulácie, Batch, Uložené plány, Spotreba, FTV scenár, Kalibrácia, Dáta) zobrazujú **jednotnú šablónu** (rovnaká hlavička + karty) — pripravené na detailné dopracovanie rovnakým vzorom. Žiadna obrazovka nespadne na starý vzhľad.

@@ -34,8 +34,17 @@
   @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(22,163,74,.5);} 50% { box-shadow: 0 0 0 7px transparent;} }
   @keyframes pulseRed { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,.55);} 50% { box-shadow: 0 0 0 7px transparent;} }
   @keyframes fadeIn { from { opacity:0; transform: translateY(8px);} to { opacity:1; transform:none;} }
+  @keyframes flow { to { stroke-dashoffset:-28; } }
 </style>
 </helmet>
+
+<template id="__bundler_thumbnail" data-bg-color="#1e6bd6">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#1e6bd6"/>
+    <path d="M660 250 L520 470 h95 l-18 130 165 -190 h-100 z" fill="#ffffff"/>
+    <text x="600" y="680" text-anchor="middle" font-family="Sora, sans-serif" font-size="72" font-weight="700" fill="#ffffff" letter-spacing="4">FUERGY</text>
+  </svg>
+</template>
 
 <div style="min-height:100vh">
 
@@ -54,11 +63,18 @@
       </div>
 
       <nav style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-        <button onClick="{{ goSim }}" style="{{ nav.sim }}">🟢 Simulácia</button>
-        <button onClick="{{ goPlan }}" style="{{ nav.plan }}">🗓 Plánovanie</button>
-        <button onClick="{{ goProfiles }}" style="{{ nav.profiles }}">⚙ Profily</button>
-        <button style="padding:8px 13px;border-radius:8px;font:500 13px 'Sora',sans-serif;cursor:default;border:1px solid transparent;background:transparent;color:#a3b1c6;white-space:nowrap" title="Mimo rozsahu mockupu">💹 Obchodovanie</button>
-        <button style="padding:8px 13px;border-radius:8px;font:500 13px 'Sora',sans-serif;cursor:default;border:1px solid transparent;background:transparent;color:#a3b1c6;white-space:nowrap" title="Mimo rozsahu mockupu">🔌 Reálne riadenie</button>
+        <sc-for list="{{ navGroups }}" as="g" hint-placeholder-count="5">
+          <div style="position:relative">
+            <button onClick="{{ g.onTrig }}" style="{{ g.trigStyle }}">{{ g.label }} <span style="font-size:10px">▾</span></button>
+            <sc-if value="{{ g.open }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;top:calc(100% + 8px);left:0;z-index:90;background:#fff;border:1px solid #d9e3f1;border-radius:11px;box-shadow:0 10px 30px rgba(15,53,110,.18);padding:6px;min-width:238px">
+                <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4">
+                  <button onClick="{{ it.onClick }}" style="{{ it.style }}">{{ it.label }}</button>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
         <button onClick="{{ goSystem }}" style="{{ nav.system }}">◐ Dizajn systém</button>
       </nav>
 
@@ -100,6 +116,10 @@
       </div>
     </sc-if>
   </header>
+
+  <sc-if value="{{ anyMenuOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeMenus }}" style="position:fixed;inset:0;z-index:40;background:transparent"></div>
+  </sc-if>
 
   <main style="max-width:1640px;margin:0 auto;padding:clamp(16px,2.6vw,28px) clamp(14px,3vw,28px) 64px">
 
@@ -527,6 +547,503 @@
     </div>
     </sc-if>
 
+    <!-- ==================== VDT PREHĽAD ==================== -->
+    <sc-if value="{{ isVdt }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:fadeIn .5s cubic-bezier(.16,1,.3,1)">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:20px">
+        <div>
+          <h1 style="margin:0;font-size:clamp(24px,3vw,32px);font-weight:600;letter-spacing:-.02em">OKTE VDT prehľad</h1>
+          <p style="margin:8px 0 0;color:#38516e;font-size:13.5px">Vnútrodenný trh · orderbook, párové obchody, cash saldo. Paper trading — žiadny zápis do OKTE.</p>
+        </div>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px;background:#fdf2f8;border:1px solid #fbcfe8;border-radius:999px;color:#db2777;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:500"><span style="width:8px;height:8px;border-radius:50%;background:#db2777;animation:pulse 2s infinite"></span>VDT LIVE · SK</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px;margin-bottom:24px">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #db2777;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Otvorená pozícia</div><div style="font-size:28px;font-weight:600;color:#db2777;font-variant-numeric:tabular-nums;line-height:1">+0,40<span style="font-size:12px;color:#7f93ac;margin-left:4px">MWh</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #16a34a;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Cash saldo dnes</div><div style="font-size:28px;font-weight:600;color:#16a34a;font-variant-numeric:tabular-nums;line-height:1">−35,00<span style="font-size:12px;color:#7f93ac;margin-left:4px">€</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #2563eb;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Otvorené ordery</div><div style="font-size:28px;font-weight:600;color:#2563eb;font-variant-numeric:tabular-nums;line-height:1">4</div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #0891b2;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Spárované dnes</div><div style="font-size:28px;font-weight:600;color:#0891b2;font-variant-numeric:tabular-nums;line-height:1">12</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden">
+          <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#db2777"></span>Orderbook · hĺbka</div>
+          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:#f4f8fd"><th style="text-align:left;padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Strana</th><th style="text-align:right;padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Cena €/MWh</th><th style="text-align:right;padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Objem MWh</th></tr></thead>
+            <tbody>
+              <tr style="border-bottom:1px solid #eef2f8"><td style="padding:9px 14px;font-family:'JetBrains Mono',monospace;color:#e11d48;font-weight:600">SELL</td><td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#0b1e3f">142,80</td><td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#38516e">0,50</td></tr>
+              <tr style="border-bottom:1px solid #eef2f8"><td style="padding:9px 14px;font-family:'JetBrains Mono',monospace;color:#e11d48;font-weight:600">SELL</td><td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#0b1e3f">139,20</td><td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#38516e">0,30</td></tr>
+              <tr style="border-bottom:2px solid #d9e3f1;background:#fafcff"><td style="padding:9px 14px;font-family:'JetBrains Mono',monospace;color:#7f93ac;font-size:10.5px" colspan="3">— spread 6,10 €/MWh —</td></tr>
+              <tr style="border-bottom:1px solid #eef2f8"><td style="padding:9px 14px;font-family:'JetBrains Mono',monospace;color:#16a34a;font-weight:600">BUY</td><td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#0b1e3f">133,10</td><td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#38516e">0,40</td></tr>
+              <tr><td style="padding:9px 14px;font-family:'JetBrains Mono',monospace;color:#16a34a;font-weight:600">BUY</td><td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#0b1e3f">130,50</td><td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#38516e">0,70</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden">
+          <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#0891b2"></span>Obchody dnes · párovanie</div>
+          <div style="padding:10px 14px;display:flex;flex-direction:column;gap:2px">
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 6px;border-bottom:1px solid #eef2f8"><span style="padding:2px 9px;border-radius:6px;font-size:11px;font-weight:700;background:#f0fdf4;color:#15803d">BUY</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#0891b2">11:15</span><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#0b1e3f;margin-left:auto">130,50 €/MWh · 0,20 MWh</span></div>
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 6px;border-bottom:1px solid #eef2f8"><span style="padding:2px 9px;border-radius:6px;font-size:11px;font-weight:700;background:#fdf2f8;color:#be185d">SELL</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#0891b2">14:45</span><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#0b1e3f;margin-left:auto">158,90 €/MWh · 0,20 MWh</span></div>
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 6px"><span style="padding:2px 9px;border-radius:6px;font-size:11px;font-weight:700;background:#f0fdf4;color:#15803d">BUY</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#0891b2">03:30</span><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#0b1e3f;margin-left:auto">42,10 €/MWh · 0,30 MWh</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ==================== REALIO — REÁLNE RIADENIE ==================== -->
+    <sc-if value="{{ isRealio }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:fadeIn .5s cubic-bezier(.16,1,.3,1)">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:16px">
+        <div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#7f93ac;margin-bottom:6px">Reálne riadenie</div>
+          <h1 style="margin:0;font-size:clamp(24px,3vw,32px);font-weight:600;letter-spacing:-.02em">Reálne meranie</h1>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+            <span style="font-size:12px;color:#7f93ac">Zákazník</span>
+            <select style="padding:7px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13px;color:#0b1e3f;background:#fff"><option>Trakany</option><option>Sudolsky</option><option>TBB a.s.</option></select>
+          </div>
+        </div>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;color:#16a34a;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:500"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;animation:pulse 2s infinite"></span>LIVE · 14:41:47</span>
+      </div>
+
+      <div style="display:inline-flex;padding:4px;background:#eaf1fb;border:1px solid #d9e3f1;border-radius:11px;gap:4px;margin-bottom:22px;flex-wrap:wrap">
+        <button onClick="{{ setRViz }}" style="{{ rViz }}">📊 Vizualizácia</button>
+        <button onClick="{{ setRCtrl }}" style="{{ rCtrl }}">🔴 Reálne riadenie</button>
+        <button onClick="{{ setRSet }}" style="{{ rSet }}">⚙ Nastavenie</button>
+      </div>
+
+      <!-- VIZUALIZÁCIA -->
+      <sc-if value="{{ rIsViz }}" hint-placeholder-val="{{ true }}">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden;margin-bottom:20px">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #d9e3f1"><div style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#16a34a"></span>Energy flow · live</div><span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:#7f93ac">auto-refresh 10 s</span></div>
+          <div style="padding:12px 18px;background:radial-gradient(ellipse 460px 220px at 50% 50%,rgba(30,107,214,.05),transparent 70%)">{{ flowChart }}</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-bottom:20px">
+          <sc-for list="{{ sparkCards }}" as="c" hint-placeholder-count="5">
+            <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid {{ c.col }};border-radius:12px;padding:14px 16px 8px;box-shadow:0 1px 3px rgba(15,53,110,.06)">
+              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:5px">{{ c.label }}</div>
+              <div style="font-size:24px;font-weight:600;color:{{ c.col }};font-variant-numeric:tabular-nums;line-height:1">{{ c.value }}<span style="font-size:12px;color:#7f93ac;margin-left:3px">{{ c.unit }}</span></div>
+              <div style="font-size:10.5px;color:#7f93ac;font-family:'JetBrains Mono',monospace;margin:5px 0 8px">{{ c.sub }}</div>
+              {{ c.spark }}
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #d9e3f1"><div style="font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#0891b2"></span>Posledné odpočty</div><span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:#7f93ac">posledných 10 minút</span></div>
+          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:620px">
+            <thead><tr style="background:#f4f8fd">
+              <th style="text-align:left;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Čas</th>
+              <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Spotreba kW</th>
+              <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">FTV kW</th>
+              <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Batéria kW</th>
+              <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">SOC %</th>
+              <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Sieť kW</th>
+            </tr></thead>
+            <tbody>
+              <sc-for list="{{ odpoctyRows }}" as="r" hint-placeholder-count="10">
+                <tr style="border-bottom:1px solid #eef2f8">
+                  <td style="padding:9px 14px;font-family:'JetBrains Mono',monospace;color:#0891b2;font-weight:500">{{ r.time }}</td>
+                  <td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#16a34a;font-variant-numeric:tabular-nums">{{ r.cons }}</td>
+                  <td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#f59e0b;font-variant-numeric:tabular-nums">{{ r.ftv }}</td>
+                  <td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#7c3aed;font-variant-numeric:tabular-nums">{{ r.batt }}</td>
+                  <td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#6d28d9;font-variant-numeric:tabular-nums">{{ r.soc }}</td>
+                  <td style="padding:9px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#0ea5e9;font-variant-numeric:tabular-nums">{{ r.siet }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table></div>
+        </div>
+      </sc-if>
+
+      <!-- REÁLNE RIADENIE -->
+      <sc-if value="{{ rIsCtrl }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:11px;padding:11px 15px;background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:10px;margin-bottom:18px;font-size:12.5px;color:#15803d">
+          <span style="width:8px;height:8px;border-radius:50%;background:#16a34a;flex:0 0 auto"></span>Realio dáta dostupné — posledný záznam pred 0.1 min. Simulované hodnoty sú nahradené reálnym meraním; plány (D-1 nominácia) zostávajú z modelu.
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:20px">
+          <div style="background:#fff;border:1px solid #d9e3f1;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)">
+            <div style="font-size:12px;font-weight:600;color:#38516e;margin-bottom:10px">Generovať plán D-1 (od → do)</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end"><input type="date" value="2026-07-14" style="padding:8px 10px;border:1px solid #cdd9ea;border-radius:8px;font-size:13px;color:#0b1e3f"/><input type="date" value="2026-07-21" style="padding:8px 10px;border:1px solid #cdd9ea;border-radius:8px;font-size:13px;color:#0b1e3f"/><button style="padding:9px 15px;background:#1e6bd6;border:1px solid #1e6bd6;color:#fff;border-radius:9px;font:600 12.5px 'Sora',sans-serif;cursor:pointer">Generuj plán</button></div>
+          </div>
+          <div style="background:#fff;border:1px solid #d9e3f1;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)">
+            <div style="font-size:12px;font-weight:600;color:#38516e;margin-bottom:10px">Stiahnuť realio históriu (Bender · max 2 dni)</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end"><input type="date" value="2026-07-21" style="padding:8px 10px;border:1px solid #cdd9ea;border-radius:8px;font-size:13px;color:#0b1e3f"/><input type="date" value="2026-07-21" style="padding:8px 10px;border:1px solid #cdd9ea;border-radius:8px;font-size:13px;color:#0b1e3f"/><button style="padding:9px 15px;background:#dc2626;border:1px solid #dc2626;color:#fff;border-radius:9px;font:600 12.5px 'Sora',sans-serif;cursor:pointer">Stiahnuť históriu</button></div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px">
+          <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #059669;border-radius:11px;padding:13px 15px"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:5px">FTV výkon (meranie)</div><div style="font-size:20px;font-weight:600;color:#f59e0b;font-variant-numeric:tabular-nums">580 kW</div></div>
+          <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #7c3aed;border-radius:11px;padding:13px 15px"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:5px">Batéria reálna</div><div style="font-size:20px;font-weight:600;color:#059669;font-variant-numeric:tabular-nums">+3,4 kW</div></div>
+          <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #6d28d9;border-radius:11px;padding:13px 15px"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:5px">SOC (meranie)</div><div style="font-size:20px;font-weight:600;color:#6d28d9;font-variant-numeric:tabular-nums">77 %</div></div>
+          <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #2563eb;border-radius:11px;padding:13px 15px"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:5px">DT teraz (realita)</div><div style="font-size:20px;font-weight:600;color:#2563eb;font-variant-numeric:tabular-nums">53 €/MWh</div></div>
+        </div>
+
+        <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden;margin-bottom:18px">
+          <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#059669"></span>Riadenie batérie — plán+RT vs realita + SOC</div>
+          <div style="padding:16px 18px 10px">{{ chartBatt }}</div>
+        </div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden;margin-bottom:20px">
+          <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#f59e0b"></span>Tok energie — zdroje (+) vs spotreba (−)</div>
+          <div style="padding:16px 18px 10px">{{ chartEnergy }}</div>
+        </div>
+
+        <div style="font-size:11px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#dc2626;margin:4px 2px 12px;padding-bottom:8px;border-bottom:1px solid #fca5a5">🔴 Zápis na hardvér · vysoké riziko</div>
+        <div style="background:#fff5f5;border:1.5px solid #fca5a5;border-radius:14px;padding:20px;box-shadow:0 1px 3px rgba(15,53,110,.06)">
+          <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:#fff1f1;border:1px solid #fca5a5;border-radius:10px;margin-bottom:18px">
+            <span style="width:10px;height:10px;border-radius:50%;background:#dc2626;animation:pulseRed 1.8s infinite;flex:0 0 auto"></span>
+            <span style="font-size:13px;color:#b91c1c;font-weight:600">Povel sa fyzicky zapíše na batériu (Bender setpoint). Zápis je aktívny až po zapnutí <b>oboch</b> poistiek.</span>
+          </div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px">
+            <label style="display:inline-flex;align-items:center;gap:10px;padding:10px 16px;border-radius:10px;background:#fef2f2;border:1.5px solid #fca5a5;color:#b91c1c;font-weight:600;font-size:13px;cursor:pointer"><input type="checkbox" style="width:17px;height:17px;accent-color:#dc2626"/> Poistka 1 · enabled</label>
+            <label style="display:inline-flex;align-items:center;gap:10px;padding:10px 16px;border-radius:10px;background:#fef2f2;border:1.5px solid #fca5a5;color:#b91c1c;font-weight:600;font-size:13px;cursor:pointer"><input type="checkbox" style="width:17px;height:17px;accent-color:#dc2626"/> Poistka 2 · control_enabled</label>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:18px">
+            <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">SOC setpoint (%)</label><input value="70" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+            <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">P batt (W)</label><input value="-40000" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+            <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Trvanie (min)</label><input value="15" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+          </div>
+          <button style="display:inline-flex;align-items:center;gap:8px;padding:11px 20px;background:#e2e8f0;border:1px solid #cbd5e1;color:#94a3b8;border-radius:10px;font:600 13.5px 'Sora',sans-serif;cursor:not-allowed">🔒 Zapísať setpoint (uzamknuté)</button>
+          <span style="margin-left:12px;font-size:12px;color:#b91c1c;font-family:'JetBrains Mono',monospace">aktívne až po oboch poistkách</span>
+        </div>
+      </sc-if>
+
+      <!-- NASTAVENIE -->
+      <sc-if value="{{ rIsSet }}" hint-placeholder-val="{{ false }}">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden;max-width:720px">
+          <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#0ea5e9"></span>Pripojenie na Bender</div>
+          <div style="padding:18px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+              <div style="grid-column:span 2"><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Host</label><input value="bender.trakany.local" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+              <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Používateľ</label><input value="operator" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+              <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Heslo</label><input type="password" value="********" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+              <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Poll interval (s)</label><input value="10" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+              <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Tag SOC</label><input value="ELM1_SOC" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+              <div style="grid-column:span 2"><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Tag výkon</label><input value="ELM1_Aggregated_C_Power" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;padding-top:14px;border-top:1px solid #eef2f8">
+              <button style="padding:9px 15px;background:#1e6bd6;border:1px solid #1e6bd6;color:#fff;border-radius:9px;font:600 12.5px 'Sora',sans-serif;cursor:pointer">Uložiť</button>
+              <button style="padding:9px 15px;background:#fff;border:1px solid #cdd9ea;color:#38516e;border-radius:9px;font:600 12.5px 'Sora',sans-serif;cursor:pointer">Test čítania</button>
+              <button style="padding:9px 15px;background:#fff;border:1px solid #cdd9ea;color:#38516e;border-radius:9px;font:600 12.5px 'Sora',sans-serif;cursor:pointer">Relogin</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+    </sc-if>
+
+    <!-- ==================== CDC KONFIGURÁCIA ==================== -->
+    <sc-if value="{{ isCdc }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:fadeIn .5s cubic-bezier(.16,1,.3,1)">
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#7f93ac;margin-bottom:6px">Reálne riadenie</div>
+        <h1 style="margin:0;font-size:clamp(24px,3vw,32px);font-weight:600;letter-spacing:-.02em">CDC konfigurácia</h1>
+        <p style="margin:8px 0 0;color:#38516e;font-size:13.5px">Pripojenie na CDC fleet backend a mapovanie zariadení na reálne batérie zákazníkov.</p>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px;align-items:start;margin-bottom:20px">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden">
+          <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#0ea5e9"></span>Pripojenie</div>
+          <div style="padding:18px">
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:9px;margin-bottom:16px"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;animation:pulse 2s infinite"></span><span style="font-size:12.5px;font-weight:600;color:#15803d">Spojenie aktívne · CDC v0.9.2</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+              <div style="grid-column:span 2"><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Host</label><input value="cdc.fuergy.internal" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+              <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Port</label><input value="8443" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+              <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Poll interval (s)</label><input value="15" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+              <div style="grid-column:span 2"><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Certifikát</label><input value="okte.p12 · platný do 2027-03" readonly style="width:100%;padding:9px 11px;border:1px solid #e2e8f0;border-radius:8px;font-size:13.5px;color:#7f93ac;background:#f6f8fb"/></div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button style="padding:9px 15px;background:#1e6bd6;border:1px solid #1e6bd6;color:#fff;border-radius:9px;font:600 12.5px 'Sora',sans-serif;cursor:pointer">Uložiť</button>
+              <button style="padding:9px 15px;background:#fff;border:1px solid #cdd9ea;color:#38516e;border-radius:9px;font:600 12.5px 'Sora',sans-serif;cursor:pointer">Test spojenia</button>
+              <button style="padding:9px 15px;background:#fff;border:1px solid #cdd9ea;color:#38516e;border-radius:9px;font:600 12.5px 'Sora',sans-serif;cursor:pointer">Relogin</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;align-content:start">
+          <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #16a34a;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Zariadenia OK</div><div style="font-size:28px;font-weight:600;color:#16a34a;font-variant-numeric:tabular-nums;line-height:1">3<span style="font-size:14px;color:#7f93ac">/4</span></div></div>
+          <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #2563eb;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Mapované tagy</div><div style="font-size:28px;font-weight:600;color:#2563eb;font-variant-numeric:tabular-nums;line-height:1">120</div></div>
+          <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #0891b2;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Poll interval</div><div style="font-size:28px;font-weight:600;color:#0891b2;font-variant-numeric:tabular-nums;line-height:1">15<span style="font-size:12px;color:#7f93ac;margin-left:4px">s</span></div></div>
+          <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #dc2626;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Chyby</div><div style="font-size:28px;font-weight:600;color:#dc2626;font-variant-numeric:tabular-nums;line-height:1">1</div></div>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden">
+        <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#0ea5e9"></span>Zariadenia CDC fleet</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:620px">
+            <thead>
+              <tr style="background:#f4f8fd">
+                <th style="text-align:left;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Zariadenie</th>
+                <th style="text-align:left;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Zákazník</th>
+                <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Mapované tagy</th>
+                <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Posl. spojenie</th>
+                <th style="text-align:left;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Stav</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ cdcRows }}" as="d" hint-placeholder-count="4">
+                <tr style="border-bottom:1px solid #eef2f8">
+                  <td style="padding:11px 14px;font-family:'JetBrains Mono',monospace;font-weight:600;color:#0b1e3f">{{ d.dev }}</td>
+                  <td style="padding:11px 14px;color:#38516e">{{ d.cust }}</td>
+                  <td style="padding:11px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#2563eb;font-variant-numeric:tabular-nums">{{ d.tags }}</td>
+                  <td style="padding:11px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#0891b2">{{ d.last }}</td>
+                  <td style="padding:11px 14px"><span style="padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;background:{{ d.statusBg }};color:{{ d.statusFg }};border:1px solid {{ d.statusBorder }}">{{ d.status }}</span></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ==================== OKNO REGULÁCIE ==================== -->
+    <sc-if value="{{ isRegulation }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:fadeIn .5s cubic-bezier(.16,1,.3,1)">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:18px">
+        <div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#7f93ac;margin-bottom:6px">Reálne riadenie</div>
+          <h1 style="margin:0;font-size:clamp(24px,3vw,32px);font-weight:600;letter-spacing:-.02em">Okno regulácie</h1>
+          <p style="margin:8px 0 0;color:#38516e;font-size:13.5px">Časové okno, počas ktorého smie regulátor zasahovať do batérie so stanoveným cieľom SOC a limitmi výkonu.</p>
+        </div>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 13px;background:#fef2f2;border:1px solid #fca5a5;border-radius:999px;color:#b91c1c;font-size:12px;font-weight:600"><span style="width:8px;height:8px;border-radius:50%;background:#dc2626"></span>Sudolsky C-BAT · real</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;padding:11px 15px;background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:10px;margin-bottom:22px">
+        <span style="width:10px;height:10px;border-radius:50%;background:#16a34a;animation:pulse 2s infinite;flex:0 0 auto"></span>
+        <span style="font-size:13px;font-weight:600;color:#15803d">Okno regulácie AKTÍVNE · 12:00 → 18:00 · zostáva <b>4:18</b></span>
+        <span style="margin-left:auto;font-size:11px;font-family:'JetBrains Mono',monospace;color:#15803d">automatický režim · CDC v0.9.2</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px;margin-bottom:24px">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #16a34a;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Stav</div><div style="font-size:24px;font-weight:600;color:#16a34a;line-height:1">Aktívne</div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #7c3aed;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Cieľový SOC</div><div style="font-size:24px;font-weight:600;color:#7c3aed;font-variant-numeric:tabular-nums;line-height:1">60–90<span style="font-size:12px;color:#7f93ac;margin-left:4px">%</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #059669;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Max výkon</div><div style="font-size:24px;font-weight:600;color:#059669;font-variant-numeric:tabular-nums;line-height:1">±99<span style="font-size:12px;color:#7f93ac;margin-left:4px">kW</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #0891b2;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Zostáva</div><div style="font-size:24px;font-weight:600;color:#0891b2;font-variant-numeric:tabular-nums;line-height:1">4:18<span style="font-size:12px;color:#7f93ac;margin-left:4px">h</span></div></div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden;margin-bottom:20px">
+        <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#16a34a"></span>Okno počas dňa</div>
+        <div style="padding:22px 18px 16px">
+          <div style="position:relative;height:44px;border-radius:9px;background:#f1f5f9;border:1px solid #e2e8f0;overflow:hidden">
+            <div style="position:absolute;top:0;bottom:0;left:50%;width:25%;background:linear-gradient(180deg,rgba(22,163,74,.22),rgba(22,163,74,.12));border-left:2px solid #16a34a;border-right:2px solid #16a34a"></div>
+            <div style="position:absolute;top:-3px;bottom:-3px;left:57%;width:2px;background:#dc2626"></div>
+            <div style="position:absolute;top:-20px;left:57%;transform:translateX(-50%);font-size:10px;font-family:'JetBrains Mono',monospace;color:#dc2626;font-weight:600;white-space:nowrap">teraz 13:42</div>
+            <div style="position:absolute;top:50%;left:calc(50% + 6px);transform:translateY(-50%);font-size:11px;font-family:'JetBrains Mono',monospace;color:#15803d;font-weight:600">12:00 → 18:00</div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;font-family:'JetBrains Mono',monospace;color:#7f93ac">
+            <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:45</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden">
+        <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#dc2626"></span>Parametre okna · zápis na hardvér</div>
+        <div style="padding:18px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:16px">
+            <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Začiatok</label><input type="time" value="12:00" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+            <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Koniec</label><input type="time" value="18:00" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+            <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">SOC cieľ min (%)</label><input value="60" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+            <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">SOC cieľ max (%)</label><input value="90" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+            <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Max výkon (kW)</label><input value="99" style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"/></div>
+            <div><label style="display:block;font-size:11px;color:#7f93ac;margin-bottom:5px;font-weight:500">Režim</label><select style="width:100%;padding:9px 11px;border:1px solid #cdd9ea;border-radius:8px;font-size:13.5px;color:#0b1e3f;background:#fff"><option>Automatický</option><option>Manuálny</option></select></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-top:16px;border-top:1px solid #eef2f8">
+            <label style="display:inline-flex;align-items:center;gap:10px;padding:9px 15px;border-radius:10px;background:#fef2f2;border:1.5px solid #fca5a5;color:#b91c1c;font-weight:600;font-size:13px;cursor:pointer"><input type="checkbox" checked style="width:16px;height:16px;accent-color:#dc2626"/> control_enabled</label>
+            <button style="display:inline-flex;align-items:center;gap:7px;padding:10px 18px;background:#dc2626;border:1px solid #dc2626;color:#fff;border-radius:10px;font:600 13.5px 'Sora',sans-serif;cursor:pointer;box-shadow:0 4px 12px rgba(220,38,38,.22)">✓ Uložiť okno na hardvér</button>
+            <button style="padding:10px 16px;background:#fff;border:1px solid #cdd9ea;color:#38516e;border-radius:10px;font:600 13px 'Sora',sans-serif;cursor:pointer">Zrušiť okno</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ==================== ZÁKAZNÍCI ==================== -->
+    <sc-if value="{{ isCustomers }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:fadeIn .5s cubic-bezier(.16,1,.3,1)">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:20px">
+        <div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#7f93ac;margin-bottom:6px">Reálne riadenie</div>
+          <h1 style="margin:0;font-size:clamp(24px,3vw,32px);font-weight:600;letter-spacing:-.02em">Zákazníci</h1>
+          <p style="margin:8px 0 0;color:#38516e;font-size:13.5px">Flotila reálnych batérií — pripojenie na Bender, CDC verzia a stav regulácie.</p>
+        </div>
+        <button style="display:inline-flex;align-items:center;gap:7px;padding:10px 16px;background:#1e6bd6;border:1px solid #1e6bd6;color:#fff;border-radius:10px;font:600 13px 'Sora',sans-serif;cursor:pointer;box-shadow:0 4px 12px rgba(30,107,214,.22)">➕ Pridať zákazníka</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px;margin-bottom:24px">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #1e6bd6;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Zákazníci</div><div style="font-size:28px;font-weight:600;color:#1e6bd6;font-variant-numeric:tabular-nums;line-height:1">{{ custCount }}</div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #16a34a;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Bender online</div><div style="font-size:28px;font-weight:600;color:#16a34a;font-variant-numeric:tabular-nums;line-height:1">{{ custOnline }}</div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #f59e0b;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Spolu kapacita</div><div style="font-size:28px;font-weight:600;color:#f59e0b;font-variant-numeric:tabular-nums;line-height:1">{{ custCap }}<span style="font-size:12px;color:#7f93ac;margin-left:4px">kWh</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #059669;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Aktívna regulácia</div><div style="font-size:28px;font-weight:600;color:#059669;font-variant-numeric:tabular-nums;line-height:1">{{ custActive }}</div></div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden">
+        <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#dc2626"></span>Reálne batérie</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:820px">
+            <thead>
+              <tr style="background:#f4f8fd">
+                <th style="text-align:left;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Zákazník / lokalita</th>
+                <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Batéria</th>
+                <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">SOC</th>
+                <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Výkon</th>
+                <th style="text-align:left;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Bender</th>
+                <th style="text-align:left;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">CDC</th>
+                <th style="text-align:right;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Posl. zápis</th>
+                <th style="text-align:left;padding:10px 14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#38516e;border-bottom:1px solid #d9e3f1">Regulácia</th>
+                <th style="border-bottom:1px solid #d9e3f1"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ customersRows }}" as="c" hint-placeholder-count="4">
+                <tr style="border-bottom:1px solid #eef2f8">
+                  <td style="padding:11px 14px"><div style="font-weight:600;color:#0b1e3f;font-size:13px">{{ c.name }}</div><div style="font-size:11px;color:#7f93ac;font-family:'JetBrains Mono',monospace">{{ c.site }}</div></td>
+                  <td style="padding:11px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#38516e;font-variant-numeric:tabular-nums">{{ c.cap }} kWh</td>
+                  <td style="padding:11px 14px;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ c.socCol }};font-variant-numeric:tabular-nums">{{ c.soc }} %</td>
+                  <td style="padding:11px 14px;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:{{ c.powerCol }};font-variant-numeric:tabular-nums">{{ c.power }} kW</td>
+                  <td style="padding:11px 14px"><span style="display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:{{ c.benderCol }}"><span style="width:7px;height:7px;border-radius:50%;background:{{ c.benderCol }}"></span>{{ c.bender }}</span></td>
+                  <td style="padding:11px 14px;font-family:'JetBrains Mono',monospace;color:#7f93ac">{{ c.cdc }}</td>
+                  <td style="padding:11px 14px;text-align:right;font-family:'JetBrains Mono',monospace;color:#0891b2">{{ c.lastWrite }}</td>
+                  <td style="padding:11px 14px"><span style="padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;background:{{ c.regBg }};color:{{ c.regFg }};border:1px solid {{ c.regBorder }}">{{ c.reg }}</span></td>
+                  <td style="padding:11px 14px;text-align:right"><button style="padding:6px 11px;background:#fff;border:1px solid #cdd9ea;color:#38516e;border-radius:7px;font:600 11.5px 'Sora',sans-serif;cursor:pointer;white-space:nowrap">Detail →</button></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ==================== PROFIL DASHBOARD ==================== -->
+    <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:fadeIn .5s cubic-bezier(.16,1,.3,1)">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:20px">
+        <div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#7f93ac;margin-bottom:6px">Simulácia & monitoring</div>
+          <h1 style="margin:0;font-size:clamp(24px,3vw,32px);font-weight:600;letter-spacing:-.02em">Profil dashboard</h1>
+          <p style="margin:8px 0 0;color:#38516e;font-size:13.5px">Prehľad aktívneho profilu — konfigurácia, dnešná ekonomika a stav batérie.</p>
+        </div>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px;background:#fef2f2;border:1px solid #fca5a5;border-radius:999px;color:#b91c1c;font-size:12px;font-weight:600"><span style="width:8px;height:8px;border-radius:50%;background:#dc2626"></span>Sudolsky C-BAT · real</span>
+      </div>
+
+      <!-- summary card -->
+      <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);padding:18px;margin-bottom:20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:10px"><span style="width:10px;height:10px;border-radius:50%;background:#dc2626"></span><span style="font-size:17px;font-weight:600;color:#0b1e3f">Sudolsky C-BAT</span></div>
+        <span style="padding:3px 11px;border-radius:999px;font-size:11px;font-weight:700;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5">REAL</span>
+        <span style="padding:3px 11px;border-radius:7px;font-size:11.5px;font-weight:500;background:#eef4fb;color:#38516e;border:1px solid #d9e3f1">Reálny denný trh · 15 min</span>
+        <span style="padding:3px 11px;border-radius:7px;font-size:11.5px;font-weight:600;background:#eaf1fb;color:#1e6bd6;border:1px solid #cfe0fa">SK</span>
+        <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:7px;font-size:11px;font-weight:600;background:#eff6ff;color:#1d4ed8"><span style="width:7px;height:7px;border-radius:50%;background:#1d4ed8;animation:pulse 2s infinite"></span>beží na pozadí</span>
+        <span style="margin-left:auto;font-size:11px;font-family:'JetBrains Mono',monospace;color:#7f93ac">aktualizované 13:42:08</span>
+      </div>
+
+      <!-- today KPIs -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px;margin-bottom:26px">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #16a34a;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Zisk za deň</div><div style="font-size:28px;font-weight:600;color:#16a34a;font-variant-numeric:tabular-nums;line-height:1">519,00<span style="font-size:12px;color:#7f93ac;margin-left:4px">€</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #6d28d9;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">SOC teraz</div><div style="font-size:28px;font-weight:600;color:#6d28d9;font-variant-numeric:tabular-nums;line-height:1">77<span style="font-size:12px;color:#7f93ac;margin-left:4px">%</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #f59e0b;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">FTV výroba dnes</div><div style="font-size:28px;font-weight:600;color:#f59e0b;font-variant-numeric:tabular-nums;line-height:1">2 274<span style="font-size:12px;color:#7f93ac;margin-left:4px">kWh</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #db2777;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">VDT obchody dnes</div><div style="font-size:28px;font-weight:600;color:#db2777;font-variant-numeric:tabular-nums;line-height:1">12</div></div>
+      </div>
+
+      <!-- params grid -->
+      <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden;margin-bottom:20px">
+        <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#1e6bd6"></span>Prevádzkové parametre</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;background:#e8eef6">
+          <div style="background:#fff;padding:16px 18px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:7px">Kapacita batérie</div><div style="font-size:20px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#0b1e3f">215<span style="font-size:12px;color:#7f93ac;margin-left:4px">kWh</span></div></div>
+          <div style="background:#fff;padding:16px 18px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:7px">Max nabíjanie</div><div style="font-size:20px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#0b1e3f">−99<span style="font-size:12px;color:#7f93ac;margin-left:4px">kW</span></div></div>
+          <div style="background:#fff;padding:16px 18px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:7px">Max vybíjanie</div><div style="font-size:20px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#0b1e3f">99<span style="font-size:12px;color:#7f93ac;margin-left:4px">kW</span></div></div>
+          <div style="background:#fff;padding:16px 18px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:7px">SOC min / max</div><div style="font-size:20px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#0b1e3f">5 / 98<span style="font-size:12px;color:#7f93ac;margin-left:4px">%</span></div></div>
+          <div style="background:#fff;padding:16px 18px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:7px">Inštalované FTV</div><div style="font-size:20px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#0b1e3f">125<span style="font-size:12px;color:#7f93ac;margin-left:4px">kWp</span></div></div>
+          <div style="background:#fff;padding:16px 18px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:7px">Limit odberu</div><div style="font-size:20px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#0b1e3f">100<span style="font-size:12px;color:#7f93ac;margin-left:4px">kW</span></div></div>
+          <div style="background:#fff;padding:16px 18px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:7px">Limit dodávky</div><div style="font-size:20px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#0b1e3f">−80<span style="font-size:12px;color:#7f93ac;margin-left:4px">kW</span></div></div>
+          <div style="background:#fff;padding:16px 18px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#7f93ac;margin-bottom:7px">Distribučný poplatok</div><div style="font-size:20px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#0b1e3f">42,8<span style="font-size:12px;color:#7f93ac;margin-left:4px">€/MWh</span></div></div>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden">
+        <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#059669"></span>Batéria — plán+RT vs realita + SOC</div>
+        <div style="padding:16px 18px 10px">{{ chartBatt }}</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ==================== FLOTILA ==================== -->
+    <sc-if value="{{ isFleet }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:fadeIn .5s cubic-bezier(.16,1,.3,1)">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:20px">
+        <div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#7f93ac;margin-bottom:6px">Simulácia & monitoring</div>
+          <h1 style="margin:0;font-size:clamp(24px,3vw,32px);font-weight:600;letter-spacing:-.02em">Flotila</h1>
+          <p style="margin:8px 0 0;color:#38516e;font-size:13.5px">Live prehľad všetkých úložísk — SOC, výkon, FTV a stav v reálnom čase.</p>
+        </div>
+        <span style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;color:#16a34a;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:500"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;animation:pulse 2s infinite"></span>LIVE · 13:42:18</span>
+      </div>
+
+      <!-- summary KPI -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px;margin-bottom:26px">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #16a34a;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Batérie online</div><div style="font-size:28px;font-weight:600;color:#16a34a;font-variant-numeric:tabular-nums;line-height:1">{{ fleetOnline }}</div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #059669;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Čistý výkon flotily</div><div style="font-size:28px;font-weight:600;color:#059669;font-variant-numeric:tabular-nums;line-height:1">{{ fleetNet }}<span style="font-size:12px;color:#7f93ac;margin-left:4px">kW</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #7c3aed;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Priemerný SOC</div><div style="font-size:28px;font-weight:600;color:#7c3aed;font-variant-numeric:tabular-nums;line-height:1">{{ fleetAvgSoc }}<span style="font-size:12px;color:#7f93ac;margin-left:4px">%</span></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #f59e0b;border-radius:12px;padding:16px 18px;box-shadow:0 1px 3px rgba(15,53,110,.06)"><div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-bottom:7px">Inštalovaná kapacita</div><div style="font-size:28px;font-weight:600;color:#f59e0b;font-variant-numeric:tabular-nums;line-height:1">{{ fleetCap }}<span style="font-size:12px;color:#7f93ac;margin-left:4px">kWh</span></div></div>
+      </div>
+
+      <!-- site cards -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+        <sc-for list="{{ fleetSites }}" as="f" hint-placeholder-count="4">
+          <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden;opacity:{{ f.ringOpacity }}">
+            <div style="display:flex;align-items:center;gap:9px;padding:14px 18px;border-bottom:1px solid #eef2f8">
+              <span style="width:9px;height:9px;border-radius:50%;background:{{ f.modeDot }};flex:0 0 auto"></span>
+              <span style="font-size:15px;font-weight:600;letter-spacing:-.01em;color:#0b1e3f">{{ f.name }}</span>
+              <span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:'JetBrains Mono',monospace;color:{{ f.onlineCol }}"><span style="width:7px;height:7px;border-radius:50%;background:{{ f.onlineCol }}"></span>{{ f.onlineLabel }}</span>
+            </div>
+            <div style="padding:18px;display:flex;align-items:center;gap:18px">
+              <div style="width:78px;height:78px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;{{ f.ring }}">
+                <div style="width:58px;height:58px;border-radius:50%;background:#fff;display:grid;place-items:center">
+                  <div style="text-align:center;line-height:1"><div style="font-size:20px;font-weight:600;color:{{ f.socCol }};font-variant-numeric:tabular-nums">{{ f.soc }}<span style="font-size:11px">%</span></div><div style="font-size:8.5px;text-transform:uppercase;letter-spacing:.08em;color:#7f93ac;margin-top:2px">SOC</div></div>
+                </div>
+              </div>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:10px">
+                <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:11px;color:#7f93ac">Výkon</span><span style="font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:600;color:{{ f.powerCol }};font-variant-numeric:tabular-nums">{{ f.power }} kW</span></div>
+                <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:11px;color:#7f93ac">FTV</span><span style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:500;color:#f59e0b;font-variant-numeric:tabular-nums">{{ f.ftv }} kW</span></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;background:{{ f.statusBg }};color:{{ f.statusFg }}">{{ f.status }}</span><span style="padding:2px 9px;border-radius:6px;font-size:10.5px;font-weight:600;background:#eef4fb;color:#38516e;border:1px solid #d9e3f1">{{ f.market }}</span></div>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- ==================== JEDNOTNÁ ŠABLÓNA (zvyšné routy) ==================== -->
+    <sc-if value="{{ isGeneric }}" hint-placeholder-val="{{ true }}">
+    <div style="animation:fadeIn .5s cubic-bezier(.16,1,.3,1)">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:22px">
+        <div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#7f93ac;margin-bottom:6px">{{ genGroup }}</div>
+          <h1 style="margin:0;font-size:clamp(24px,3vw,32px);font-weight:600;letter-spacing:-.02em">{{ genTitle }}</h1>
+          <p style="margin:8px 0 0;color:#38516e;font-size:13.5px">{{ genSub }}</p>
+        </div>
+        <span style="display:inline-flex;align-items:center;gap:7px;padding:6px 13px;background:#eef4fb;border:1px solid #cfe0fa;border-radius:999px;color:#1e6bd6;font-size:11.5px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#1e6bd6"></span>jednotný systém</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px;margin-bottom:20px">
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #cdd9ea;border-radius:12px;padding:16px 18px"><div style="height:9px;width:56px;background:#e8eef6;border-radius:4px;margin-bottom:12px"></div><div style="height:26px;width:88px;background:#eef4fb;border-radius:5px"></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #cdd9ea;border-radius:12px;padding:16px 18px"><div style="height:9px;width:66px;background:#e8eef6;border-radius:4px;margin-bottom:12px"></div><div style="height:26px;width:72px;background:#eef4fb;border-radius:5px"></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #cdd9ea;border-radius:12px;padding:16px 18px"><div style="height:9px;width:48px;background:#e8eef6;border-radius:4px;margin-bottom:12px"></div><div style="height:26px;width:96px;background:#eef4fb;border-radius:5px"></div></div>
+        <div style="background:#fff;border:1px solid #d9e3f1;border-left:3px solid #cdd9ea;border-radius:12px;padding:16px 18px"><div style="height:9px;width:60px;background:#e8eef6;border-radius:4px;margin-bottom:12px"></div><div style="height:26px;width:64px;background:#eef4fb;border-radius:5px"></div></div>
+      </div>
+      <div style="background:#fff;border:1px solid #d9e3f1;border-radius:14px;box-shadow:0 1px 3px rgba(15,53,110,.06);overflow:hidden">
+        <div style="padding:14px 18px;border-bottom:1px solid #d9e3f1;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#38516e;display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:2px;background:#1e6bd6"></span>{{ genTitle }}</div>
+        <div style="padding:24px 18px;display:flex;flex-direction:column;gap:12px">
+          <div style="height:12px;width:100%;background:#f2f6fc;border-radius:5px"></div>
+          <div style="height:12px;width:82%;background:#f2f6fc;border-radius:5px"></div>
+          <div style="height:12px;width:91%;background:#f2f6fc;border-radius:5px"></div>
+          <div style="height:12px;width:64%;background:#f2f6fc;border-radius:5px"></div>
+          <div style="margin-top:12px;display:flex;align-items:center;gap:10px;padding:12px 15px;background:#eef5ff;border:1px solid #cfe0fa;border-left:4px solid #1e6bd6;border-radius:9px;font-size:12.5px;color:#1e5ba8">Táto obrazovka preberá jednotný redizajn (tokeny, karty, KPI, tabuľky, chip-y a ovládanie). Detailný obsah dopĺňam v ďalšej dávke — už nikdy nezobrazuje starý vzhľad.</div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
     <!-- ==================== DIZAJN SYSTÉM ==================== -->
     <sc-if value="{{ isSystem }}" hint-placeholder-val="{{ true }}">
     <div style="animation:fadeIn .5s cubic-bezier(.16,1,.3,1)">
@@ -614,6 +1131,8 @@ class Component extends DCLogic {
       expert: !!props.expertByDefault,
       market: 'sk',
       activeProfile: 'sudolsky',
+      openGroup: null,
+      realioTab: 'viz',
       drag: null,
       curve: Array.from({length:96}, (_,i) => { const h=i/4; return 1 + 0.35*Math.exp(-((h-12)**2)/10) + 0.15*Math.exp(-((h-19)**2)/6) - 0.12*Math.exp(-((h-3)**2)/8); })
     };
@@ -819,6 +1338,38 @@ class Component extends DCLogic {
     return el('svg',{ ref:(n)=>{this.svgEl=n;}, viewBox:'0 0 1000 300', width:'100%', height:'auto', preserveAspectRatio:'xMidYMid meet', onPointerMove:this.onCurveMove, onPointerUp:this.onCurveUp, onPointerLeave:this.onCurveUp, style:{display:'block',touchAction:'none',userSelect:'none'} }, kids);
   }
 
+  mkSpark(data, color) {
+    const el = React.createElement, n = data.length;
+    const vMin = Math.min.apply(null, data), vMax = Math.max.apply(null, data);
+    const rng = (vMax - vMin) || 1, W = 260, H = 54, pad = 5;
+    const pts = data.map((v,i) => { const x = pad + (i/(n-1))*(W-2*pad); const y = H-pad - ((v-vMin)/rng)*(H-2*pad); return x.toFixed(1)+' '+y.toFixed(1); });
+    return el('svg',{viewBox:'0 0 '+W+' '+H,width:'100%',height:'54',preserveAspectRatio:'none',style:{display:'block'}},[
+      el('path',{key:'a',d:'M '+pad+' '+(H-pad)+' L '+pts.join(' L ')+' L '+(W-pad)+' '+(H-pad)+' Z',fill:color,opacity:0.12}),
+      el('path',{key:'l',d:'M '+pts.join(' L '),fill:'none',stroke:color,strokeWidth:2,strokeLinejoin:'round',strokeLinecap:'round'})
+    ]);
+  }
+  mkFlow() {
+    const el = React.createElement, C = this.C;
+    const node = (x,y,w,h,label,val,col,center) => [
+      el('rect',{key:label+'r',x,y,width:w,height:h,rx:12,fill:'#f7faff',stroke:center?col:'#d9e3f1',strokeWidth:center?2:1.4}),
+      el('text',{key:label+'l',x:x+w/2,y:y+h/2-6,textAnchor:'middle',fontSize:11,fontFamily:'Sora',fontWeight:600,letterSpacing:'0.06em',fill:C.t2},label),
+      el('text',{key:label+'v',x:x+w/2,y:y+h/2+17,textAnchor:'middle',fontSize:17,fontFamily:'JetBrains Mono',fontWeight:600,fill:col},val)
+    ];
+    const line = (d,col,rev) => [
+      el('path',{key:d+'b',d,fill:'none',stroke:'#d9e3f1',strokeWidth:2}),
+      el('path',{key:d+'p',d,fill:'none',stroke:col,strokeWidth:3,strokeLinecap:'round',strokeDasharray:'4 10',style:{animation:'flow 1.5s linear infinite'+(rev?' reverse':'')}})
+    ];
+    const kids = [];
+    kids.push.apply(kids, line('M 205 84 L 358 140', C.amber, false));
+    kids.push.apply(kids, line('M 205 216 L 358 168', C.violet, false));
+    kids.push.apply(kids, line('M 562 152 L 692 152', C.sky, false));
+    kids.push.apply(kids, node(70,54,135,66,'FTV','631,4 kW',C.amber));
+    kids.push.apply(kids, node(70,190,135,66,'BATÉRIA · 77 %','−34,9 kW',C.violet));
+    kids.push.apply(kids, node(358,119,205,66,'SPOTREBA','24,3 kW',C.green,true));
+    kids.push.apply(kids, node(692,119,140,66,'SIEŤ','−572,2 kW',C.sky));
+    return el('svg',{viewBox:'0 0 902 300',width:'100%',height:'auto',preserveAspectRatio:'xMidYMid meet',style:{display:'block'}},kids);
+  }
+
   renderVals() {
     const s = this.state, C = this.C;
     const set = (k,v) => this.setState({ [k]: v });
@@ -923,10 +1474,143 @@ class Component extends DCLogic {
       };
     });
 
+    const navGroupBase='display:inline-flex;align-items:center;gap:5px;padding:8px 12px;border-radius:8px;font:500 13px \'Sora\',sans-serif;cursor:pointer;border:1px solid transparent;background:transparent;color:#38516e;white-space:nowrap';
+    const navGroupOn='display:inline-flex;align-items:center;gap:5px;padding:8px 12px;border-radius:8px;font:600 13px \'Sora\',sans-serif;cursor:pointer;border:1px solid #bcd3f5;background:#e8f1ff;color:#1e6bd6;white-space:nowrap';
+    const menuItem='display:block;width:100%;text-align:left;padding:8px 11px;border-radius:7px;border:0;background:transparent;color:#38516e;font:500 13px \'Sora\',sans-serif;cursor:pointer;white-space:nowrap';
+    const menuItemOn='display:block;width:100%;text-align:left;padding:8px 11px;border-radius:7px;border:0;background:#1e6bd6;color:#fff;font:600 13px \'Sora\',sans-serif;cursor:pointer;white-space:nowrap';
+    const groupsDef = [
+      ['🗓 Plánovanie', [['Plán D-1','plan','both'],['Denný trh 15-min','plan','both'],['Batch plán','batch','both'],['Uložené plány','plans','both']]],
+      ['🟢 Simulácia & monitoring', [['Živá simulácia','sim','both'],['Manager dashboard','manager','both'],['Flotila','fleet','both'],['Profil dashboard','dashboard','both'],['Výsledok simulácie','simresult','sim']]],
+      ['💹 Obchodovanie', [['RT poradca','rt','both'],['OKTE VDT prehľad','vdt','both'],['VDT Live advisor','vdtlive','both'],['VDT D-1','vdtd1','both'],['VDT Board','vdtboard','both'],['Paper trading','auto','both']]],
+      ['🔌 Reálne riadenie', [['Reálne meranie','realio','real'],['Zákazníci','customers','real'],['CDC konfigurácia','cdc','real'],['Okno regulácie','regulation','real']]],
+      ['💾 Dáta & nastavenia', [['Profily','profiles','both'],['Spotreba','load','both'],['FTV scenár','ftv','both'],['Kalibrácia','kalib','both'],['Dáta','data','both']]]
+    ];
+    const mode = active.mode;
+    const navGroups = groupsDef.map((g,gi) => {
+      const items = g[1].filter(it => it[2]==='both' || it[2]===mode).map(it => ({
+        label: it[0], active: it[1]===s.page,
+        style: it[1]===s.page ? menuItemOn : menuItem,
+        onClick: () => this.setState({ page: it[1], openGroup: null })
+      }));
+      return { label:g[0], items, open: s.openGroup===gi,
+        onTrig: () => this.setState({ openGroup: s.openGroup===gi ? null : gi }),
+        trigStyle: (s.openGroup===gi || items.some(x=>x.active)) ? navGroupOn : navGroupBase };
+    });
+    const detailed = { sim:1, plan:1, profiles:1, system:1, vdt:1, realio:1, fleet:1, customers:1, regulation:1, cdc:1, dashboard:1 };
+    const pageMeta = {
+      batch:['Batch plán','Hromadné generovanie plánov pre rozsah dní'],
+      plans:['Uložené plány','Zoznam a mazanie uložených plánov'],
+      manager:['Manager dashboard','Flotilový prehľad · read-only ekonomika'],
+      fleet:['Flotila','Live prehľad viacerých profilov · SOC, výkon'],
+      dashboard:['Profil dashboard','Prehľad aktívneho profilu'],
+      simresult:['Výsledok simulácie','Equity krivka · Sharpe · max DD'],
+      rt:['RT poradca','Odporúčanie pre aktuálny 15-min interval'],
+      vdtlive:['VDT Live advisor','BM ceny + návrhy buy/sell vs plán'],
+      vdtd1:['VDT D-1','D-1 plán vs BM realita (side-by-side)'],
+      vdtboard:['VDT Board','Live orderbook · bid/ask · depth'],
+      auto:['Paper trading','Kill-switch · toggle profilov'],
+      customers:['Zákazníci','Flotila reálnych batérií'],
+      cdc:['CDC konfigurácia','Nastavenie CDC fleet'],
+      regulation:['Okno regulácie','Regulačné okno batérie'],
+      load:['Spotreba','Import spotrebných dát (CSV)'],
+      ftv:['FTV scenár','Test FTV logiky · volatilita, lookahead'],
+      kalib:['Kalibrácia','Fit modelu · metriky'],
+      data:['Dáta','Raw súbor browser + export ZIP']
+    };
+    let genGroup = '';
+    for (const g of groupsDef) if (g[1].some(it => it[1]===s.page)) genGroup = g[0];
+
+    const fleetRaw = [
+      { name:'Sudolsky C-BAT', mode:'real', market:'SK', soc:63, power:-42.3, ftv:88.1, cap:215, online:true },
+      { name:'TBB a.s.', mode:'real', market:'SK', soc:41, power:31.5, ftv:12.4, cap:180, online:true },
+      { name:'Sim-Test 01', mode:'simulation', market:'CZ', soc:78, power:-18.0, ftv:64.7, cap:120, online:true },
+      { name:'Sim-Volatility', mode:'simulation', market:'CZ', soc:15, power:22.8, ftv:0.0, cap:90, online:false }
+    ];
+    const fleetSites = fleetRaw.map(f => {
+      const real = f.mode==='real', charging = f.power < 0;
+      const ringCol = f.soc>=50 ? '#16a34a' : (f.soc>=20 ? '#f59e0b' : '#dc2626');
+      return { name:f.name, market:f.market, soc:f.soc, online:f.online, cap:f.cap,
+        power: (f.power>=0?'+':'−')+Math.abs(f.power).toFixed(1), powerCol: charging ? '#7c3aed' : '#059669',
+        ftv: f.ftv.toFixed(1),
+        status: !f.online ? 'offline' : (Math.abs(f.power)<1 ? 'idle' : (charging ? 'nabíja' : 'vybíja')),
+        statusBg: !f.online ? '#f1f5f9' : (charging ? '#f5f3ff' : '#ecfdf5'),
+        statusFg: !f.online ? '#94a3b8' : (charging ? '#7c3aed' : '#059669'),
+        ring: 'background:conic-gradient('+ringCol+' '+(f.soc*3.6).toFixed(0)+'deg, #e8eef6 0deg)',
+        socCol: ringCol,
+        modeDot: real ? '#dc2626' : '#16a34a', modeLabel: real ? 'REAL' : 'SIM',
+        modeBg: real ? '#fef2f2' : '#f0fdf4', modeFg: real ? '#b91c1c' : '#15803d', modeBorder: real ? '#fca5a5' : '#bbf7d0',
+        onlineCol: f.online ? '#16a34a' : '#cbd5e1', onlineLabel: f.online ? 'online' : 'offline',
+        ringOpacity: f.online ? '1' : '.45'
+      };
+    });
+    const fleetNet = fleetRaw.reduce((a,b)=>a+b.power,0);
+
+    const custRaw = [
+      { name:'Sudolsky s.r.o.', site:'Nitra — areál', cap:215, soc:63, power:-42.3, bender:'online', cdc:'v0.9.2', lastWrite:'13:41:58', reg:'aktívna' },
+      { name:'TBB a.s.', site:'Trnava — hala', cap:180, soc:41, power:31.5, bender:'online', cdc:'v0.9.2', lastWrite:'13:40:12', reg:'pozastavená' },
+      { name:'Enerbyt', site:'Košice — sklad', cap:96, soc:88, power:0, bender:'online', cdc:'v0.9.0', lastWrite:'13:39:44', reg:'aktívna' },
+      { name:'Metalka', site:'Žilina — prevádzka', cap:250, soc:22, power:12.0, bender:'offline', cdc:'—', lastWrite:'12:05:31', reg:'chyba' }
+    ];
+    const customersRows = custRaw.map(c => {
+      const off = c.bender==='offline', charging = c.power<0;
+      return { name:c.name, site:c.site, cap:c.cap, soc:c.soc,
+        socCol: c.soc>=50?'#16a34a':(c.soc>=20?'#f59e0b':'#dc2626'),
+        power:(c.power>=0?'+':'−')+Math.abs(c.power).toFixed(1),
+        powerCol: Math.abs(c.power)<0.1?'#7f93ac':(charging?'#7c3aed':'#059669'),
+        benderCol: off?'#dc2626':'#16a34a', bender:c.bender, cdc:c.cdc, lastWrite:c.lastWrite, reg:c.reg,
+        regBg: c.reg==='aktívna'?'#f0fdf4':(c.reg==='chyba'?'#fef2f2':'#fffbeb'),
+        regFg: c.reg==='aktívna'?'#15803d':(c.reg==='chyba'?'#b91c1c':'#92610a'),
+        regBorder: c.reg==='aktívna'?'#bbf7d0':(c.reg==='chyba'?'#fca5a5':'#fde68a') };
+    });
+
+    const rtabBase='padding:8px 15px;border-radius:9px;font:600 13px \'Sora\',sans-serif;cursor:pointer;border:1px solid transparent;background:transparent;color:#64748b;white-space:nowrap';
+    const rtabOn='padding:8px 15px;border-radius:9px;font:600 13px \'Sora\',sans-serif;cursor:pointer;border:1px solid #bcd3f5;background:#e8f1ff;color:#1e6bd6;white-space:nowrap';
+    const rt = s.realioTab || 'viz';
+    const sparkCards = [
+      { label:'Spotreba', value:'24,3', unit:'kW', sub:'Sieť + FTV + Batt', col:C.green, spark:this.mkSpark(this.d.cons.slice(48), C.green) },
+      { label:'FTV', value:'631,4', unit:'kW', sub:'solárna produkcia', col:C.amber, spark:this.mkSpark(this.d.ftv.slice(48), C.amber) },
+      { label:'Stav batérie', value:'−34,9', unit:'kW', sub:'⚡ nabíja', col:C.violet, spark:this.mkSpark(this.d.battP.slice(48), C.violet) },
+      { label:'SOC', value:'77,2', unit:'%', sub:'stav nabitia', col:'#6d28d9', spark:this.mkSpark(this.d.soc.slice(48), '#6d28d9') },
+      { label:'Sieť', value:'−572', unit:'kW', sub:'export do siete', col:C.sky, spark:this.mkSpark(this.d.gridNet.slice(48), C.sky) }
+    ];
+    const odTimes = ['14:41','14:40','14:39','14:38','14:37','14:36','14:35','14:34','14:33','14:32'];
+    const odpoctyRows = odTimes.map((t,i) => { const idx = 59 - i; return { time:t, cons:this.fmt(this.d.cons[idx],1), ftv:this.fmt(this.d.ftv[idx]*9,1), batt:this.sign(this.d.battP[idx],1), soc:this.fmt(this.d.soc[idx],0), siet:this.sign(-(this.d.gridNet[idx]*9),1) }; });
+
     return {
+      rIsViz: rt==='viz', rIsCtrl: rt==='control', rIsSet: rt==='settings',
+      setRViz:()=>set('realioTab','viz'), setRCtrl:()=>set('realioTab','control'), setRSet:()=>set('realioTab','settings'),
+      rViz: rt==='viz'?rtabOn:rtabBase, rCtrl: rt==='control'?rtabOn:rtabBase, rSet: rt==='settings'?rtabOn:rtabBase,
+      flowChart: this.mkFlow(), sparkCards, odpoctyRows,
+      isRegulation: s.page==='regulation',
+      isDashboard: s.page==='dashboard',
+      isCdc: s.page==='cdc',
+      cdcRows: [
+        { dev:'CDC-01', cust:'Sudolsky s.r.o.', tags:42, status:'ok', last:'13:41:58' },
+        { dev:'CDC-02', cust:'TBB a.s.', tags:38, status:'ok', last:'13:40:12' },
+        { dev:'CDC-03', cust:'Enerbyt', tags:40, status:'ok', last:'13:39:44' },
+        { dev:'CDC-04', cust:'Metalka', tags:0, status:'chyba', last:'12:05:31' }
+      ].map(d => ({ ...d,
+        statusBg: d.status==='ok'?'#f0fdf4':(d.status==='chyba'?'#fef2f2':'#fffbeb'),
+        statusFg: d.status==='ok'?'#15803d':(d.status==='chyba'?'#b91c1c':'#92610a'),
+        statusBorder: d.status==='ok'?'#bbf7d0':(d.status==='chyba'?'#fca5a5':'#fde68a') })),
+      isCustomers: s.page==='customers', customersRows,
+      custCount: custRaw.length,
+      custOnline: custRaw.filter(c=>c.bender==='online').length + '/' + custRaw.length,
+      custCap: custRaw.reduce((a,b)=>a+b.cap,0),
+      custActive: custRaw.filter(c=>c.reg==='aktívna').length,
+      isFleet: s.page==='fleet', fleetSites,
+      fleetOnline: fleetRaw.filter(f=>f.online).length + '/' + fleetRaw.length,
+      fleetAvgSoc: Math.round(fleetRaw.reduce((a,b)=>a+b.soc,0)/fleetRaw.length),
+      fleetNet: (fleetNet>=0?'+':'−')+Math.abs(fleetNet).toFixed(1),
+      fleetCap: fleetRaw.reduce((a,b)=>a+b.cap,0),
       isSim: s.page==='sim', isPlan: s.page==='plan', isSystem: s.page==='system', isProfiles: s.page==='profiles',
-      goSim: () => set('page','sim'), goPlan: () => set('page','plan'), goSystem: () => set('page','system'), goProfiles: () => set('page','profiles'),
-      nav: { sim: s.page==='sim'?navOn:navBase, plan: s.page==='plan'?navOn:navBase, system: s.page==='system'?navOn:navBase, profiles: s.page==='profiles'?navOn:navBase },
+      isVdt: s.page==='vdt', isRealio: s.page==='realio', isGeneric: !detailed[s.page],
+      genTitle: (pageMeta[s.page] && pageMeta[s.page][0]) || s.page,
+      genSub: (pageMeta[s.page] && pageMeta[s.page][1]) || '',
+      genGroup,
+      navGroups, anyMenuOpen: s.openGroup != null, closeMenus: () => set('openGroup', null),
+      goSystem: () => set('page','system'),
+      nav: { system: s.page==='system'?navOn:navBase },
       profileCards, chartCurve: this.curveChart(), resetCurve: this.resetCurve,
       expert: s.expert,
       toggleExpert: () => set('expert', !s.expert),

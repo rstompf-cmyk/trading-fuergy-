@@ -3,84 +3,87 @@
 {% block title %}Profily — {{ app_name }}{% endblock %}
 
 {% block content %}
-  <h1>⚙ Profily</h1>
-
-  <div class="card card-blue">
-    <b>Aktívny profil:</b>
-    {% if active %}
-      <span class="chip {{ active_mode }}" style="font-size:14px">
-        {% if active_mode == "real" %}🔴{% else %}🎮{% endif %} {{ active }}
-      </span>
-    {% else %}
-      <i>žiadny</i>
-    {% endif %}
-    &nbsp;|&nbsp;
-    <a href="/profiles/edit?name=__new__" class="btn"
-        title="Vytvorí nový profile s hodnotami z AKTUÁLNYCH UI nastavení">➕ Nový (z UI)</a>
-    <a href="/profiles/edit?name=__new__&amp;defaults=1" class="btn green"
-        title="Vytvorí nový profile s prázdnym stavom — všetky parametre na továrenských hodnotách">➕ Nový (defaulty)</a>
-
-    <form method="post" action="/profiles/snapshot" style="display:inline-flex;gap:6px;align-items:center;margin-left:10px">
-      <input name="name" placeholder="názov nového profilu" required style="width:200px">
-      <select name="mode" title="Typ profilu — fixovaný pri vzniku">
-        <option value="simulation">🎮 Simulácia</option>
-        <option value="real">🔴 Reálny chod</option>
-      </select>
-      <button class="btn" style="background:#5E35B1">📸 Snímka z aktuálnych UI hodnôt</button>
-    </form>
+  <div class="page-head">
+    <div>
+      <h1>Profily</h1>
+      <p class="muted" style="max-width:640px;margin:6px 0 0">Konfigurácia jedného úložiska — batéria, FTV, sieť, ceny, VDT, distribúcia + šablóna ×/RT.
+        Aplikovaním sa profil stane aktívnym na všetkých stránkach.</p>
+    </div>
+    <div class="flex gap-8 flex-wrap items-center">
+      <a href="/profiles/edit?name=__new__" class="btn" title="Nový profil z aktuálnych UI hodnôt">➕ Nový (z UI)</a>
+      <a href="/profiles/edit?name=__new__&amp;defaults=1" class="btn green" title="Nový profil na továrenských hodnotách">➕ Nový (defaulty)</a>
+      <form method="post" action="/profiles/snapshot" class="flex gap-4 items-center" style="margin:0">
+        <input name="name" placeholder="názov nového profilu" required style="width:180px">
+        <select name="mode" title="Typ profilu — fixovaný pri vzniku" style="width:auto">
+          <option value="simulation">🎮 Simulácia</option>
+          <option value="real">🔴 Reálny chod</option>
+        </select>
+        <button class="btn sec">📸 Snímka z UI</button>
+      </form>
+    </div>
   </div>
 
-  <p style="color:#666;font-size:13px">
-    Profile obsahuje VŠETKY parametre z formulárov
-    <a href="/">Plán D-1</a>, <a href="/dentrh">Denný trh 15-min</a>,
-    <a href="/rt">RT poradca</a> + globálnu šablónu × a RT mask.
-    Kliknutím <b>aplikovať</b> sa profile nastaví ako aktívny a všetky formuláre + plan_overrides sa prepíšu jeho hodnotami.
-  </p>
+  {% if active %}
+    <div class="banner info" style="margin-bottom:16px">Aktívny profil:
+      <span class="chip {{ active_mode }}">{% if active_mode == "real" %}🔴{% else %}🎮{% endif %} {{ active }}</span>
+    </div>
+  {% endif %}
 
   {% if rows %}
-    <table class="tbl-compact">
-      <tr>
-        <th>Názov</th><th>Update</th><th>× akt</th><th>RT off</th>
-        <th>kdis/kchg</th><th>Flagy</th><th>Note</th><th>Akcia</th>
-      </tr>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px">
       {% for r in rows %}
-        <tr class="{% if r.active %}row-active-{{ r.mode }}{% elif r.mode == 'real' %}row-real{% endif %}">
-          <td>
-            <span class="chip {{ r.mode }}">{{ r.mode }}</span>
-            <b>{{ r.name }}{% if r.active %} ★{% endif %}</b>
-            {% if r.bg_enabled %}
-              <span title="Beží na pozadí — scheduler robí každú 15-min: D-1 plán, VDT live advisor, auto_control"
-                     style="display:inline-block;width:11px;height:11px;border-radius:50%;
-                            background:#1F88E5;box-shadow:0 0 0 2px rgba(31,136,229,.25);
-                            margin-left:6px;vertical-align:middle">⠀</span>
-              <span style="font-size:11px;color:#1F88E5;font-weight:600;margin-left:4px">beží</span>
-            {% endif %}
-          </td>
-          <td class="muted" style="font-size:12px">{{ r.updated_at }}</td>
-          <td>{{ r.mults_changed }}</td>
-          <td>{{ r.rt_off_count }}</td>
-          <td>{{ r.kdis }}/{{ r.kchg }}</td>
-          <td>
-            {% if r.no_planned_discharge %}<span class="chip simulation">iba D-1 nab</span>{% endif %}
+        {% set dot = "#dc2626" if r.mode == "real" else "#16a34a" %}
+        <div class="card" style="padding:18px;{% if r.active %}box-shadow:0 0 0 2px var(--accent),var(--shadow);{% endif %}">
+          {# hlavička karty: bodka + názov + AKTÍVNY + mód #}
+          <div class="flex items-center gap-8" style="margin-bottom:12px">
+            <span style="width:9px;height:9px;border-radius:50%;background:{{ dot }};flex:0 0 auto"></span>
+            <span style="font-size:16px;font-weight:600;color:var(--text-0)">{{ r.name }}</span>
+            {% if r.active %}<span class="chip" style="background:#e8f1ff;color:var(--accent);border:1px solid #bcd3f5">★ AKTÍVNY</span>{% endif %}
+            <span class="chip {{ r.mode }}" style="margin-left:auto">{{ "REAL" if r.mode == "real" else "SIM" }}</span>
+          </div>
+          {# flagy #}
+          <div class="flex items-center gap-8 flex-wrap" style="margin-bottom:12px">
+            {% if r.no_planned_discharge %}<span class="chip">iba D-1 nabíjanie</span>{% endif %}
             {% if r.zco_bias_w %}<span class="chip">bias {{ r.zco_bias_w }}</span>{% endif %}
-          </td>
-          <td class="muted" style="font-size:12px">{{ r.note[:60] }}</td>
-          <td>
-            <form method="post" action="/profiles/apply" style="display:inline">
+            {% if r.bg_enabled %}
+              <span class="chip" style="background:#eff6ff;color:#1d4ed8">
+                <span style="width:7px;height:7px;border-radius:50%;background:#1d4ed8;display:inline-block"></span>beží na pozadí</span>
+            {% endif %}
+          </div>
+          {# 3-stat mriežka #}
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-bottom:12px">
+            <div style="background:var(--bg-2);padding:10px 12px">
+              <div class="label-mini">kdis / kchg</div>
+              <div class="mono" style="font-size:14px;font-weight:600">{{ r.kdis }}/{{ r.kchg }}</div>
+            </div>
+            <div style="background:var(--bg-2);padding:10px 12px">
+              <div class="label-mini">× akt.</div>
+              <div class="mono" style="font-size:14px;font-weight:600;color:var(--dt)">{{ r.mults_changed }}</div>
+            </div>
+            <div style="background:var(--bg-2);padding:10px 12px">
+              <div class="label-mini">RT off</div>
+              <div class="mono" style="font-size:14px;font-weight:600;color:var(--consume)">{{ r.rt_off_count }}</div>
+            </div>
+          </div>
+          {% if r.note %}<div class="mono faint" style="margin-bottom:14px">{{ r.note[:70] }}</div>{% endif %}
+          {# akcie #}
+          <div class="flex items-center gap-8 flex-wrap" style="padding-top:12px;border-top:1px solid var(--bg-3)">
+            <form method="post" action="/profiles/apply" style="margin:0;display:inline">
               <input type="hidden" name="name" value="{{ r.name }}">
-              <button class="btn green sm" title="Aplikovať profile na všetky formuláre">aplikovať</button>
+              <button class="btn green sm" title="Aplikovať profil na všetky formuláre">✓ Aplikovať</button>
             </form>
-            <a class="btn sm" href="/profiles/edit?name={{ r.name }}">edit</a>
-            <form method="post" action="/profiles/delete" style="display:inline"
-                   onsubmit="return confirm('Naozaj zmazať profile {{ r.name }}?')">
+            <a class="btn sec sm" href="/profiles/edit?name={{ r.name }}">Upraviť</a>
+            <form method="post" action="/profiles/delete" style="margin:0;display:inline"
+                  onsubmit="return confirm('Naozaj zmazať profil {{ r.name }}?')">
               <input type="hidden" name="name" value="{{ r.name }}">
-              <button class="btn red sm">zmazať</button>
+              <button class="btn red sm">Zmazať</button>
             </form>
-          </td>
-        </tr>
+            <span class="mono faint" style="margin-left:auto;font-size:10.5px">{{ r.updated_at }}</span>
+          </div>
+        </div>
       {% endfor %}
-    </table>
+    </div>
   {% else %}
-    <div class="muted text-center" style="padding:24px">(žiadne profile)</div>
+    <div class="muted text-center" style="padding:24px">(žiadne profily)</div>
   {% endif %}
 {% endblock %}
