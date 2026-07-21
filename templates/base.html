@@ -4,17 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
-  <link rel="stylesheet" href="/static/css/app.css?v=20260622b">
+  <link rel="stylesheet" href="/static/css/app.css?v=20260721redesign">
   {% block head_extra %}{% endblock %}
 </head>
 <body>
   {# VDT Upratovanie: alert banner + ručný obchod modal + FAB tlačidlá + JS (zdieľané cez ui.html) #}
   {{ cleanup_ui|safe }}
   {% block layout %}
-    <div class="container {% block container_class %}{% endblock %}">
-      {% block nav %}{% include "components/nav.html" %}{% endblock %}
+    {% block nav %}{% include "components/nav.html" %}{% endblock %}
+    <main class="container {% block container_class %}{% endblock %}">
       {% block content %}{% endblock %}
-    </div>
+    </main>
   {% endblock %}
 
   {% block scripts %}{% endblock %}

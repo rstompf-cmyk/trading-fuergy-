@@ -41,7 +41,9 @@
     ("/data", "Dáta", "both")
   ])
 ] %}
-<nav class="app-nav">
+<header class="app-header">
+ <nav class="app-nav">
+  <span class="app-brand"><span class="logo">⚡</span>FUERGY <small>· FTV · Batéria Trading</small></span>
   {% for glabel, items in nav_groups %}
     {% set ns = namespace(vis=[], active=false) %}
     {% for href, label, m in items %}
@@ -63,16 +65,6 @@
     {% endif %}
   {% endfor %}
   <span class="app-nav-right">
-    {% if active_profile %}
-      <span class="chip {{ active_profile.mode }}" title="Aktívny profil">
-        {{ active_profile.name }} · {{ active_profile.mode }}
-      </span>
-    {% endif %}
-    {% if active_market %}
-      <span class="chip" style="background:#fff;border:1px solid var(--border)">
-        {{ active_market | upper }}
-      </span>
-    {% endif %}
     {# User chip + Odhlásiť — JS vyplní z /me ak je auth zapnutý #}
     <span id="navUserChip" class="user-chip hidden">
       <span id="navUserLabel">…</span>
@@ -80,7 +72,23 @@
       <a href="/logout" target="_top" class="logout-btn" title="Odhlásiť">↪ Odhlásiť</a>
     </span>
   </span>
-</nav>
+ </nav>
+ {# Kontextový pás: aktívny profil + mód + trh #}
+ {% if active_profile or active_market %}
+ <div class="app-context">
+   {% if active_profile %}
+     <span class="chip {{ active_profile.mode }}" title="Aktívny profil">● {{ active_profile.name }} · {{ active_profile.mode }}</span>
+   {% endif %}
+   {% if active_market %}
+     <span class="chip" title="Aktívny trh">{{ active_market | upper }}</span>
+   {% endif %}
+ </div>
+ {% endif %}
+ {# Varovný pás — len reálny mód (povely idú na fyzické zariadenie) #}
+ {% if active_profile and active_profile.mode == "real" %}
+ <div class="real-warning"><span class="dot"></span> REÁLNY MÓD — povely idú na fyzické zariadenie (Bender)</div>
+ {% endif %}
+</header>
 <script>
 function navTog(btn, ev){
   if (ev) ev.stopPropagation();
