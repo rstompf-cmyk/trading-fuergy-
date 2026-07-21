@@ -417,7 +417,7 @@ def _nav(active: str = "") -> str:
     # naň priamo do outputu _nav() (link v <body> je platný) → dizajn systém (tokeny, sticky
     # header, karty, chip, tlačidlá, tabuľky) sa aplikuje aj na inline stránky. app.css definuje
     # .app-header/.app-nav/.nav-group/... takže starý inline _navcss už netreba.
-    _assets = '<link rel="stylesheet" href="/static/css/app.css?v=20260721redesign">'
+    _assets = '<link rel="stylesheet" href="/static/css/app-shell.css?v=20260721b">'
     _navjs = ('<script>function navTog(b,e){if(e)e.stopPropagation();'
               'var g=b.parentNode,w=g.classList.contains("open"),a=document.querySelectorAll(".nav-group");'
               'for(var i=0;i<a.length;i++)a[i].classList.remove("open");'

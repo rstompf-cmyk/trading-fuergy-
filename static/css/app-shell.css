@@ -1,0 +1,88 @@
+/* app-shell.css — LEN pre inline (legacy) stránky, ktoré majú vlastný <head>/<style>.
+   Obsahuje dizajn TOKENY + fonty + SHELL (sticky hlavička, nav, chip, kontext, real-warning)
+   + KOMPONENTOVÉ TRIEDY (.card/.kpi-tile/.btn/.banner/...). ZÁMERNE bez holých element pravidiel
+   (label/input/select/textarea/table/fieldset/h1…), aby NErozbil vlastný layout inline formulárov.
+   Plný app.css (s element pravidlami) používajú len template stránky cez base.html. */
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --bg-0:#eef4fb; --bg-1:#ffffff; --bg-2:#f7faff; --bg-3:#eaf1fb;
+  --line:#d9e3f1; --line-strong:#c4d3e6;
+  --text-0:#0b1e3f; --text-1:#38516e; --text-2:#7f93ac;
+  --accent:#1e6bd6; --accent-dark:#1656ad;
+  --green:#16a34a; --danger:#dc2626; --warning:#f59e0b;
+  --dt:#2563eb; --rt:#0891b2; --vdt:#db2777; --dist:#7c3aed;
+  --ftv:#f59e0b; --batt:#059669; --grid:#0ea5e9; --consume:#e11d48;
+  --radius:10px; --radius-md:14px; --radius-pill:999px;
+  --shadow:0 1px 3px rgba(15,53,110,.06); --shadow-lift:0 4px 12px rgba(30,107,214,.22);
+  --shadow-md:0 4px 20px rgba(15,53,110,.10);
+  --primary:var(--accent); --primary-dark:var(--accent-dark); --primary-light:var(--accent);
+  --bg:var(--bg-0); --bg-card:var(--bg-1); --border:var(--line); --border-light:var(--bg-3);
+  --text:var(--text-0); --text-muted:var(--text-1); --text-faint:var(--text-2);
+  --success:var(--green); --radius-sm:8px; --radius-lg:var(--radius-md);
+}
+
+/* Len povrch — font + pozadie. ŽIADNY margin/padding/element reset. */
+body {
+  font-family:'Sora', system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+  color:var(--text-0); background:var(--bg-0);
+  background-image:
+    radial-gradient(ellipse 1100px 560px at 82% -220px, rgba(30,107,214,.10), transparent 70%),
+    radial-gradient(ellipse 760px 400px at 2% 104%, rgba(14,165,233,.08), transparent 70%);
+  background-attachment:fixed; -webkit-font-smoothing:antialiased;
+}
+.mono, .kpi-tile .kt-value, .k-value, .num { font-family:'JetBrains Mono', ui-monospace, monospace; font-variant-numeric:tabular-nums; }
+
+/* Sticky hlavička */
+.app-header { position:sticky; top:0; z-index:60; background:rgba(255,255,255,.86); backdrop-filter:blur(10px); border-bottom:1px solid var(--line); margin:0 0 14px; }
+.app-brand { display:inline-flex; align-items:center; gap:9px; font-weight:700; color:var(--text-0); font-size:15px; letter-spacing:-.01em; white-space:nowrap; }
+.app-brand .logo { width:26px; height:26px; border-radius:8px; background:linear-gradient(135deg,var(--accent),#0ea5e9); display:inline-flex; align-items:center; justify-content:center; color:#fff; font-size:14px; }
+.app-brand small { color:var(--text-2); font-weight:500; font-size:11px; }
+.app-nav { display:flex; flex-wrap:wrap; gap:4px; align-items:center; padding:8px clamp(12px,2vw,20px); }
+.app-nav-right { margin-left:auto; display:inline-flex; gap:8px; align-items:center; }
+.app-context { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px clamp(12px,2vw,20px); border-top:1px solid var(--bg-3); background:var(--bg-2); }
+.real-warning { display:flex; align-items:center; gap:10px; padding:8px clamp(12px,2vw,20px); background:#fdeaea; color:#b91c1c; font-size:13px; font-weight:600; border-top:1px solid #f6cccc; }
+.real-warning .dot { width:9px; height:9px; border-radius:50%; background:var(--danger); animation:pulseRed 1.6s infinite; }
+@keyframes pulseRed { 0%,100%{ box-shadow:0 0 0 0 rgba(220,38,38,.55);} 50%{ box-shadow:0 0 0 7px transparent;} }
+
+/* Rozbaľovacie menu */
+.nav-group { position:relative; }
+.nav-group > .nav-trig { border:0; background:transparent; color:var(--text-1); font:500 14px 'Sora',sans-serif; padding:8px 12px; border-radius:var(--radius-sm); cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+.nav-group > .nav-trig:hover { background:var(--bg-3); color:var(--text-0); }
+.nav-group.open > .nav-trig, .nav-group.has-active > .nav-trig { background:var(--accent); color:#fff; }
+.nav-menu { position:absolute; top:calc(100% + 8px); left:0; z-index:70; background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius-md); box-shadow:var(--shadow-md); padding:6px; min-width:236px; display:none; }
+.nav-group.open > .nav-menu { display:block; animation:fadeIn .14s ease; }
+@keyframes fadeIn { from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
+.nav-menu .nav-sec { font:600 11px 'Sora',sans-serif; color:var(--text-2); text-transform:uppercase; letter-spacing:.06em; padding:6px 10px; }
+.nav-menu a { display:block; padding:8px 10px; border-radius:var(--radius-sm); color:var(--text-0); font-size:14px; text-decoration:none; }
+.nav-menu a:hover { background:var(--bg-3); }
+.nav-menu a.active { background:var(--accent); color:#fff; font-weight:600; }
+
+/* Chips */
+.chip { display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:var(--radius-pill); font-size:11px; font-weight:600; background:var(--bg-3); color:var(--accent); font-family:'JetBrains Mono',monospace; }
+.chip.simulation { background:#eafaf0; color:#128a3e; } .chip.real { background:#fdeaea; color:#b91c1c; }
+.chip.admin { background:#fdeaea; color:#b91c1c; } .chip.trading { background:#fef6e7; color:#a15c07; }
+.chip.obchodnik { background:#eafaf0; color:#128a3e; } .chip.zakaznik { background:#eef2ff; color:#3730a3; }
+.user-chip { display:inline-flex; align-items:center; gap:8px; padding:4px 4px 4px 12px; background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius-pill); font-size:13px; }
+.user-chip .logout-btn { padding:4px 10px; border-radius:var(--radius-pill); background:var(--danger); color:#fff; text-decoration:none; font-size:11px; font-weight:600; }
+
+/* Komponentové triedy pre postupnú konverziu inline sekcií (aplikujú sa LEN keď element má triedu) */
+.btn { display:inline-flex; align-items:center; gap:6px; background:var(--accent); color:#fff; border:0; padding:9px 16px; border-radius:var(--radius-sm); cursor:pointer; font:500 14px 'Sora',sans-serif; line-height:1; text-decoration:none; }
+.btn:hover { background:var(--accent-dark); }
+.btn.sec { background:var(--bg-1); color:var(--accent); border:1px solid var(--line-strong); }
+.btn.red, .btn-danger { background:var(--danger); } .btn.green, .btn.gr { background:var(--green); }
+.btn.sm { padding:6px 11px; font-size:12px; } .btn.lg { padding:11px 22px; font-size:15px; }
+.card { background:var(--bg-1); border:1px solid var(--line); border-radius:var(--radius-md); padding:14px 16px; box-shadow:var(--shadow); }
+.card-h, .card-head { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); color:var(--text-0); font-weight:600; font-size:15px; }
+.card-b, .card-body { padding:16px; }
+.kpi-tile { background:var(--bg-1); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px; }
+.kpi-tile.dt{border-left-color:var(--dt);} .kpi-tile.rt{border-left-color:var(--rt);} .kpi-tile.vdt{border-left-color:var(--vdt);} .kpi-tile.dist{border-left-color:var(--dist);}
+.banner { padding:10px 14px; border-radius:var(--radius-sm); margin:10px 0; font-size:13px; border-left:4px solid; background:var(--bg-1); }
+.banner.info{background:#eef5ff;border-color:var(--accent);color:var(--accent-dark);} .banner.success{background:#eafaf0;border-color:var(--green);color:#128a3e;}
+.banner.warn{background:#fef6e7;border-color:var(--warning);color:#a15c07;} .banner.error{background:#fdeaea;border-color:var(--danger);color:#b91c1c;}
+.page-head { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin:6px 2px 14px; }
+.range-bar { display:inline-flex; gap:2px; padding:3px; background:var(--bg-3); border:1px solid var(--line); border-radius:var(--radius-pill); }
+.range-btn { border:0; background:transparent; color:var(--text-1); font:500 13px 'Sora',sans-serif; padding:6px 14px; border-radius:var(--radius-pill); cursor:pointer; }
+.range-btn.active { background:var(--bg-1); color:var(--accent); box-shadow:var(--shadow); font-weight:600; }
+
+@media (max-width:640px){ .nav-menu{ left:0; right:0; min-width:0; } }

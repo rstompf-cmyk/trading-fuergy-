@@ -6,6 +6,11 @@
    migrácia jednotlivých handlerov na Jinja2 vlastné templates — vtedy sa _nav() z body odstráni
    a Jinja2 nav vráti. #}
 {% extends "base.html" %}
+{# Legacy inline stránky majú vlastné inline štýly → načítaj len bezpečný shell (app-shell.css),
+   NIE plný app.css (jeho holé element pravidlá by rozbili vlastné formuláre/tabuľky). #}
+{% block css %}<link rel="stylesheet" href="/static/css/app-shell.css?v=20260721b">{% endblock %}
+{# Legacy inline stránky sú husté dashboardy → plná šírka (nie 1640px strop). #}
+{% block container_class %}container-fluid{% endblock %}
 {% block title %}{% if legacy_title %}{{ legacy_title }} — {% endif %}{{ app_name }}{% endblock %}
 {% block head_extra %}
   {% if legacy_head_extra %}{{ legacy_head_extra|safe }}{% endif %}

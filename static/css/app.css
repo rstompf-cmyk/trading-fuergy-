@@ -59,6 +59,8 @@ table.data td, td.num, .tbl-compact td.num {
 .container { max-width:1640px; margin:0 auto; padding: clamp(16px,2.6vw,28px); }
 .container-narrow { max-width:1040px; }
 .container-form { max-width:760px; }
+/* dashboardy / dátové stránky (flotila, livesim, VDT, manager…) = plná šírka */
+.container-wide, .container-fluid { max-width:100%; }
 
 h1 { color: var(--text-0); margin:0 0 6px; font-size:22px; font-weight:600; letter-spacing:-.01em; }
 h2 { color: var(--text-0); font-size:18px; margin:16px 0 8px; font-weight:600; }
