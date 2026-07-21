@@ -32,9 +32,11 @@
 
 /* Base */
 * { box-sizing: border-box; }
-html, body {
+html { margin:0; }
+body {
   font-family:'Sora', system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
-  color: var(--text-0); margin:0; padding:0; line-height:1.45;
+  color: var(--text-0); margin:0; line-height:1.45;
+  /* padding NEnulujeme — inline (ešte neprevedené) stránky si nesú vlastný body padding */
 }
 body {
   background: var(--bg-0);

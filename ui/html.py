@@ -413,31 +413,11 @@ def _nav(active: str = "") -> str:
           '}catch(e){}'
         '})();</script>'
     )
-    # Inline CSS menu — legacy stránky (form_page, /dentrh, /livesim...) majú vlastný <head>
-    # bez app.css + generické button{} pravidlo. Scoped pod .app-nav (literál farby, vyššia
-    # špecificita prebije button{}). Bez tohto sa dropdowny zobrazia rozbalené a neštýlované.
-    _navcss = ('<style>'
-        '.app-nav{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:0 0 12px;'
-        'padding:8px;background:#eef3f9;border-radius:10px}'
-        '.app-nav .nav-group{position:relative}'
-        '.app-nav .nav-trig{border:0;background:transparent;color:#1F4E78;font:500 14px inherit;'
-        'padding:8px 12px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}'
-        '.app-nav .nav-trig:hover{background:#e2ebf6}'
-        '.app-nav .nav-group.open>.nav-trig,.app-nav .nav-group.has-active>.nav-trig'
-        '{background:#1F4E78;color:#fff}'
-        '.app-nav .nav-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:50;background:#fff;'
-        'border:1px solid #e3e8ef;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,.12);'
-        'padding:6px;min-width:230px;display:none}'
-        '.app-nav .nav-group.open>.nav-menu{display:block}'
-        '.app-nav .nav-menu .nav-sec{font:600 11px inherit;color:#888;text-transform:uppercase;'
-        'letter-spacing:.04em;padding:4px 10px 6px}'
-        '.app-nav .nav-menu a{display:block;padding:7px 10px;border-radius:7px;color:#222;'
-        'font-size:14px;text-decoration:none}'
-        '.app-nav .nav-menu a:hover{background:#eef3f9}'
-        '.app-nav .nav-menu a.active{background:#1F4E78;color:#fff;font-weight:600}'
-        '.app-nav-right{margin-left:auto;display:inline-flex;gap:6px;align-items:center}'
-        '@media (max-width:640px){.app-nav .nav-menu{left:0;right:0;min-width:0}}'
-        '</style>')
+    # REDIZAJN 2026-07: inline (legacy) stránky majú vlastný <head> bez app.css. Vložíme <link>
+    # naň priamo do outputu _nav() (link v <body> je platný) → dizajn systém (tokeny, sticky
+    # header, karty, chip, tlačidlá, tabuľky) sa aplikuje aj na inline stránky. app.css definuje
+    # .app-header/.app-nav/.nav-group/... takže starý inline _navcss už netreba.
+    _assets = '<link rel="stylesheet" href="/static/css/app.css?v=20260721redesign">'
     _navjs = ('<script>function navTog(b,e){if(e)e.stopPropagation();'
               'var g=b.parentNode,w=g.classList.contains("open"),a=document.querySelectorAll(".nav-group");'
               'for(var i=0;i<a.length;i++)a[i].classList.remove("open");'
@@ -445,16 +425,16 @@ def _nav(active: str = "") -> str:
               'document.addEventListener("click",function(){'
               'var a=document.querySelectorAll(".nav-group.open");'
               'for(var i=0;i<a.length;i++)a[i].classList.remove("open");});</script>')
-    menu_row = '<nav class="app-nav">' + "".join(_groups_html) + '</nav>'
-    # HORE: lišta profilov — úplne vľavo správa/editácia profilov, potom prepínač profilov
-    # (_profile_tabs), vpravo market + user/logout. Vždy viditeľná na každej stránke.
+    _brand = ('<span class="app-brand"><span class="logo">⚡</span>FUERGY '
+              '<small>· FTV · Batéria Trading</small></span>')
     _prof_admin = ('<a href="/profiles" target="_top" title="Spravovať a editovať profily" '
-                   'style="display:inline-flex;align-items:center;gap:5px;padding:8px 13px;'
-                   'border-radius:9px;background:#1F4E78;color:#fff;font-size:13px;font-weight:600;'
-                   'text-decoration:none;white-space:nowrap">⚙ Profily</a>')
-    profile_bar = ('<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 4px">'
-                   + _prof_admin + _profile_tabs(cur_prof)
-                   + '<span class="app-nav-right" style="margin-left:auto">'
-                   + _market_badge() + user_chip + '</span></div>')
-    # Poradie: HORE profily, POD nimi menu (čo robiť s vybraným profilom).
-    return _navcss + profile_bar + menu_row + _navjs
+                   'class="btn sm" style="white-space:nowrap">⚙ Profily</a>')
+    _topbar = ('<nav class="app-nav">' + _brand + "".join(_groups_html)
+               + '<span class="app-nav-right">' + user_chip + '</span></nav>')
+    _context = ('<div class="app-context">' + _prof_admin + _profile_tabs(cur_prof)
+                + '<span class="app-nav-right" style="margin-left:auto">' + _market_badge()
+                + '</span></div>')
+    _warn = ('<div class="real-warning"><span class="dot"></span> REÁLNY MÓD — '
+             'povely idú na fyzické zariadenie (Bender)</div>') if cur_mode == "real" else ''
+    header = '<header class="app-header">' + _topbar + _context + _warn + '</header>'
+    return _assets + header + _navjs
