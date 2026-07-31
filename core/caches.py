@@ -243,6 +243,35 @@ def _isot_history(target: dt.date, days: int = 8, market=None) -> pd.DataFrame:
     return out
 
 
+def _realign_pv_to_range(df, start, end):
+    """PVF-FALLBACK-REALIGN (2026-07-31): fallback PVF (cross-date cache / PVGIS TMY = iný rok,
+    iný deň) prerovná na ŽIADANÝ dátumový rozsah podľa hodiny dňa, aby ho downstream filter
+    `wx.time.dt.date == d` (/dentrh, /plan) neodfiltroval → plán sa vygeneruje aj počas
+    Open-Meteo 429 rate-limitu (degradovaný tvar počasia, ale funkčný). Kill: PVF_FALLBACK_REALIGN=0."""
+    import os as _os_r
+    if _os_r.environ.get("PVF_FALLBACK_REALIGN", "1") == "0":
+        return df
+    try:
+        if df is None or len(df) == 0:
+            return df
+        d0 = pd.Timestamp(start).date(); d1 = pd.Timestamp(end).date()
+        _t = pd.to_datetime(df["time"]); _hh = _t.dt.hour
+        by_hour = {}
+        for col in ("kw", "kwh", "gti", "temp", "cloud"):
+            if col in df.columns:
+                by_hour[col] = pd.to_numeric(df[col], errors="coerce").groupby(_hh).mean()
+        out_times = pd.date_range(pd.Timestamp(d0), pd.Timestamp(d1) + pd.Timedelta(hours=23), freq="1h")
+        out = pd.DataFrame({"time": out_times})
+        for col, ser in by_hour.items():
+            out[col] = [float(ser.get(t.hour)) if pd.notna(ser.get(t.hour, float("nan"))) else 0.0 for t in out_times]
+        if "kw" not in out.columns and "kwh" in out.columns: out["kw"] = out["kwh"]
+        if "kwh" not in out.columns and "kw" in out.columns: out["kwh"] = out["kw"]
+        return out
+    except Exception as _e_r:
+        print(f"[_realign_pv_to_range] {_e_r} → vraciam pôvodné dáta")
+        return df
+
+
 def _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start, end) -> pd.DataFrame:
     """Cache PV forecast per (lokácia, dátum). Historické dni → permanent, dnes/zajtra → 10-min TTL.
 
@@ -438,7 +467,7 @@ def _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start, end) -> pd.DataFr
         age_min = (now - _ts) / 60.0
         print(f"[_fetch_pv_cached] PVF API zlyhalo + žiadna cache pre {start} → cross-date fallback "
               f"z {_k[6]}..{_k[7]} ({age_min:.0f} min starý). Pozor: iný deň = iné počasie.")
-        return _df
+        return _realign_pv_to_range(_df, start, end)
     # 3) MET Norway backup provider (free, no key, ~10 dní dopredu)
     try:
         if hasattr(ds, "fetch_pv_forecast_metno"):
@@ -492,8 +521,9 @@ def _fetch_pv_cached(lat, lon, kwp, tilt, azimuth, eff, start, end) -> pd.DataFr
             df = ds.fetch_pv_forecast_pvgis_tmy(lat, lon, kwp, tilt, azimuth, eff,
                                                   start=start, end=end)
             if not df.empty:
+                df = _realign_pv_to_range(df, start, end)   # TMY = iný rok → prerovnaj na žiadaný deň
                 print(f"[_fetch_pv_cached] PVF Open-Meteo + MET Norway zlyhali → "
-                      f"PVGIS TMY fallback ({len(df)} hodín, priemerný rok)")
+                      f"PVGIS TMY fallback ({len(df)} hodín, priemerný rok, prerovnané na {start}..{end})")
                 _PVF_CACHE[key] = (now, df)
                 return df
     except Exception as _pg_e:
