@@ -240,14 +240,56 @@ def _parse_time(s: str) -> Optional[dt.datetime]:
     return None
 
 
+# ─── CDC-FAILFAST (2026-08-01) ───────────────────────────────────────────────
+# CDC server býva nedostupný (ReadTimeout). Klient číta tag po tagu (11 read / 12 write),
+# takže pri timeoute 15 s trvala stránka regulácie ~165 s a zápis ešte viac. Circuit breaker:
+# po prvom timeoute sa host označí za nedostupný a ďalšie volania zlyhajú OKAMŽITE (bez čakania)
+# počas `_CB_COOLDOWN_S`. Prvý pokus po vypršaní cooldownu breaker resetuje (auto-recovery).
+# Kill-switch: CDC_FAILFAST=0. Timeout je konfigurovateľný cez cfg['timeout_s'] (default 15).
+_CB_STATE: Dict[str, float] = {}      # host → timestamp, dokedy považovať za nedostupný
+_CB_COOLDOWN_S = 60.0
+
+
+def _cb_blocked(host: str) -> bool:
+    import os as _os_cb, time as _t_cb
+    if _os_cb.environ.get("CDC_FAILFAST", "1") == "0":
+        return False
+    until = _CB_STATE.get(host or "")
+    return bool(until and _t_cb.time() < until)
+
+
+def _cb_trip(host: str, err: Exception) -> None:
+    import os as _os_cb, time as _t_cb
+    if _os_cb.environ.get("CDC_FAILFAST", "1") == "0":
+        return
+    _CB_STATE[host or ""] = _t_cb.time() + _CB_COOLDOWN_S
+    print(f"[CDC-FAILFAST] {host} nedostupný ({type(err).__name__}) → "
+          f"ďalšie volania {int(_CB_COOLDOWN_S)}s preskakujem (fail-fast)")
+
+
+def _cb_ok(host: str) -> None:
+    _CB_STATE.pop(host or "", None)
+
+
+class CdcUnavailable(RuntimeError):
+    """CDC host je v cooldowne (circuit breaker) — volanie zlyhalo okamžite, bez čakania."""
+
+
 def _read_tag_raw(cfg: Dict[str, Any], s: requests.Session, tag: str,
                   bt: dt.datetime, et: dt.datetime, step: int) -> List[Dict[str, Any]]:
     """Jeden GET read pre jeden tag. Vráti list {'time': datetime, 'value': float}."""
     host = (cfg.get("host") or "").rstrip("/")
+    if _cb_blocked(host):
+        raise CdcUnavailable(f"CDC {host} nedostupný (fail-fast cooldown)")
     path = cfg.get("endpoint_read") or "/api/excel/data/read"
     url = (f"{host}{path}?tag={tag}"
            f"&bt={_fmt_dt(bt)}&et={_fmt_dt(et)}&step={int(step)}")
-    r = s.get(url, timeout=float(cfg.get("timeout_s", 15)))
+    try:
+        r = s.get(url, timeout=float(cfg.get("timeout_s", 15)))
+    except (requests.Timeout, requests.ConnectionError) as _e_to:
+        _cb_trip(host, _e_to)
+        raise
+    _cb_ok(host)
     r.raise_for_status()
     data = r.json()
     values = data.get("values", []) if isinstance(data, dict) else []
@@ -523,6 +565,11 @@ def write_series(prefix: str, logical: str, series: List, market: Optional[str] 
         return out
     host = (cfg.get("host") or "").rstrip("/")
     path = cfg.get("endpoint_write") or "/api/excel/data/write"
+    # CDC-FAILFAST: ak je host v cooldowne (predošlý timeout), nečakaj ďalších 15 s na tag
+    if _cb_blocked(host):
+        out["ok"] = False; out["dry_run"] = False
+        out["error"] = f"CDC {host} nedostupný (fail-fast cooldown)"
+        return out
     s = _session(cfg)
     try:
         r = s.post(f"{host}{path}", data=json.dumps(payload),
@@ -532,7 +579,10 @@ def write_series(prefix: str, logical: str, series: List, market: Optional[str] 
         r.raise_for_status()
         out["ok"] = True
         out["dry_run"] = False
+        _cb_ok(host)
     except Exception as e:
+        if isinstance(e, (requests.Timeout, requests.ConnectionError)):
+            _cb_trip(host, e)
         out["ok"] = False
         out["dry_run"] = False
         out["error"] = str(e)
